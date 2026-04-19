@@ -245,9 +245,8 @@ export class MultiEditor extends LitElement {
 
     if (previousMode === 'wysiwyg' && newMode === 'source') {
       if (this._wysiwygEditor && this._sourceEditor) {
-        // Deactivate yCollab first, set content, then optionally reactivate
         this._sourceEditor.deactivate();
-        this._sourceEditor.setContent(this._wysiwygEditor.getContent());
+        this._sourceEditor.setContent(this._wysiwygEditor.getContent(this.format));
       }
     } else if (previousMode === 'source' && newMode === 'wysiwyg') {
       if (this._sourceEditor && this._wysiwygEditor) {
@@ -261,8 +260,9 @@ export class MultiEditor extends LitElement {
   }
 
   getContent(format?: EditorFormat): string {
+    const fmt = format ?? this.format;
     if (this.mode === 'wysiwyg') {
-      return this._wysiwygEditor?.getContent() ?? '';
+      return this._wysiwygEditor?.getContent(fmt) ?? '';
     }
     return this._sourceEditor?.getContent() ?? '';
   }
