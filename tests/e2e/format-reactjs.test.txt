@@ -1,0 +1,8 @@
+Navigate to http://localhost:3000
+Wait for the editor to load
+Select "app.jsx" from the document dropdown
+Wait for the document to load
+Verify the editor shows content
+Click the "Source" button to switch to source mode
+Verify JSX source code is visible
+Verify syntax highlighting is applied (colored text elements visible)

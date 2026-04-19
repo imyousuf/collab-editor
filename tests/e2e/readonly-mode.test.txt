@@ -1,0 +1,7 @@
+Navigate to http://localhost:3000
+Wait for the editor to load
+Click into the editor and type "Some content"
+Click the "Toggle Readonly" button
+Verify that the editor does not accept new text input
+Click the "Toggle Readonly" button again
+Verify the editor is editable again

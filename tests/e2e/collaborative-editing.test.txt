@@ -1,0 +1,6 @@
+Navigate to http://localhost:3000
+Verify the page loads and contains an element with text "Collaborative Editor"
+Click into the editor area (the multi-editor element)
+Type "Hello from Tab 1"
+Verify the text "Hello from Tab 1" is visible in the editor
+Verify the status indicator shows "Connected"

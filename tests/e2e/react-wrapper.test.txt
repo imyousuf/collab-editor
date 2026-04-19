@@ -1,0 +1,8 @@
+Navigate to http://localhost:3001
+Wait for the React app to load
+Verify the page contains text "React + Collaborative Editor"
+Verify the multi-editor component renders inside the React app
+Click into the editor and type some content
+Verify the Event Log section shows change events
+Click the "Source" button
+Verify the Event Log shows a mode change event

@@ -1,0 +1,12 @@
+server:
+  addr: ":8081"
+
+storage:
+  base_dir: "/data/documents"
+
+auth:
+  token: "dev-token"
+
+log:
+  level: "info"
+  format: "json"

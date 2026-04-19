@@ -1,0 +1,31 @@
+server:
+  addr: ":8080"
+  read_timeout: 5s
+  write_timeout: 10s
+  shutdown_timeout: 30s
+
+storage:
+  provider_url: "http://localhost:8081"
+  auth_token: "dev-token"
+  load_timeout: 10s
+  store_timeout: 5s
+  retry:
+    max_attempts: 3
+    initial_backoff: 100ms
+  health_check:
+    interval: 10s
+    threshold: 3
+
+room:
+  flush_debounce: 2s
+  flush_max_bytes: 65536
+  idle_timeout: 60s
+  max_peers_per_room: 50
+
+metrics:
+  enabled: true
+  addr: ":9090"
+
+log:
+  level: "info"
+  format: "json"

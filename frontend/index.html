@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Collaborative Editor Demo</title>
+  <script type="module" src="/src/multi-editor.ts"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #fafafa; }
+    h1 { margin: 0 0 16px; font-size: 24px; }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .toolbar button {
+      padding: 6px 14px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .toolbar button:hover { background: #f0f0f0; }
+    .toolbar button.active { background: #333; color: #fff; border-color: #333; }
+    .toolbar select {
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    .status {
+      margin-left: auto;
+      font-size: 14px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: #fee;
+      color: #c33;
+    }
+    .status[data-status="connected"] { background: #efe; color: #3a3; }
+    .status[data-status="connecting"] { background: #ffe; color: #a80; }
+    multi-editor {
+      display: block;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      background: #fff;
+      min-height: 400px;
+    }
+    .user-info { font-size: 12px; color: #666; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Collaborative Editor</h1>
+  <div class="toolbar">
+    <button id="btn-wysiwyg" class="active">WYSIWYG</button>
+    <button id="btn-source">Source</button>
+    <button id="btn-readonly">Toggle Readonly</button>
+    <select id="doc-select">
+      <option value="welcome.md" data-format="markdown" data-lang="markdown">welcome.md</option>
+      <option value="page.html" data-format="html" data-lang="html">page.html</option>
+      <option value="script.py" data-format="markdown" data-lang="python">script.py</option>
+      <option value="app.jsx" data-format="markdown" data-lang="javascript">app.jsx</option>
+    </select>
+    <span class="status" id="status">Disconnected</span>
+  </div>
+
+  <multi-editor
+    id="editor"
+    mode="wysiwyg"
+    format="markdown"
+    language="markdown"
+    placeholder="Start writing..."
+    theme="light"
+  ></multi-editor>
+
+  <div class="user-info" id="user-info"></div>
+
+  <script type="module">
+    const editor = document.getElementById('editor');
+    const status = document.getElementById('status');
+    const docSelect = document.getElementById('doc-select');
+    const btnWysiwyg = document.getElementById('btn-wysiwyg');
+    const btnSource = document.getElementById('btn-source');
+    const btnReadonly = document.getElementById('btn-readonly');
+    const userInfo = document.getElementById('user-info');
+
+    const userName = 'User-' + Math.floor(Math.random() * 1000);
+    const userColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+    userInfo.textContent = `Editing as ${userName}`;
+
+    function connectToRoom(roomName) {
+      editor.collaboration = {
+        enabled: true,
+        roomName: roomName,
+        providerUrl: location.protocol === 'https:' ? 'wss://' + location.host + '/ws' : 'ws://' + location.host + '/ws',
+        user: { name: userName, color: userColor },
+      };
+    }
+
+    connectToRoom(docSelect.value);
+
+    docSelect.addEventListener('change', () => {
+      const opt = docSelect.selectedOptions[0];
+      editor.format = opt.dataset.format;
+      editor.language = opt.dataset.lang;
+      connectToRoom(docSelect.value);
+    });
+
+    btnWysiwyg.addEventListener('click', () => {
+      editor.switchMode('wysiwyg');
+    });
+    btnSource.addEventListener('click', () => {
+      editor.switchMode('source');
+    });
+    btnReadonly.addEventListener('click', () => {
+      editor.readonly = !editor.readonly;
+    });
+
+    editor.addEventListener('mode-change', (e) => {
+      btnWysiwyg.classList.toggle('active', e.detail.mode === 'wysiwyg');
+      btnSource.classList.toggle('active', e.detail.mode === 'source');
+    });
+
+    editor.addEventListener('collab-status', (e) => {
+      status.textContent = e.detail.status.charAt(0).toUpperCase() + e.detail.status.slice(1);
+      status.dataset.status = e.detail.status;
+    });
+
+    editor.addEventListener('editor-save', (e) => {
+      console.log('Save triggered:', e.detail.value.substring(0, 100) + '...');
+    });
+  </script>
+</body>
+</html>

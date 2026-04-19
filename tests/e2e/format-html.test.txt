@@ -1,0 +1,8 @@
+Navigate to http://localhost:3000
+Wait for the editor to load
+Select "page.html" from the document dropdown
+Wait for the document to load
+Verify the editor shows content
+Click the "Source" button to switch to source mode
+Verify raw HTML markup is visible in the source editor
+Click the "WYSIWYG" button to switch back

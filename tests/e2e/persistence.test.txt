@@ -1,0 +1,6 @@
+Navigate to http://localhost:3000
+Wait for the editor to load
+Click into the editor and type "Persistence test content"
+Wait 3 seconds for the flush debounce
+Reload the page
+Verify the text "Persistence test content" is still visible in the editor

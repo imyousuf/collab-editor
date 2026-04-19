@@ -1,0 +1,6 @@
+Navigate to http://localhost:3000
+Wait for the page to fully load
+Verify the status indicator is visible
+Verify the status shows "Connected"
+Click into the editor area
+Type some text to verify the editor is functional

@@ -1,0 +1,7 @@
+Navigate to http://localhost:3000
+Wait for the editor to load
+Click into the editor area and type "Hello World"
+Click the "Source" button to switch to source mode
+Verify the source editor is visible and contains text
+Click the "WYSIWYG" button to switch back
+Verify the WYSIWYG editor is visible

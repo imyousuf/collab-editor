@@ -1,0 +1,52 @@
+services:
+  provider:
+    build:
+      context: .
+      dockerfile: docker/provider.Dockerfile
+    ports:
+      - "8081:8081"
+    volumes:
+      - doc-storage:/data/documents
+    environment:
+      COLLAB_PROVIDER_AUTH_TOKEN: "dev-token"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - collab-net
+
+  relay:
+    build:
+      context: .
+      dockerfile: docker/relay.Dockerfile
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      COLLAB_STORAGE_PROVIDER_URL: "http://provider:8081"
+      COLLAB_STORAGE_AUTH_TOKEN: "dev-token"
+    depends_on:
+      provider:
+        condition: service_healthy
+    networks:
+      - collab-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - relay
+    networks:
+      - collab-net
+
+volumes:
+  doc-storage:
+
+networks:
+  collab-net:
+    driver: bridge

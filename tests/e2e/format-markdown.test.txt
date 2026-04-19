@@ -1,0 +1,9 @@
+Navigate to http://localhost:3000
+Wait for the editor to load
+Select "welcome.md" from the document dropdown
+Wait for the document to load
+Verify content is visible in the editor
+Click the "Source" button to switch to source mode
+Verify the source view shows text content
+Click the "WYSIWYG" button to switch back
+Verify the WYSIWYG editor renders the content

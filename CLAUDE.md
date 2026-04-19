@@ -10,28 +10,53 @@ A collaborative editor system with three components:
 ## Project Structure
 
 ```
+cmd/relay/             — Go relay server entrypoint
+cmd/provider/          — Demo storage provider entrypoint
+pkg/spi/               — Shared SPI types (public, importable by external providers)
+internal/relay/        — Relay server: transport, rooms, peers, buffer, flush, metrics
+internal/provider/     — HTTP client for the storage provider SPI
+internal/storagedemo/  — Demo filesystem-based storage provider
+frontend/src/          — Lit web component (TypeScript)
+config/                — Default YAML configs for relay and provider
+docker/                — Dockerfiles and nginx config
+examples/basic/        — Docker Compose example with seed documents
+examples/react-app/    — React integration example
+tests/e2e/             — ATR browser test files
 docs/research/         — Architecture research and SPI contract specs
-LICENSE                — Apache 2.0
+```
+
+## Build & Development
+
+```bash
+# Go backend
+make build              # Build relay + provider binaries
+make test               # Run Go tests with race detector
+make test-fast          # Run Go tests without race detector
+make vet                # Run go vet
+
+# Frontend
+cd frontend && npm install && npm run dev   # Dev server on :5173
+cd frontend && npm run build                # Production build
+
+# Docker (full stack)
+docker compose up --build                   # Start all 3 services
+make test-e2e                               # Run ATR browser tests
 ```
 
 ## Key Architecture Concepts
 
 - `Y.XmlFragment` is the canonical CRDT type (not `Y.Text`)
 - WYSIWYG and source views use exclusive-view editing with serialization on switch
-- The relay performs Yjs merges via Yrs FFI; the storage provider is CRDT-unaware
-- Code blocks in rich text use decoration-based highlighting (lowlight/Shiki), not embedded CodeMirror
-
-## Research Documents
-
-- `docs/research/collab-editor-http-spi.md` — HTTP SPI contract, endpoint definitions, Go client code, binary transport, async flush pipeline
-- `docs/research/collaborative-editor-architecture.md` — Editor evaluation, Yjs integration patterns, Markdown round-trip handling, view switching strategy, web component packaging
-
-## Build & Development
-
-_Not yet set up. Project is in research/design phase._
+- The relay uses `github.com/skyterra/y-crdt` for server-side Yjs operations
+- The WebSocket transport is pluggable via the `Transport` interface in `internal/relay/transport.go`
+- Code blocks in rich text use decoration-based highlighting (lowlight), not embedded CodeMirror
+- Document IDs are validated against `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` to prevent path traversal
 
 ## Conventions
 
-- Go code follows standard Go conventions (`gofmt`, `golint`)
-- Frontend code will use TypeScript
+- Go code follows standard Go conventions (`gofmt`, `go vet`)
+- Frontend code uses TypeScript with strict mode
 - Commit messages: no AI/tool mentions in subject lines
+- Use `koanf` for config (not viper)
+- Use `coder/websocket` (not `nhooyr.io/websocket` which is deprecated)
+- Prometheus metrics use a per-instance registry (not global) to support testing
