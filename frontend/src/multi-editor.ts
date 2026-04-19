@@ -4,8 +4,9 @@ import { WysiwygEditor } from './editors/wysiwyg-editor.js';
 import { SourceEditor } from './editors/source-editor.js';
 import { CollabProvider } from './collab/yjs-provider.js';
 import { EditorChangeEvent, ModeChangeEvent, EditorSaveEvent, CollabStatusEvent } from './events.js';
-import { supportsWysiwyg, getLanguageForMime, getFormatForMime } from './types.js';
-import type { EditorMode, EditorFormat, EditorTheme, CollaborationConfig } from './types.js';
+import { supportsWysiwyg, supportsPreview, getAlternateCapability, getLanguageForMime, getFormatForMime } from './types.js';
+import type { EditorMode, EditorFormat, EditorTheme, AlternateCapability, CollaborationConfig } from './types.js';
+import { JsxPreview } from './preview/jsx-preview.js';
 
 @customElement('multi-editor')
 export class MultiEditor extends LitElement {
@@ -17,6 +18,7 @@ export class MultiEditor extends LitElement {
   @property({ type: String, reflect: true }) theme: EditorTheme = 'light';
   @property({ type: Boolean }) readonly: boolean = false;
   @property({ type: Boolean, reflect: true }) wysiwygDisabled: boolean = false;
+  @property({ type: String, reflect: true }) alternateCapability: AlternateCapability = 'wysiwyg';
 
   @property({ attribute: false }) collaboration: CollaborationConfig | null = null;
 
@@ -25,6 +27,7 @@ export class MultiEditor extends LitElement {
   private _collabProvider: CollabProvider | null = null;
   private _wysiwygEditor: WysiwygEditor | null = null;
   private _sourceEditor: SourceEditor | null = null;
+  private _jsxPreview: JsxPreview | null = null;
   private _changeDebounce: ReturnType<typeof setTimeout> | null = null;
   private _initialized = false;
   private _lastCollabConfig: CollaborationConfig | null = null;
@@ -102,6 +105,7 @@ export class MultiEditor extends LitElement {
     return html`
       <div id="wysiwyg-container" class="editor-container ${this.mode !== 'wysiwyg' ? 'hidden' : ''}"></div>
       <div id="source-container" class="editor-container ${this.mode !== 'source' ? 'hidden' : ''}"></div>
+      <div id="preview-container" class="editor-container ${this.mode !== 'preview' ? 'hidden' : ''}"></div>
     `;
   }
 
@@ -119,12 +123,16 @@ export class MultiEditor extends LitElement {
       this._setupCollaboration();
     }
     if (changed.has('mimeType') && this._initialized) {
-      this.wysiwygDisabled = !supportsWysiwyg(this.mimeType);
+      this.alternateCapability = getAlternateCapability(this.mimeType);
+      this.wysiwygDisabled = this.alternateCapability !== 'wysiwyg';
       this.format = getFormatForMime(this.mimeType);
       this.language = getLanguageForMime(this.mimeType);
       this._sourceEditor?.setLanguage(this.language);
-      // If WYSIWYG not supported and currently in WYSIWYG, switch to source
-      if (this.wysiwygDisabled && this.mode === 'wysiwyg') {
+
+      // If current mode isn't supported, switch to source
+      if (this.mode === 'wysiwyg' && this.alternateCapability !== 'wysiwyg') {
+        this.switchMode('source');
+      } else if (this.mode === 'preview' && this.alternateCapability !== 'preview') {
         this.switchMode('source');
       }
     }
@@ -237,7 +245,8 @@ export class MultiEditor extends LitElement {
 
   async switchMode(newMode: EditorMode): Promise<void> {
     if (newMode === this.mode) return;
-    if (newMode === 'wysiwyg' && this.wysiwygDisabled) return;
+    if (newMode === 'wysiwyg' && this.alternateCapability !== 'wysiwyg') return;
+    if (newMode === 'preview' && this.alternateCapability !== 'preview') return;
 
     const cancelEvent = new CustomEvent('before-mode-change', {
       detail: { mode: newMode, previousMode: this.mode },
@@ -259,10 +268,26 @@ export class MultiEditor extends LitElement {
         this._wysiwygEditor.setContent(this._sourceEditor.getContent(), this.mimeType);
         this._sourceEditor.deactivate();
       }
+    } else if (previousMode === 'source' && newMode === 'preview') {
+      // Compile and render the source code in the preview iframe
+      this._ensurePreview();
+      if (this._sourceEditor && this._jsxPreview) {
+        this._jsxPreview.render(this._sourceEditor.getContent());
+      }
+    } else if (previousMode === 'preview' && newMode === 'source') {
+      // Just switch view — source content is unchanged
     }
 
     this.mode = newMode;
     this.dispatchEvent(new ModeChangeEvent({ mode: newMode, previousMode }));
+  }
+
+  private _ensurePreview(): void {
+    if (this._jsxPreview) return;
+    const container = this.renderRoot.querySelector('#preview-container') as HTMLElement;
+    if (container) {
+      this._jsxPreview = new JsxPreview(container);
+    }
   }
 
   getContent(format?: EditorFormat): string {
@@ -289,6 +314,7 @@ export class MultiEditor extends LitElement {
     if (this._changeDebounce) clearTimeout(this._changeDebounce);
     this._wysiwygEditor?.destroy();
     this._sourceEditor?.destroy();
+    this._jsxPreview?.destroy();
     this._collabProvider?.destroy();
   }
 }

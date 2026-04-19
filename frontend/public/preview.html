@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, sans-serif; }
+    #error { color: #c33; font-family: monospace; white-space: pre-wrap; padding: 16px; font-size: 13px; }
+  </style>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <div id="error"></div>
+  <script>
+    var modules = {
+      'react': React,
+      'react-dom': ReactDOM,
+      'react-dom/client': ReactDOM,
+      'next/link': { default: function Link(props) {
+        return React.createElement('a', { href: props.href }, props.children);
+      }},
+      'next/image': { default: function Image(props) {
+        return React.createElement('img', { src: props.src, alt: props.alt, width: props.width, height: props.height, style: { maxWidth: '100%' } });
+      }},
+      'next/router': {
+        useRouter: function() { return { pathname: '/', query: {}, push: function(){}, replace: function(){}, back: function(){} }; },
+      },
+      'next/navigation': {
+        useRouter: function() { return { push: function(){}, replace: function(){}, back: function(){} }; },
+        usePathname: function() { return '/'; },
+        useSearchParams: function() { return new URLSearchParams(); },
+      },
+      'next/head': { default: function Head() { return null; } },
+    };
+
+    window.addEventListener('message', function(event) {
+      if (event.data && event.data.type === 'render') {
+        var errorEl = document.getElementById('error');
+        var rootEl = document.getElementById('root');
+        errorEl.textContent = '';
+        rootEl.innerHTML = '';
+
+        try {
+          var transformed = Babel.transform(event.data.code, {
+            presets: ['react', 'typescript'],
+            plugins: ['transform-modules-commonjs'],
+            filename: 'component.tsx',
+          }).code;
+
+          var moduleExports = {};
+          var module = { exports: moduleExports };
+
+          function require(id) {
+            if (modules[id]) return modules[id];
+            console.warn('Unknown module:', id);
+            return {};
+          }
+
+          var fn = new Function('require', 'module', 'exports', 'React', 'ReactDOM', transformed);
+          fn(require, module, moduleExports, React, ReactDOM);
+
+          var Component = module.exports.default || module.exports;
+          if (typeof Component === 'function') {
+            var root = ReactDOM.createRoot(rootEl);
+            root.render(React.createElement(Component));
+          } else {
+            rootEl.innerHTML = '<p style="color:#666">No React component found. Export a default function component.</p>';
+          }
+        } catch (e) {
+          errorEl.textContent = e.message;
+        }
+      }
+    });
+
+    window.parent.postMessage({ type: 'preview-ready' }, '*');
+  </script>
+</body>
+</html>

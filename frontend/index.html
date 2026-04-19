@@ -55,7 +55,7 @@
 <body>
   <h1>Collaborative Editor</h1>
   <div class="toolbar">
-    <button id="btn-wysiwyg" class="active">WYSIWYG</button>
+    <button id="btn-alternate" class="active">WYSIWYG</button>
     <button id="btn-source">Source</button>
     <button id="btn-readonly">Toggle Readonly</button>
     <select id="doc-select"></select>
@@ -77,7 +77,7 @@
     const editor = document.getElementById('editor');
     const status = document.getElementById('status');
     const docSelect = document.getElementById('doc-select');
-    const btnWysiwyg = document.getElementById('btn-wysiwyg');
+    const btnAlternate = document.getElementById('btn-alternate');
     const btnSource = document.getElementById('btn-source');
     const btnReadonly = document.getElementById('btn-readonly');
     const userInfo = document.getElementById('user-info');
@@ -107,11 +107,7 @@
           // Wait for the MIME type update to settle (mode switch, etc.)
           await new Promise(r => setTimeout(r, 100));
 
-          // Update WYSIWYG button state based on MIME type
-          btnWysiwyg.disabled = editor.wysiwygDisabled;
-          btnWysiwyg.style.opacity = editor.wysiwygDisabled ? '0.4' : '1';
-          btnWysiwyg.classList.toggle('active', editor.mode === 'wysiwyg');
-          btnSource.classList.toggle('active', editor.mode === 'source');
+          updateAlternateButton();
 
           if (data.content) {
             editor.setContent(data.content, mimeType);
@@ -179,9 +175,32 @@
       connectToRoom(docSelect.value);
     });
 
-    btnWysiwyg.addEventListener('click', () => {
-      if (!editor.wysiwygDisabled) {
+    function updateAlternateButton() {
+      const cap = editor.alternateCapability;
+      if (cap === 'wysiwyg') {
+        btnAlternate.textContent = 'WYSIWYG';
+        btnAlternate.disabled = false;
+        btnAlternate.style.opacity = '1';
+      } else if (cap === 'preview') {
+        btnAlternate.textContent = 'Preview';
+        btnAlternate.disabled = false;
+        btnAlternate.style.opacity = '1';
+      } else {
+        btnAlternate.textContent = 'WYSIWYG';
+        btnAlternate.disabled = true;
+        btnAlternate.style.opacity = '0.4';
+      }
+      const isAlternateMode = editor.mode === 'wysiwyg' || editor.mode === 'preview';
+      btnAlternate.classList.toggle('active', isAlternateMode);
+      btnSource.classList.toggle('active', editor.mode === 'source');
+    }
+
+    btnAlternate.addEventListener('click', () => {
+      const cap = editor.alternateCapability;
+      if (cap === 'wysiwyg') {
         editor.switchMode('wysiwyg');
+      } else if (cap === 'preview') {
+        editor.switchMode('preview');
       }
     });
     btnSource.addEventListener('click', () => {
@@ -191,11 +210,8 @@
       editor.readonly = !editor.readonly;
     });
 
-    editor.addEventListener('mode-change', (e) => {
-      btnWysiwyg.classList.toggle('active', e.detail.mode === 'wysiwyg');
-      btnSource.classList.toggle('active', e.detail.mode === 'source');
-      btnWysiwyg.disabled = editor.wysiwygDisabled;
-      btnWysiwyg.style.opacity = editor.wysiwygDisabled ? '0.4' : '1';
+    editor.addEventListener('mode-change', () => {
+      updateAlternateButton();
     });
 
     editor.addEventListener('collab-status', (e) => {
