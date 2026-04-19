@@ -1,7 +1,9 @@
 /**
- * Binding for text/markdown: supports WYSIWYG + Source modes.
+ * Base binding for MIME types that support WYSIWYG + Source modes.
  * Manages two internal editors (Tiptap + CodeMirror) and switches between them.
  * Both bind to the same Y.Text when collaboration is active.
+ *
+ * Used by: text/markdown, text/html
  */
 import type {
   IEditorBinding,
@@ -12,11 +14,11 @@ import type {
   RemoteChangeCallback,
 } from '../interfaces/editor-binding.js';
 import type { IContentHandler } from '../interfaces/content-handler.js';
-import { MarkdownContentHandler } from '../handlers/markdown-handler.js';
 import { SourceEditorInstance } from './_source-editor.js';
 import { WysiwygEditorInstance } from './_wysiwyg-editor.js';
+import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
 
-export class MarkdownBinding implements IEditorBinding {
+export class DualModeBinding implements IEditorBinding {
   readonly supportedModes: readonly EditorMode[] = ['wysiwyg', 'source'];
 
   private _activeMode: EditorMode | null = null;
@@ -26,15 +28,16 @@ export class MarkdownBinding implements IEditorBinding {
   private _wysiwygContainer: HTMLElement | null = null;
   private _sourceEditor: SourceEditorInstance | null = null;
   private _wysiwygEditor: WysiwygEditorInstance | null = null;
-  private _contentHandler: IContentHandler;
+  private _textBinding: any = null;
   private _collab: CollaborationContext | null = null;
-  private _options: MountOptions | null = null;
+  private _contentHandler: IContentHandler;
+  private _language: string;
   private _contentCallbacks = new Set<ContentChangeCallback>();
   private _remoteCallbacks = new Set<RemoteChangeCallback>();
-  private _textBindingModule: any = null; // lazy-loaded TextBinding
 
-  constructor() {
-    this._contentHandler = new MarkdownContentHandler();
+  constructor(contentHandler: IContentHandler, language: string) {
+    this._contentHandler = contentHandler;
+    this._language = language;
   }
 
   get activeMode(): EditorMode | null { return this._activeMode; }
@@ -47,24 +50,21 @@ export class MarkdownBinding implements IEditorBinding {
     collab?: CollaborationContext | null,
   ): Promise<void> {
     if (!this.supportedModes.includes(mode)) {
-      throw new Error(`MarkdownBinding does not support mode: ${mode}`);
+      throw new Error(`DualModeBinding does not support mode: ${mode}`);
     }
 
     this._container = container;
     this._collab = collab ?? null;
-    this._options = options;
 
-    // Create two sub-containers
+    // Create sub-containers
     this._wysiwygContainer = document.createElement('div');
-    this._wysiwygContainer.className = 'binding-wysiwyg';
     this._sourceContainer = document.createElement('div');
-    this._sourceContainer.className = 'binding-source';
     container.appendChild(this._wysiwygContainer);
     container.appendChild(this._sourceContainer);
 
-    // Create source editor (always, for collab binding via yCollab)
+    // Create source editor with yCollab binding
     this._sourceEditor = new SourceEditorInstance(this._sourceContainer, {
-      language: 'markdown',
+      language: this._language,
       readonly: options.readonly,
       theme: options.theme,
     }, this._collab);
@@ -81,43 +81,34 @@ export class MarkdownBinding implements IEditorBinding {
     );
     await this._wysiwygEditor.whenReady();
 
-    // Set up TextBinding for WYSIWYG ↔ Y.Text sync (if collaborative)
+    // Set up TextBinding for WYSIWYG ↔ Y.Text sync
     if (this._collab) {
       const { TextBinding } = await import('../collab/text-binding.js');
-      this._textBindingModule = new TextBinding(
+      this._textBinding = new TextBinding(
         this._wysiwygEditor.editor,
         this._collab.sharedText,
         this._contentHandler,
       );
-
-      // Listen for remote changes on Y.Text
-      this._collab.sharedText.observe((event) => {
-        if (!event.transaction.local) {
-          this._remoteCallbacks.forEach(cb => cb({ origin: event.transaction.origin, isRemote: true }));
-        }
-      });
+      observeRemoteChanges(this._collab, this._remoteCallbacks);
     }
 
     this._wysiwygEditor.onUpdate((content) => {
       this._contentCallbacks.forEach(cb => cb(content));
     });
 
-    // Show the requested mode
     this._showMode(mode);
     this._mounted = true;
     this._activeMode = mode;
   }
 
   unmount(): void {
-    this._textBindingModule?.destroy();
-    this._textBindingModule = null;
+    this._textBinding?.destroy();
+    this._textBinding = null;
     this._sourceEditor?.destroy();
     this._sourceEditor = null;
     this._wysiwygEditor?.destroy();
     this._wysiwygEditor = null;
-    if (this._container) {
-      this._container.innerHTML = '';
-    }
+    if (this._container) this._container.innerHTML = '';
     this._mounted = false;
     this._activeMode = null;
   }
@@ -130,19 +121,10 @@ export class MarkdownBinding implements IEditorBinding {
   }
 
   setContent(text: string): void {
-    if (this._collab && this._collab.sharedText.length > 0) {
-      // Y.Text already has content — bindings will render it
-      return;
-    }
     if (this._collab) {
-      // Write to Y.Text — both yCollab and TextBinding pick it up
-      this._collab.ydoc.transact(() => {
-        if (this._collab!.sharedText.length > 0) { this._collab!.sharedText.delete(0, this._collab!.sharedText.length); }
-        this._collab!.sharedText.insert(0, text);
-      });
+      setCollabContent(this._collab, text);
       return;
     }
-    // Non-collab: set on the active editor
     if (this._activeMode === 'wysiwyg') {
       this._wysiwygEditor?.setContent(text);
     } else {
@@ -156,26 +138,17 @@ export class MarkdownBinding implements IEditorBinding {
   }
 
   async switchMode(mode: EditorMode): Promise<void> {
-    if (!this.supportedModes.includes(mode)) {
-      throw new Error(`MarkdownBinding does not support mode: ${mode}`);
-    }
+    if (!this.supportedModes.includes(mode)) throw new Error(`Unsupported mode: ${mode}`);
     if (mode === this._activeMode) return;
-
-    const previousMode = this._activeMode;
 
     // In non-collab mode, transfer content between editors
     if (!this._collab) {
-      if (previousMode === 'wysiwyg' && mode === 'source') {
-        const content = this._wysiwygEditor?.getContent() ?? '';
-        this._sourceEditor?.setContent(content);
-      } else if (previousMode === 'source' && mode === 'wysiwyg') {
-        const content = this._sourceEditor?.getContent() ?? '';
-        this._wysiwygEditor?.setContent(content);
+      if (this._activeMode === 'wysiwyg' && mode === 'source') {
+        this._sourceEditor?.setContent(this._wysiwygEditor?.getContent() ?? '');
+      } else if (this._activeMode === 'source' && mode === 'wysiwyg') {
+        this._wysiwygEditor?.setContent(this._sourceEditor?.getContent() ?? '');
       }
     }
-    // In collab mode: Y.Text is shared, no transfer needed.
-    // TextBinding keeps WYSIWYG in sync with Y.Text.
-    // yCollab keeps Source in sync with Y.Text.
 
     this._showMode(mode);
     this._activeMode = mode;
@@ -198,11 +171,7 @@ export class MarkdownBinding implements IEditorBinding {
   }
 
   private _showMode(mode: EditorMode): void {
-    if (this._wysiwygContainer) {
-      this._wysiwygContainer.style.display = mode === 'wysiwyg' ? '' : 'none';
-    }
-    if (this._sourceContainer) {
-      this._sourceContainer.style.display = mode === 'source' ? '' : 'none';
-    }
+    if (this._wysiwygContainer) this._wysiwygContainer.style.display = mode === 'wysiwyg' ? '' : 'none';
+    if (this._sourceContainer) this._sourceContainer.style.display = mode === 'source' ? '' : 'none';
   }
 }

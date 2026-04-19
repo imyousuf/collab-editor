@@ -58,7 +58,7 @@
     <button id="btn-alternate" class="active">WYSIWYG</button>
     <button id="btn-source">Source</button>
     <button id="btn-readonly">Toggle Readonly</button>
-    <select id="doc-select"></select>
+    <select id="doc-select" autocomplete="off"></select>
     <span class="status" id="status">Disconnected</span>
   </div>
 
@@ -88,12 +88,15 @@
 
     // Store MIME types from the document list API
     const docMimeTypes = {};
+    let currentRoom = null;
 
     async function connectToRoom(roomName) {
-      // Fetch content from the relay API
+      if (currentRoom === roomName) return;
+      currentRoom = roomName;
+
+      // Fetch content
       let content = '';
       let mimeType = docMimeTypes[roomName] || 'text/plain';
-
       try {
         const resp = await fetch('/api/documents/load?path=' + encodeURIComponent(roomName), {
           method: 'POST',
@@ -109,33 +112,19 @@
         console.warn('Failed to load document:', e);
       }
 
-      // Set MIME type and collaboration — triggers reinitialize
-      editor.mimeType = mimeType;
-      editor.collaboration = {
-        enabled: true,
-        roomName: roomName,
-        providerUrl: location.protocol === 'https:' ? 'wss://' + location.host + '/ws' : 'ws://' + location.host + '/ws',
-        user: { name: userName, color: userColor },
-      };
-
-      // Wait for the editor to be fully initialized
-      // whenReady resolves when the binding is mounted and ready for content
-      await editor.whenReady;
-
-      // Small delay to let the debounced reinitialize settle if it fired
-      await new Promise(r => requestAnimationFrame(r));
-      await editor.whenReady; // may be a new promise from reinitialize
+      // Configure all at once — prevents multiple reinitialize cycles
+      await editor.configure({
+        mimeType,
+        collaboration: {
+          enabled: true,
+          roomName: roomName,
+          providerUrl: location.protocol === 'https:' ? 'wss://' + location.host + '/ws' : 'ws://' + location.host + '/ws',
+          user: { name: userName, color: userColor },
+        },
+        initialContent: content,
+      });
 
       updateAlternateButton();
-
-      // Wait briefly for relay sync to populate Y.Text from existing room state.
-      // Only set seed content if Y.Text is still empty (new room, no peers).
-      if (content) {
-        await new Promise(r => setTimeout(r, 500));
-        if (editor.getContent().length === 0) {
-          editor.setContent(content);
-        }
-      }
     }
 
     async function loadDocumentList() {
@@ -152,6 +141,7 @@
             opt.textContent = doc.name;
             docSelect.appendChild(opt);
           }
+          documentListLoaded = true;
           connectToRoom(docSelect.value);
         } else {
           // No documents — create empty editor
@@ -174,7 +164,9 @@
     // Load document list once the custom element is defined
     customElements.whenDefined('multi-editor').then(() => loadDocumentList());
 
+    let documentListLoaded = false;
     docSelect.addEventListener('change', () => {
+      if (!documentListLoaded) return; // Ignore browser form restoration
       connectToRoom(docSelect.value);
     });
 

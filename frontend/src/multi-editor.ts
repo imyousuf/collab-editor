@@ -37,6 +37,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @property({ type: String, reflect: true }) theme: 'light' | 'dark' = 'light';
   @property({ type: Boolean }) readonly: boolean = false;
   @property({ attribute: false }) collaboration: CollaborationConfig | null = null;
+  @property({ attribute: false }) initialContent: string = '';
 
   @state() private _collabStatus: CollabStatus = 'disconnected';
 
@@ -95,24 +96,21 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   async firstUpdated() {
     this._setupKeyboardShortcuts();
-    await this._initialize();
+    // Don't initialize here — wait for properties to be set by the consumer.
+    // The consumer sets mimeType + collaboration, then _initialize runs from updated().
   }
 
-  private _reinitTimer: ReturnType<typeof setTimeout> | null = null;
+  private _reinitializing = false;
 
   updated(changed: Map<string, unknown>) {
-    // Check if properties changed SINCE the last initialize/reinitialize
     const collabChanged = changed.has('collaboration') && this.collaboration !== this._lastCollabConfig;
     const mimeChanged = changed.has('mimeType') && this.mimeType !== this._lastMimeType;
-    const needsReinit = this._initialized && (collabChanged || mimeChanged);
 
-    if (needsReinit) {
-      // Debounce reinitialize to batch rapid property changes (mimeType + collaboration)
-      if (this._reinitTimer) clearTimeout(this._reinitTimer);
-      this._reinitTimer = setTimeout(() => {
-        this._reinitTimer = null;
-        this._reinitialize();
-      }, 0);
+    if (!this._initialized && this.collaboration?.enabled) {
+      // First initialization — triggered when collaboration is set
+      this._initialize();
+    } else if (this._initialized && (collabChanged || mimeChanged) && !this._reinitializing) {
+      this._reinitialize();
     }
 
     if (changed.has('readonly') && this._binding) {
@@ -121,6 +119,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private async _initialize(): Promise<void> {
+    // Mark as initialized immediately to prevent re-entry from async gaps
+    this._initialized = true;
+    this._lastCollabConfig = this.collaboration;
+    this._lastMimeType = this.mimeType;
+
     // Step 1: Set up collaboration if configured
     if (this.collaboration?.enabled) {
       this._collabProvider = new CollaborationProvider();
@@ -133,12 +136,21 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       // Start connection in background — don't block initialization.
       // The Y.Doc and Y.Text are available immediately for binding.
       // y-websocket will sync when the WebSocket connects.
+      console.log('_initialize: connecting to room:', this.collaboration.roomName);
       this._collabProvider.connect(this.collaboration).catch(() => {
         // Connection may fail initially but y-websocket auto-reconnects
       });
     }
 
-    // Step 2: Determine initial mode
+    // Step 2: Seed Y.Text with initial content BEFORE mounting binding
+    // This ensures yCollab initializes with content already in Y.Text
+    if (this._collabProvider && this.initialContent && this._collabProvider.sharedText.length === 0) {
+      this._collabProvider.ydoc.transact(() => {
+        this._collabProvider!.sharedText.insert(0, this.initialContent);
+      });
+    }
+
+    // Step 3: Determine initial mode
     const supportedModes = this._factory.getSupportedModes(this.mimeType);
     if (!supportedModes.includes(this.mode)) {
       this.mode = supportedModes[0] ?? 'source';
@@ -147,14 +159,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // Step 3: Create and mount the binding
     await this._mountBinding(this.mode);
 
-    // Step 4: Ready
-    this._initialized = true;
-    this._lastCollabConfig = this.collaboration;
-    this._lastMimeType = this.mimeType;
+    // Ready
+    this._reinitializing = false;
     this._readyResolve?.();
   }
 
   private async _reinitialize(): Promise<void> {
+    this._reinitializing = true;
+
     // Tear down current binding
     this._binding?.destroy();
     this._binding = null;
@@ -246,6 +258,22 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   setContent(text: string): void {
     this._binding?.setContent(text);
+  }
+
+  /**
+   * Configure the editor with all options at once.
+   * Prevents multiple reinitialize cycles from individual property changes.
+   */
+  async configure(options: {
+    mimeType: string;
+    collaboration: CollaborationConfig;
+    initialContent?: string;
+  }): Promise<void> {
+    this.initialContent = options.initialContent ?? '';
+    this.mimeType = options.mimeType;
+    this.collaboration = options.collaboration;
+    // The properties are set — wait for Lit to process and initialize
+    await this.whenReady;
   }
 
   // --- IEditorEventEmitter ---

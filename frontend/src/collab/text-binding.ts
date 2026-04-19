@@ -1,10 +1,13 @@
 /**
  * Y.Text ↔ Tiptap bidirectional sync with diff-based updates.
  *
- * Fixes from the old TextSync:
- * 1. Separate suppression flags — debounce doesn't block remote changes
- * 2. Symbol origin — distinguishes our transactions from remote ones
- * 3. applyStringDiff — minimal CRDT operations, preserves cursor positions
+ * Content flow:
+ *   Y.Text → TextBinding → Tiptap  (remote changes, initial load)
+ *   Tiptap → TextBinding → Y.Text  (local user edits only)
+ *
+ * Echo prevention: uses a content snapshot to detect if Tiptap's
+ * serialized output matches what was last written from Y.Text.
+ * No timers, no flags, no race conditions.
  */
 import type { Editor } from '@tiptap/core';
 import * as Y from 'yjs';
@@ -17,24 +20,28 @@ export class TextBinding {
   private _editorHandler: (() => void) | null = null;
   private _ytextObserver: ((event: Y.YTextEvent) => void) | null = null;
   private _syncTimer: ReturnType<typeof setTimeout> | null = null;
-  private _suppressEditorToYText = false;
-  private _suppressYTextToEditor = false;
   private readonly _origin = Symbol('TextBinding');
+
+  /**
+   * Snapshot of the last content applied TO Tiptap from Y.Text.
+   * When Tiptap fires `update`, we compare its serialized output
+   * against this snapshot. If they match (or the diff is only
+   * normalization), we skip the write-back to Y.Text.
+   */
+  private _lastAppliedFromYText: string = '';
 
   constructor(editor: Editor, ytext: Y.Text, handler: IContentHandler) {
     this._editor = editor;
     this._ytext = ytext;
     this._handler = handler;
 
-    // If Y.Text already has content, render it in Tiptap immediately
+    // If Y.Text already has content, render it in Tiptap
     if (ytext.length > 0) {
       this._applyYTextToEditor();
     }
 
-    // Tiptap → Y.Text: debounced, does NOT block Y.Text → Tiptap
+    // Tiptap → Y.Text: debounced
     this._editorHandler = () => {
-      if (this._suppressEditorToYText) return;
-
       if (this._syncTimer) clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
         this._applyEditorToYText();
@@ -44,51 +51,49 @@ export class TextBinding {
 
     // Y.Text → Tiptap: immediate for remote changes
     this._ytextObserver = (event) => {
-      if (this._suppressYTextToEditor) return;
+      // Skip our own writes
       if (event.transaction.origin === this._origin) return;
       this._applyYTextToEditor();
     };
     this._ytext.observe(this._ytextObserver);
   }
 
-  /**
-   * Load initial content. Only writes to Y.Text if it's empty.
-   */
+  /** Load initial content. Only writes to Y.Text if it's empty. */
   loadInitialContent(text: string): void {
     if (this._ytext.length > 0) {
       this._applyYTextToEditor();
       return;
     }
-
-    this._suppressYTextToEditor = true;
     this._ytext.doc?.transact(() => {
       this._ytext.insert(0, text);
     }, this._origin);
-    this._suppressYTextToEditor = false;
-
     this._applyContentToEditor(text);
+    this._lastAppliedFromYText = this._getSerializedContent();
   }
 
   private _applyEditorToYText(): void {
     const serialized = this._getSerializedContent();
     const current = this._ytext.toString();
 
+    // Skip if content matches what was last applied from Y.Text.
+    // This prevents the echo: Y.Text → Tiptap → (normalized) → Y.Text
     if (serialized === current) return;
+    if (serialized === this._lastAppliedFromYText) return;
 
-    this._suppressYTextToEditor = true;
+    // Only write if content actually differs from Y.Text
     this._ytext.doc?.transact(() => {
       applyStringDiff(this._ytext, current, serialized);
     }, this._origin);
-    this._suppressYTextToEditor = false;
   }
 
   private _applyYTextToEditor(): void {
     const text = this._ytext.toString();
     if (!text && this._ytext.length === 0) return;
 
-    this._suppressEditorToYText = true;
     this._applyContentToEditor(text);
-    this._suppressEditorToYText = false;
+    // Store what Tiptap WILL serialize (after normalization) as the snapshot.
+    // This prevents the echo: Y.Text → Tiptap → (normalized) → back to Y.Text.
+    this._lastAppliedFromYText = this._getSerializedContent();
   }
 
   private _applyContentToEditor(text: string): void {
@@ -120,7 +125,7 @@ export class TextBinding {
 }
 
 /**
- * Apply a string diff to a Y.Text instance using common prefix/suffix.
+ * Apply a string diff to a Y.Text using common prefix/suffix.
  * Only deletes and inserts the changed region — preserves CRDT cursors.
  */
 export function applyStringDiff(ytext: Y.Text, oldStr: string, newStr: string): void {

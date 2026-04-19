@@ -2,11 +2,7 @@ import type { EditorMode, IEditorBinding } from './interfaces/editor-binding.js'
 import type { IContentHandler } from './interfaces/content-handler.js';
 import type { IEditorBindingFactory, BindingConstructor } from './interfaces/factory.js';
 import { MarkdownContentHandler, HtmlContentHandler, PlainTextContentHandler } from './handlers/index.js';
-import {
-  MarkdownBinding, HtmlBinding, JsxBinding, TsxBinding,
-  JavaScriptBinding, TypeScriptBinding, PythonBinding,
-  CssBinding, JsonBinding, YamlBinding, PlainTextBinding,
-} from './bindings/index.js';
+import { SourceOnlyBinding, DualModeBinding, PreviewSourceBinding } from './bindings/index.js';
 
 interface Registration {
   createBinding: BindingConstructor;
@@ -73,18 +69,23 @@ export class EditorBindingFactory implements IEditorBindingFactory {
  */
 export function registerDefaults(factory: EditorBindingFactory): void {
   const md = new MarkdownContentHandler();
-  const html = new HtmlContentHandler();
+  const htmlHandler = new HtmlContentHandler();
   const plain = new PlainTextContentHandler();
 
-  factory.register('text/markdown', () => new MarkdownBinding(), md);
-  factory.register('text/html', () => new HtmlBinding(), html);
-  factory.register('text/jsx', () => new JsxBinding(), plain);
-  factory.register('text/tsx', () => new TsxBinding(), plain);
-  factory.register('text/javascript', () => new JavaScriptBinding(), plain);
-  factory.register('text/typescript', () => new TypeScriptBinding(), plain);
-  factory.register('text/x-python', () => new PythonBinding(), plain);
-  factory.register('text/css', () => new CssBinding(), plain);
-  factory.register('application/json', () => new JsonBinding(), plain);
-  factory.register('text/yaml', () => new YamlBinding(), plain);
-  factory.register('text/plain', () => new PlainTextBinding(), plain);
+  // WYSIWYG + Source (temporarily using SourceOnly for debugging)
+  factory.register('text/markdown', () => new SourceOnlyBinding('markdown'), md);
+  factory.register('text/html', () => new DualModeBinding(htmlHandler, 'html'), htmlHandler);
+
+  // Preview + Source
+  factory.register('text/jsx', () => new PreviewSourceBinding('jsx'), plain);
+  factory.register('text/tsx', () => new PreviewSourceBinding('tsx'), plain);
+
+  // Source only — each just varies the CodeMirror language
+  factory.register('text/javascript', () => new SourceOnlyBinding('javascript'), plain);
+  factory.register('text/typescript', () => new SourceOnlyBinding('typescript'), plain);
+  factory.register('text/x-python', () => new SourceOnlyBinding('python'), plain);
+  factory.register('text/css', () => new SourceOnlyBinding('html'), plain);
+  factory.register('application/json', () => new SourceOnlyBinding('javascript'), plain);
+  factory.register('text/yaml', () => new SourceOnlyBinding('markdown'), plain);
+  factory.register('text/plain', () => new SourceOnlyBinding('markdown'), plain);
 }

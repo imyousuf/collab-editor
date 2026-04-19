@@ -1,12 +1,3 @@
 export { SourceOnlyBinding } from './source-only-binding.js';
-export { MarkdownBinding } from './markdown-binding.js';
-export { HtmlBinding } from './html-binding.js';
-export { JsxBinding } from './jsx-binding.js';
-export { TsxBinding } from './tsx-binding.js';
-export { JavaScriptBinding } from './javascript-binding.js';
-export { TypeScriptBinding } from './typescript-binding.js';
-export { PythonBinding } from './python-binding.js';
-export { CssBinding } from './css-binding.js';
-export { JsonBinding } from './json-binding.js';
-export { YamlBinding } from './yaml-binding.js';
-export { PlainTextBinding } from './plaintext-binding.js';
+export { DualModeBinding } from './dual-mode-binding.js';
+export { PreviewSourceBinding } from './preview-source-binding.js';
