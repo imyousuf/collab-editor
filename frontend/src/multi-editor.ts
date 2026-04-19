@@ -114,9 +114,13 @@ export class MultiEditor extends LitElement {
   updated(changed: Map<string, unknown>) {
     if (changed.has('collaboration') && this._initialized && this.collaboration !== this._lastCollabConfig) {
       this._lastCollabConfig = this.collaboration;
-      // Set up the new collaboration provider (WebSocket connection)
-      // but don't recreate editors — the editors work independently
       this._setupCollaboration();
+      // Enable collaboration on the WYSIWYG editor via dynamic import
+      if (this._collabProvider && this._wysiwygEditor) {
+        this._wysiwygEditor.enableCollaboration(this._collabProvider).catch((e) => {
+          console.warn('Failed to enable collaboration:', e);
+        });
+      }
     }
     if (changed.has('readonly')) {
       this._wysiwygEditor?.setReadonly(this.readonly);
