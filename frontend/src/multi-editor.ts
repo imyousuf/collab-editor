@@ -3,8 +3,8 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { WysiwygEditor } from './editors/wysiwyg-editor.js';
 import { SourceEditor } from './editors/source-editor.js';
 import { CollabProvider } from './collab/yjs-provider.js';
-import { syncWysiwygToSource, syncSourceToWysiwyg } from './collab/view-sync.js';
 import { EditorChangeEvent, ModeChangeEvent, EditorSaveEvent, CollabStatusEvent } from './events.js';
+import { supportsWysiwyg, getLanguageForMime, getFormatForMime } from './types.js';
 import type { EditorMode, EditorFormat, EditorTheme, CollaborationConfig } from './types.js';
 
 @customElement('multi-editor')
@@ -12,9 +12,11 @@ export class MultiEditor extends LitElement {
   @property({ type: String, reflect: true }) mode: EditorMode = 'wysiwyg';
   @property({ type: String }) format: EditorFormat = 'markdown';
   @property({ type: String }) language: string = 'markdown';
+  @property({ type: String }) mimeType: string = 'text/markdown';
   @property({ type: String }) placeholder: string = 'Start writing...';
   @property({ type: String, reflect: true }) theme: EditorTheme = 'light';
   @property({ type: Boolean }) readonly: boolean = false;
+  @property({ type: Boolean, reflect: true }) wysiwygDisabled: boolean = false;
 
   @property({ attribute: false }) collaboration: CollaborationConfig | null = null;
 
@@ -116,11 +118,21 @@ export class MultiEditor extends LitElement {
       this._lastCollabConfig = this.collaboration;
       this._setupCollaboration();
     }
+    if (changed.has('mimeType') && this._initialized) {
+      this.wysiwygDisabled = !supportsWysiwyg(this.mimeType);
+      this.format = getFormatForMime(this.mimeType);
+      this.language = getLanguageForMime(this.mimeType);
+      this._sourceEditor?.setLanguage(this.language);
+      // If WYSIWYG not supported and currently in WYSIWYG, switch to source
+      if (this.wysiwygDisabled && this.mode === 'wysiwyg') {
+        this.switchMode('source');
+      }
+    }
     if (changed.has('readonly')) {
       this._wysiwygEditor?.setReadonly(this.readonly);
       this._sourceEditor?.setReadonly(this.readonly);
     }
-    if (changed.has('language')) {
+    if (changed.has('language') && !changed.has('mimeType')) {
       this._sourceEditor?.setLanguage(this.language);
     }
   }
@@ -225,6 +237,7 @@ export class MultiEditor extends LitElement {
 
   async switchMode(newMode: EditorMode): Promise<void> {
     if (newMode === this.mode) return;
+    if (newMode === 'wysiwyg' && this.wysiwygDisabled) return;
 
     const cancelEvent = new CustomEvent('before-mode-change', {
       detail: { mode: newMode, previousMode: this.mode },
@@ -243,7 +256,7 @@ export class MultiEditor extends LitElement {
       }
     } else if (previousMode === 'source' && newMode === 'wysiwyg') {
       if (this._sourceEditor && this._wysiwygEditor) {
-        this._wysiwygEditor.setContent(this._sourceEditor.getContent());
+        this._wysiwygEditor.setContent(this._sourceEditor.getContent(), this.mimeType);
         this._sourceEditor.deactivate();
       }
     }
@@ -260,11 +273,14 @@ export class MultiEditor extends LitElement {
     return this._sourceEditor?.getContent() ?? '';
   }
 
-  setContent(content: string, format?: EditorFormat): void {
-    if (this.mode === 'wysiwyg') {
-      this._wysiwygEditor?.setContent(content);
-    } else {
-      this._sourceEditor?.setContent(content);
+  setContent(content: string, mimeType?: string): void {
+    const mime = mimeType ?? this.mimeType;
+    const wysiwygSupported = supportsWysiwyg(mime);
+
+    if (wysiwygSupported && this.mode === 'wysiwyg' && this._wysiwygEditor) {
+      this._wysiwygEditor.setContent(content, mime);
+    } else if (this._sourceEditor) {
+      this._sourceEditor.setContent(content);
     }
   }
 

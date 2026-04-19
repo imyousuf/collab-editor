@@ -154,6 +154,7 @@ func TestListDocuments(t *testing.T) {
 
 	os.WriteFile(filepath.Join(store.baseDir, "welcome.md"), []byte("# Welcome"), 0o644)
 	os.WriteFile(filepath.Join(store.baseDir, "page.html"), []byte("<h1>Page</h1>"), 0o644)
+	os.WriteFile(filepath.Join(store.baseDir, "app.jsx"), []byte("export default function App() {}"), 0o644)
 
 	req, _ := http.NewRequest("GET", srv.URL+"/documents", nil)
 	req.Header.Set("Authorization", "Bearer "+testToken)
@@ -167,14 +168,43 @@ func TestListDocuments(t *testing.T) {
 	}
 
 	var result struct {
-		Documents []struct {
-			Name string `json:"name"`
-			Size int64  `json:"size"`
-		} `json:"documents"`
+		Documents []spi.DocumentListEntry `json:"documents"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
-	if len(result.Documents) != 2 {
-		t.Errorf("expected 2 documents, got %d", len(result.Documents))
+	if len(result.Documents) != 3 {
+		t.Fatalf("expected 3 documents, got %d", len(result.Documents))
+	}
+
+	// Verify MIME types are set correctly
+	mimeByName := make(map[string]string)
+	for _, d := range result.Documents {
+		mimeByName[d.Name] = d.MimeType
+	}
+	if mimeByName["welcome.md"] != "text/markdown" {
+		t.Errorf("welcome.md mime: got %q", mimeByName["welcome.md"])
+	}
+	if mimeByName["page.html"] != "text/html" {
+		t.Errorf("page.html mime: got %q", mimeByName["page.html"])
+	}
+	if mimeByName["app.jsx"] != "text/jsx" {
+		t.Errorf("app.jsx mime: got %q", mimeByName["app.jsx"])
+	}
+}
+
+func TestLoad_IncludesMimeType(t *testing.T) {
+	srv, store := newTestServer(t)
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Test"), 0o644)
+
+	resp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var loadResp spi.LoadResponse
+	json.NewDecoder(resp.Body).Decode(&loadResp)
+	if loadResp.MimeType != "text/markdown" {
+		t.Errorf("expected mime_type text/markdown, got %q", loadResp.MimeType)
 	}
 }
 

@@ -86,21 +86,11 @@
     const userColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
     userInfo.textContent = `Editing as ${userName}`;
 
-    // Detect format and language from file extension
-    function detectFormat(name) {
-      if (name.endsWith('.html') || name.endsWith('.htm')) return { format: 'html', language: 'html' };
-      if (name.endsWith('.py')) return { format: 'markdown', language: 'python' };
-      if (name.endsWith('.jsx') || name.endsWith('.tsx')) return { format: 'markdown', language: 'javascript' };
-      if (name.endsWith('.js') || name.endsWith('.ts')) return { format: 'markdown', language: 'javascript' };
-      return { format: 'markdown', language: 'markdown' };
-    }
+    // Store MIME types from the document list API
+    const docMimeTypes = {};
 
     async function connectToRoom(roomName) {
-      const { format, language } = detectFormat(roomName);
-      editor.format = format;
-      editor.language = language;
-
-      // Load document content from the storage provider API
+      // Load document content from the relay API
       try {
         const resp = await fetch('/api/documents/load?path=' + encodeURIComponent(roomName), {
           method: 'POST',
@@ -109,13 +99,29 @@
         });
         if (resp.ok) {
           const data = await resp.json();
+          const mimeType = data.mime_type || docMimeTypes[roomName] || 'text/plain';
+
+          // Set MIME type first — this updates format, language, and wysiwygDisabled
+          editor.mimeType = mimeType;
+
+          // Wait for the MIME type update to settle (mode switch, etc.)
+          await new Promise(r => setTimeout(r, 100));
+
+          // Update WYSIWYG button state based on MIME type
+          btnWysiwyg.disabled = editor.wysiwygDisabled;
+          btnWysiwyg.style.opacity = editor.wysiwygDisabled ? '0.4' : '1';
+          btnWysiwyg.classList.toggle('active', editor.mode === 'wysiwyg');
+          btnSource.classList.toggle('active', editor.mode === 'source');
+
           if (data.content) {
-            editor.setContent(data.content);
+            editor.setContent(data.content, mimeType);
           } else {
-            editor.setContent('');
+            editor.setContent('', mimeType);
           }
         } else if (resp.status === 204) {
-          editor.setContent('');
+          const mimeType = docMimeTypes[roomName] || 'text/plain';
+          editor.mimeType = mimeType;
+          editor.setContent('', mimeType);
         }
       } catch (e) {
         console.warn('Failed to load document:', e);
@@ -130,7 +136,6 @@
       };
     }
 
-    // Load document list from the storage provider
     async function loadDocumentList() {
       try {
         const resp = await fetch('/api/documents');
@@ -139,6 +144,7 @@
         docSelect.innerHTML = '';
         if (data.documents && data.documents.length > 0) {
           for (const doc of data.documents) {
+            docMimeTypes[doc.name] = doc.mime_type;
             const opt = document.createElement('option');
             opt.value = doc.name;
             opt.textContent = doc.name;
@@ -174,7 +180,9 @@
     });
 
     btnWysiwyg.addEventListener('click', () => {
-      editor.switchMode('wysiwyg');
+      if (!editor.wysiwygDisabled) {
+        editor.switchMode('wysiwyg');
+      }
     });
     btnSource.addEventListener('click', () => {
       editor.switchMode('source');
@@ -186,6 +194,8 @@
     editor.addEventListener('mode-change', (e) => {
       btnWysiwyg.classList.toggle('active', e.detail.mode === 'wysiwyg');
       btnSource.classList.toggle('active', e.detail.mode === 'source');
+      btnWysiwyg.disabled = editor.wysiwygDisabled;
+      btnWysiwyg.style.opacity = editor.wysiwygDisabled ? '0.4' : '1';
     });
 
     editor.addEventListener('collab-status', (e) => {

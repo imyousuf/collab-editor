@@ -24,8 +24,12 @@ export class WysiwygEditor {
     return this.editor.getHTML();
   }
 
-  setContent(content: string): void {
-    this.editor.commands.setContent(content);
+  setContent(content: string, mimeType?: string): void {
+    if (mimeType === 'text/markdown') {
+      this.editor.commands.setContent(content, { contentType: 'markdown' } as any);
+    } else {
+      this.editor.commands.setContent(content);
+    }
   }
 
   setReadonly(readonly: boolean): void {

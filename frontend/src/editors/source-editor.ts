@@ -1,4 +1,4 @@
-import { EditorView, keymap } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
@@ -46,6 +46,7 @@ export class SourceEditor {
       extensions: [
         basicSetup,
         keymap.of([...defaultKeymap, indentWithTab]),
+        EditorView.lineWrapping,
         this.languageCompartment.of(getLanguageExtension(options.language)),
         this.collabCompartment.of(collabExtensions),
         this.readonlyCompartment.of(EditorState.readOnly.of(options.readonly)),

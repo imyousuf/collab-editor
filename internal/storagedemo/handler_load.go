@@ -42,5 +42,6 @@ func (h *handlers) load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resp.MimeType = detectMimeType(docID)
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -12,7 +12,8 @@ type LoadResponse struct {
 	Snapshot *SnapshotPayload  `json:"snapshot,omitempty"`
 	Updates  []UpdatePayload   `json:"updates,omitempty"`
 	Metadata *DocumentMetadata `json:"metadata,omitempty"`
-	Content  string            `json:"content,omitempty"` // plain text content of the document
+	Content  string            `json:"content,omitempty"`   // plain text content of the document
+	MimeType string            `json:"mime_type,omitempty"` // MIME type of the document
 }
 
 // SnapshotPayload represents a compacted document snapshot.
@@ -72,8 +73,9 @@ type CompactResponse struct {
 
 // DocumentListEntry represents a document in the listing response.
 type DocumentListEntry struct {
-	Name string `json:"name"`
-	Size int64  `json:"size"`
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	MimeType string `json:"mime_type"`
 }
 
 // HealthResponse is returned by the provider's health endpoint.
