@@ -70,28 +70,20 @@ export class WysiwygEditor {
     return this.editor.getHTML();
   }
 
-  setContent(content: string, mimeType?: string): void {
-    // When collaboration is active, only set content if the Y.Doc is empty.
-    // This prevents overwriting collaborative state on reconnection.
-    if (this._collabProvider) {
+  /**
+   * Set editor content. When collaboration is active:
+   * - force=false (default): only sets content if Y.Doc is empty (initial load)
+   * - force=true: always sets content (mode switch from source)
+   */
+  setContent(content: string, mimeType?: string, force = false): void {
+    if (this._collabProvider && !force) {
       const fragment = this._collabProvider.content;
       if (fragment.length > 0) {
-        // Y.Doc already has content (from a peer or previous edit) — don't overwrite
+        // Y.Doc already has collaborative content — don't overwrite on initial load
         return;
       }
-      // Y.Doc is empty — parse content and insert into the Y.XmlFragment
-      // so the ySyncPlugin picks it up natively
-      if (mimeType === 'text/markdown') {
-        // Use editor.commands.setContent with markdown contentType
-        // This works because the ySyncPlugin intercepts the ProseMirror transaction
-        this.editor.commands.setContent(content, { contentType: 'markdown' } as any);
-      } else {
-        this.editor.commands.setContent(content);
-      }
-      return;
     }
 
-    // No collaboration — set content directly
     if (mimeType === 'text/markdown') {
       this.editor.commands.setContent(content, { contentType: 'markdown' } as any);
     } else {

@@ -273,7 +273,8 @@ export class MultiEditor extends LitElement {
       }
     } else if (previousMode === 'source' && newMode === 'wysiwyg') {
       if (this._sourceEditor && this._wysiwygEditor) {
-        this._wysiwygEditor.setContent(this._sourceEditor.getContent(), this.mimeType);
+        // force=true: source edits must overwrite the Y.Doc state
+        this._wysiwygEditor.setContent(this._sourceEditor.getContent(), this.mimeType, true);
         this._sourceEditor.deactivate();
       }
     } else if (previousMode === 'source' && newMode === 'preview') {
