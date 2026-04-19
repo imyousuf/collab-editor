@@ -138,39 +138,40 @@ func TestRoom_Broadcast(t *testing.T) {
 	}
 }
 
-func TestRoom_HandleMessage_BuffersUpdates(t *testing.T) {
+func TestRoom_HandleMessage_RelaysAllTypes(t *testing.T) {
 	room, _ := newTestRoom(t)
 
-	conn := newMockConn()
-	peer := newPeer(conn, room)
-	room.AddPeer(peer)
+	conn1 := newMockConn()
+	conn2 := newMockConn()
+	peer1 := newPeer(conn1, room)
+	peer2 := newPeer(conn2, room)
+	room.AddPeer(peer1)
+	room.AddPeer(peer2)
 
-	// Sync update message: type=0, subtype=2, followed by payload
+	// Sync update message relayed to peer2
 	msg := []byte{0, 2, 0x01, 0x02, 0x03}
-	room.handleMessage(peer, msg)
+	room.handleMessage(peer1, msg)
 
-	if room.buffer.Len() != 1 {
-		t.Errorf("buffer len: got %d, want 1", room.buffer.Len())
-	}
-}
-
-func TestRoom_HandleMessage_IgnoresNonUpdateMessages(t *testing.T) {
-	room, _ := newTestRoom(t)
-
-	conn := newMockConn()
-	peer := newPeer(conn, room)
-	room.AddPeer(peer)
-
-	// Awareness message (type=1)
-	room.handleMessage(peer, []byte{1, 0x01, 0x02})
-	if room.buffer.Len() != 0 {
-		t.Error("awareness messages should not be buffered")
+	select {
+	case got := <-peer2.writeCh:
+		if string(got) != string(msg) {
+			t.Errorf("peer2 got %v, want %v", got, msg)
+		}
+	default:
+		t.Error("peer2 should receive relayed message")
 	}
 
-	// Sync step 1 (type=0, subtype=0)
-	room.handleMessage(peer, []byte{0, 0, 0x01})
-	if room.buffer.Len() != 0 {
-		t.Error("sync step 1 should not be buffered")
+	// Awareness message also relayed
+	awareness := []byte{1, 0x01, 0x02}
+	room.handleMessage(peer1, awareness)
+
+	select {
+	case got := <-peer2.writeCh:
+		if string(got) != string(awareness) {
+			t.Errorf("peer2 got %v, want %v", got, awareness)
+		}
+	default:
+		t.Error("peer2 should receive awareness message")
 	}
 }
 
@@ -181,13 +182,14 @@ func TestRoom_Close(t *testing.T) {
 	peer := newPeer(conn, room)
 	room.AddPeer(peer)
 
-	// Add some buffered data
-	room.buffer.Append([]byte("test"), 100)
-
 	room.Close()
 
-	// After close, buffer should be drained (flushed)
-	if room.buffer.Len() != 0 {
-		t.Errorf("buffer should be drained after close, got %d", room.buffer.Len())
+	// After close, peer count should still reflect the peer (not removed by Close)
+	// but the closeCh should be closed
+	select {
+	case <-room.closeCh:
+		// expected — channel is closed
+	default:
+		t.Error("closeCh should be closed after Close()")
 	}
 }

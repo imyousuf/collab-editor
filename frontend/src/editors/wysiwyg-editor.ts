@@ -1,6 +1,7 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
+import { DOMParser as PmDOMParser } from '@tiptap/pm/model';
 import type { CollabProvider } from '../collab/yjs-provider.js';
 import type { EditorFormat, EditorTheme } from '../types.js';
 
@@ -49,11 +50,18 @@ export async function createWysiwygEditor(
     editable: !options.readonly,
   });
 
-  return new WysiwygEditor(editor);
+  return new WysiwygEditor(editor, collabProvider);
 }
 
 export class WysiwygEditor {
-  constructor(readonly editor: Editor) {}
+  private _collabProvider: CollabProvider | null;
+
+  constructor(editor: Editor, collabProvider?: CollabProvider | null) {
+    this.editor = editor;
+    this._collabProvider = collabProvider ?? null;
+  }
+
+  readonly editor: Editor;
 
   getContent(format: EditorFormat = 'html'): string {
     if (format === 'markdown') {
@@ -63,6 +71,27 @@ export class WysiwygEditor {
   }
 
   setContent(content: string, mimeType?: string): void {
+    // When collaboration is active, only set content if the Y.Doc is empty.
+    // This prevents overwriting collaborative state on reconnection.
+    if (this._collabProvider) {
+      const fragment = this._collabProvider.content;
+      if (fragment.length > 0) {
+        // Y.Doc already has content (from a peer or previous edit) — don't overwrite
+        return;
+      }
+      // Y.Doc is empty — parse content and insert into the Y.XmlFragment
+      // so the ySyncPlugin picks it up natively
+      if (mimeType === 'text/markdown') {
+        // Use editor.commands.setContent with markdown contentType
+        // This works because the ySyncPlugin intercepts the ProseMirror transaction
+        this.editor.commands.setContent(content, { contentType: 'markdown' } as any);
+      } else {
+        this.editor.commands.setContent(content);
+      }
+      return;
+    }
+
+    // No collaboration — set content directly
     if (mimeType === 'text/markdown') {
       this.editor.commands.setContent(content, { contentType: 'markdown' } as any);
     } else {
