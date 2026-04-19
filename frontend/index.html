@@ -109,13 +109,8 @@
         console.warn('Failed to load document:', e);
       }
 
-      // 1. Set MIME type (updates format, language, mode)
+      // Set MIME type and collaboration — triggers reinitialize
       editor.mimeType = mimeType;
-      await new Promise(r => setTimeout(r, 100));
-      updateAlternateButton();
-
-      // 2. Set collaboration BEFORE content — so yCollab is active
-      //    when content is inserted, ensuring it flows into Y.Text
       editor.collaboration = {
         enabled: true,
         roomName: roomName,
@@ -123,12 +118,18 @@
         user: { name: userName, color: userColor },
       };
 
-      // 3. Wait for collaboration setup (async WYSIWYG editor creation, yCollab binding)
-      await new Promise(r => setTimeout(r, 500));
+      // Wait for the editor to be fully initialized
+      // whenReady resolves when the binding is mounted and ready for content
+      await editor.whenReady;
 
-      // 4. Now set content — flows through yCollab into Y.Text
+      // Small delay to let the debounced reinitialize settle if it fired
+      await new Promise(r => requestAnimationFrame(r));
+      await editor.whenReady; // may be a new promise from reinitialize
+
+      updateAlternateButton();
+
       if (content) {
-        editor.setContent(content, mimeType);
+        editor.setContent(content);
       }
     }
 
@@ -165,11 +166,8 @@
       }
     }
 
-    // Wait for the multi-editor element to be defined and initialized before loading content
-    customElements.whenDefined('multi-editor').then(() => {
-      // Give the element time to run firstUpdated and create internal editors
-      setTimeout(() => loadDocumentList(), 200);
-    });
+    // Load document list once the custom element is defined
+    customElements.whenDefined('multi-editor').then(() => loadDocumentList());
 
     docSelect.addEventListener('change', () => {
       connectToRoom(docSelect.value);

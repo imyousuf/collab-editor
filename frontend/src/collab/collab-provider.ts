@@ -55,6 +55,16 @@ export class CollaborationProvider implements ICollaborationProvider {
       }
     });
 
+    // Check if already connected (status event may have fired before listener was attached)
+    if (this._provider.wsconnected) {
+      this._setStatus('connected');
+      for (const { resolve, timer } of this._connectedResolvers) {
+        clearTimeout(timer);
+        resolve();
+      }
+      this._connectedResolvers = [];
+    }
+
     // Listen for remote updates on the Y.Doc
     this.ydoc.on('update', (_update: Uint8Array, origin: any) => {
       // Only fire for remote updates (not local transactions)
