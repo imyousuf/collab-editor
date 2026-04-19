@@ -227,6 +227,7 @@ export class MultiEditor extends LitElement {
         this._pendingContent = null;
         this._wysiwygEditor.setContent(content, mimeType);
       }
+
     } catch (e) {
       console.error('Failed to create WYSIWYG editor:', e);
     }

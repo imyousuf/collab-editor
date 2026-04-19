@@ -90,7 +90,10 @@
     const docMimeTypes = {};
 
     async function connectToRoom(roomName) {
-      // Load document content from the relay API
+      // Fetch content from the relay API
+      let content = '';
+      let mimeType = docMimeTypes[roomName] || 'text/plain';
+
       try {
         const resp = await fetch('/api/documents/load?path=' + encodeURIComponent(roomName), {
           method: 'POST',
@@ -99,37 +102,34 @@
         });
         if (resp.ok) {
           const data = await resp.json();
-          const mimeType = data.mime_type || docMimeTypes[roomName] || 'text/plain';
-
-          // Set MIME type first — this updates format, language, and wysiwygDisabled
-          editor.mimeType = mimeType;
-
-          // Wait for the MIME type update to settle (mode switch, etc.)
-          await new Promise(r => setTimeout(r, 100));
-
-          updateAlternateButton();
-
-          if (data.content) {
-            editor.setContent(data.content, mimeType);
-          } else {
-            editor.setContent('', mimeType);
-          }
-        } else if (resp.status === 204) {
-          const mimeType = docMimeTypes[roomName] || 'text/plain';
-          editor.mimeType = mimeType;
-          editor.setContent('', mimeType);
+          mimeType = data.mime_type || mimeType;
+          content = data.content || '';
         }
       } catch (e) {
         console.warn('Failed to load document:', e);
-        editor.setContent('');
       }
 
+      // 1. Set MIME type (updates format, language, mode)
+      editor.mimeType = mimeType;
+      await new Promise(r => setTimeout(r, 100));
+      updateAlternateButton();
+
+      // 2. Set collaboration BEFORE content — so yCollab is active
+      //    when content is inserted, ensuring it flows into Y.Text
       editor.collaboration = {
         enabled: true,
         roomName: roomName,
         providerUrl: location.protocol === 'https:' ? 'wss://' + location.host + '/ws' : 'ws://' + location.host + '/ws',
         user: { name: userName, color: userColor },
       };
+
+      // 3. Wait for collaboration setup (async WYSIWYG editor creation, yCollab binding)
+      await new Promise(r => setTimeout(r, 500));
+
+      // 4. Now set content — flows through yCollab into Y.Text
+      if (content) {
+        editor.setContent(content, mimeType);
+      }
     }
 
     async function loadDocumentList() {

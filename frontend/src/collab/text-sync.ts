@@ -24,6 +24,11 @@ export class TextSync {
     this.ytext = ytext;
     this.mimeType = mimeType;
 
+    // If Y.Text already has content, render it in Tiptap immediately
+    if (ytext.length > 0) {
+      this.syncYTextToEditor();
+    }
+
     // Listen for Tiptap changes → serialize to Y.Text
     this.editorHandler = () => {
       if (this.updating) return;
