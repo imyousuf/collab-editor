@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'vitest';
-import { EditorBindingFactory } from '../registry.js';
+import { EditorBindingFactory, registerDefaults } from '../registry.js';
 import { MarkdownContentHandler } from '../handlers/markdown-handler.js';
 import { PlainTextContentHandler } from '../handlers/plaintext-handler.js';
 import type { IEditorBinding, EditorMode, MountOptions, CollaborationContext, ContentChangeCallback, RemoteChangeCallback } from '../interfaces/editor-binding.js';
@@ -93,6 +93,49 @@ describe('EditorBindingFactory', () => {
     factory.register('text/markdown', () => new MockBinding(['source']), new MarkdownContentHandler());
     factory.register('text/plain', () => new MockBinding(['source']), new PlainTextContentHandler());
     expect(factory.getRegisteredMimeTypes().sort()).toEqual(['text/markdown', 'text/plain']);
+  });
+
+  test('registerDefaults populates all 11 MIME types', () => {
+    const factory = new EditorBindingFactory();
+    registerDefaults(factory);
+    const mimes = factory.getRegisteredMimeTypes().sort();
+    expect(mimes).toEqual([
+      'application/json',
+      'text/css',
+      'text/html',
+      'text/javascript',
+      'text/jsx',
+      'text/markdown',
+      'text/plain',
+      'text/tsx',
+      'text/typescript',
+      'text/x-python',
+      'text/yaml',
+    ]);
+  });
+
+  test('registerDefaults: markdown supports wysiwyg+source', () => {
+    const factory = new EditorBindingFactory();
+    registerDefaults(factory);
+    expect(factory.supports('text/markdown', 'wysiwyg')).toBe(true);
+    expect(factory.supports('text/markdown', 'source')).toBe(true);
+    expect(factory.supports('text/markdown', 'preview')).toBe(false);
+  });
+
+  test('registerDefaults: jsx supports preview+source', () => {
+    const factory = new EditorBindingFactory();
+    registerDefaults(factory);
+    expect(factory.supports('text/jsx', 'preview')).toBe(true);
+    expect(factory.supports('text/jsx', 'source')).toBe(true);
+    expect(factory.supports('text/jsx', 'wysiwyg')).toBe(false);
+  });
+
+  test('registerDefaults: python supports source only', () => {
+    const factory = new EditorBindingFactory();
+    registerDefaults(factory);
+    expect(factory.supports('text/x-python', 'source')).toBe(true);
+    expect(factory.supports('text/x-python', 'wysiwyg')).toBe(false);
+    expect(factory.supports('text/x-python', 'preview')).toBe(false);
   });
 
   test('multiple registrations for different MIME types', () => {

@@ -1,6 +1,12 @@
 import type { EditorMode, IEditorBinding } from './interfaces/editor-binding.js';
 import type { IContentHandler } from './interfaces/content-handler.js';
 import type { IEditorBindingFactory, BindingConstructor } from './interfaces/factory.js';
+import { MarkdownContentHandler, HtmlContentHandler, PlainTextContentHandler } from './handlers/index.js';
+import {
+  MarkdownBinding, HtmlBinding, JsxBinding, TsxBinding,
+  JavaScriptBinding, TypeScriptBinding, PythonBinding,
+  CssBinding, JsonBinding, YamlBinding, PlainTextBinding,
+} from './bindings/index.js';
 
 interface Registration {
   createBinding: BindingConstructor;
@@ -60,4 +66,25 @@ export class EditorBindingFactory implements IEditorBindingFactory {
   getRegisteredMimeTypes(): string[] {
     return Array.from(this._registry.keys());
   }
+}
+
+/**
+ * Register all default MIME type bindings.
+ */
+export function registerDefaults(factory: EditorBindingFactory): void {
+  const md = new MarkdownContentHandler();
+  const html = new HtmlContentHandler();
+  const plain = new PlainTextContentHandler();
+
+  factory.register('text/markdown', () => new MarkdownBinding(), md);
+  factory.register('text/html', () => new HtmlBinding(), html);
+  factory.register('text/jsx', () => new JsxBinding(), plain);
+  factory.register('text/tsx', () => new TsxBinding(), plain);
+  factory.register('text/javascript', () => new JavaScriptBinding(), plain);
+  factory.register('text/typescript', () => new TypeScriptBinding(), plain);
+  factory.register('text/x-python', () => new PythonBinding(), plain);
+  factory.register('text/css', () => new CssBinding(), plain);
+  factory.register('application/json', () => new JsonBinding(), plain);
+  factory.register('text/yaml', () => new YamlBinding(), plain);
+  factory.register('text/plain', () => new PlainTextBinding(), plain);
 }
