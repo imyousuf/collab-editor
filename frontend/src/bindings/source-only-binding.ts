@@ -82,8 +82,11 @@ export class SourceOnlyBinding implements IEditorBinding {
       return;
     }
     if (this._collab) {
-      // Write to Y.Text — yCollab picks it up
+      // Replace Y.Text content — yCollab picks it up
       this._collab.ydoc.transact(() => {
+        if (this._collab!.sharedText.length > 0) {
+          this._collab!.sharedText.delete(0, this._collab!.sharedText.length);
+        }
         this._collab!.sharedText.insert(0, text);
       });
       return;

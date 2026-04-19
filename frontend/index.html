@@ -128,8 +128,13 @@
 
       updateAlternateButton();
 
+      // Wait briefly for relay sync to populate Y.Text from existing room state.
+      // Only set seed content if Y.Text is still empty (new room, no peers).
       if (content) {
-        editor.setContent(content);
+        await new Promise(r => setTimeout(r, 500));
+        if (editor.getContent().length === 0) {
+          editor.setContent(content);
+        }
       }
     }
 
@@ -174,12 +179,15 @@
     });
 
     function updateAlternateButton() {
-      const cap = editor.alternateCapability;
-      if (cap === 'wysiwyg') {
+      const modes = editor.supportedModes || ['source'];
+      const hasWysiwyg = modes.includes('wysiwyg');
+      const hasPreview = modes.includes('preview');
+
+      if (hasWysiwyg) {
         btnAlternate.textContent = 'WYSIWYG';
         btnAlternate.disabled = false;
         btnAlternate.style.opacity = '1';
-      } else if (cap === 'preview') {
+      } else if (hasPreview) {
         btnAlternate.textContent = 'Preview';
         btnAlternate.disabled = false;
         btnAlternate.style.opacity = '1';
@@ -194,10 +202,10 @@
     }
 
     btnAlternate.addEventListener('click', () => {
-      const cap = editor.alternateCapability;
-      if (cap === 'wysiwyg') {
+      const modes = editor.supportedModes || ['source'];
+      if (modes.includes('wysiwyg')) {
         editor.switchMode('wysiwyg');
-      } else if (cap === 'preview') {
+      } else if (modes.includes('preview')) {
         editor.switchMode('preview');
       }
     });

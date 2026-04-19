@@ -137,6 +137,7 @@ export class MarkdownBinding implements IEditorBinding {
     if (this._collab) {
       // Write to Y.Text — both yCollab and TextBinding pick it up
       this._collab.ydoc.transact(() => {
+        if (this._collab!.sharedText.length > 0) { this._collab!.sharedText.delete(0, this._collab!.sharedText.length); }
         this._collab!.sharedText.insert(0, text);
       });
       return;
