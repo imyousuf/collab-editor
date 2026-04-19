@@ -1,8 +1,24 @@
 Navigate to http://localhost:3001
-Wait for the React app to load
-Verify the page contains text "React + Collaborative Editor"
-Verify the multi-editor component renders inside the React app
-Click into the editor and type some content
-Verify the Event Log section shows change events
+Wait for the React app to fully load
+
+Verify the page heading "React + Collaborative Editor" is visible
+Verify the page contains two buttons labeled "WYSIWYG" and "Source"
+Verify the multi-editor web component is rendered inside the React app's DOM
+Verify the editor area has a border and minimum height of 300px
+Verify the "Event Log" section is visible below the editor
+
+Click into the editor area inside the multi-editor component
+Type "React integration test: typing in the editor"
+Wait 500ms for the debounced change event to fire
+Verify the Event Log section shows at least one entry containing "change:"
+Verify the Event Log entry contains "React integration" — confirming the onEditorChange callback received the content
+
 Click the "Source" button
-Verify the Event Log shows a mode change event
+Wait 500ms
+Verify the Event Log shows a new entry containing "mode:"
+Verify the entry contains "wysiwyg -> source" — confirming the onModeChange callback fired with correct previous and new mode values
+
+Click the "WYSIWYG" button
+Verify another mode change entry appears in the Event Log containing "source -> wysiwyg"
+
+Verify the Event Log also shows an entry containing "collab:" — confirming the onCollabStatus callback fired during WebSocket connection

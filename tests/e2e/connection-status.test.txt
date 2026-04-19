@@ -1,6 +1,16 @@
 Navigate to http://localhost:3000
 Wait for the page to fully load
-Verify the status indicator is visible
-Verify the status shows "Connected"
-Click into the editor area
-Type some text to verify the editor is functional
+
+Verify the page heading "Collaborative Editor" is visible
+Verify the toolbar contains buttons labeled "WYSIWYG", "Source", and "Toggle Readonly"
+Verify the document dropdown contains options: "welcome.md", "page.html", "script.py", "app.jsx"
+
+Verify the status indicator element is visible in the top-right area of the toolbar
+Wait up to 5 seconds for the status text to change to "Connected"
+Verify the status text is "Connected"
+Verify the status indicator has a green color (rgb value or class indicating connected state)
+
+Click into the editor area and type "Connection status test"
+Verify "Connection status test" appears in the editor — confirming the editor is functional while connected
+
+Verify the user info line below the editor contains "Editing as User-" followed by a number

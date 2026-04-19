@@ -1,7 +1,25 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
-Click into the editor area and type "Hello World"
+Wait for the status indicator to show "Connected"
+
+Click into the WYSIWYG editor and type "# Meeting Notes"
+Press Enter and type "Action items for the team:"
+Press Enter and type "- Review the proposal"
+Press Enter and type "- Update the timeline"
+Verify the text "Meeting Notes" is visible in the editor
+Verify the text "Review the proposal" is visible in the editor
+
 Click the "Source" button to switch to source mode
-Verify the source editor is visible and contains text
-Click the "WYSIWYG" button to switch back
-Verify the WYSIWYG editor is visible
+Verify the "Source" button now has the class "active"
+Verify the "WYSIWYG" button no longer has the class "active"
+Verify the CodeMirror editor (with line numbers) is now visible
+Verify the source content contains "Meeting Notes" as plain text (Markdown, not HTML)
+Verify the source does NOT contain "<p>" tags — it should be Markdown format since welcome.md is selected
+
+Add a new line in the source editor and type "- Send follow-up email"
+Click the "WYSIWYG" button to switch back to WYSIWYG mode
+Verify the "WYSIWYG" button has the class "active"
+Verify the rich text editor is visible again
+Verify the text "Send follow-up email" appears in the rendered WYSIWYG view
+
+Switch to source mode again
+Verify all the content including "Send follow-up email" persists across mode switches

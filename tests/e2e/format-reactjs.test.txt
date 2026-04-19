@@ -1,8 +1,32 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
+Wait for the status indicator to show "Connected"
+
 Select "app.jsx" from the document dropdown
-Wait for the document to load
-Verify the editor shows content
+Wait 1 second for the editor to update with the JavaScript/JSX language setting
+
+Click into the WYSIWYG editor
+Type "import React from 'react';"
+Press Enter twice
+Type "function Greeting({ name }) {"
+Press Enter
+Type "  return <div className='greeting'>Hello, {name}!</div>;"
+Press Enter
+Type "}"
+Press Enter twice
+Type "export default Greeting;"
+Verify "Greeting" is visible in the editor
+Verify "Hello" is visible in the editor
+
 Click the "Source" button to switch to source mode
-Verify JSX source code is visible
-Verify syntax highlighting is applied (colored text elements visible)
+Verify the source editor is visible with line numbers
+Verify the source contains "import React from 'react';"
+Verify the source contains "function Greeting"
+Verify the source contains "export default Greeting"
+Verify the source contains "<div className='greeting'>"
+Verify the CodeMirror editor has syntax highlighting — "import", "function", "return", "export", "default" should be colored as JavaScript keywords
+Verify "import" has a different color than "React"
+Verify JSX tags like "<div" are highlighted differently from regular JavaScript code
+
+Add a new line: "// TODO: Add PropTypes validation"
+Click the "WYSIWYG" button to switch back
+Verify "PropTypes" is visible in the WYSIWYG view

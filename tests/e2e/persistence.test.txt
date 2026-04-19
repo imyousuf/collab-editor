@@ -1,6 +1,24 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
-Click into the editor and type "Persistence test content"
-Wait 3 seconds for the flush debounce
+Wait for the status indicator to show "Connected"
+
+Click into the WYSIWYG editor
+Type "Persistence test: document ID alpha-7291"
+Press Enter
+Type "This content must survive a page reload."
+Press Enter
+Type "Timestamp: 2026-04-19T10:30:00Z"
+Verify "Persistence test: document ID alpha-7291" is visible
+Verify "This content must survive a page reload." is visible
+
+Wait 4 seconds for the relay's flush debounce timer to fire and persist to the storage provider
+
 Reload the page
-Verify the text "Persistence test content" is still visible in the editor
+Wait for the status indicator to show "Connected"
+Wait 2 seconds for the document to load from the storage provider
+
+Verify "Persistence test: document ID alpha-7291" is still visible in the editor
+Verify "This content must survive a page reload." is still visible in the editor
+Verify "Timestamp: 2026-04-19T10:30:00Z" is still visible in the editor
+
+Click the "Source" button
+Verify the source view also contains "alpha-7291"

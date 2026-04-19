@@ -1,8 +1,29 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
+Wait for the status indicator to show "Connected"
+
 Select "script.py" from the document dropdown
-Wait for the document to load
-Verify the editor shows content
+Wait 1 second for the editor to update with the Python language setting
+
+Click into the WYSIWYG editor
+Type "def calculate_sum(numbers):"
+Press Enter
+Type "    total = 0"
+Press Enter
+Type "    for n in numbers:"
+Press Enter
+Type "        total += n"
+Press Enter
+Type "    return total"
+Verify "calculate_sum" is visible in the editor
+
 Click the "Source" button to switch to source mode
-Verify Python source code is visible
-Verify syntax highlighting is applied (colored text elements visible)
+Verify the source editor is visible with line numbers
+Verify the source contains "def calculate_sum(numbers):"
+Verify the source contains "return total"
+Verify the CodeMirror editor has syntax highlighting applied — Python keywords like "def", "for", "return" should be colored differently from variable names
+Verify "def" has a different color than "calculate_sum"
+Verify "return" has a different color than "total"
+
+Add a new line: "result = calculate_sum([1, 2, 3, 4, 5])"
+Click the "WYSIWYG" button to switch back
+Verify "calculate_sum" is still visible in the WYSIWYG view

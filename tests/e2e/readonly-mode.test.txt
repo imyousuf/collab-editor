@@ -1,7 +1,21 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
-Click into the editor and type "Some content"
+Wait for the status indicator to show "Connected"
+
+Click into the WYSIWYG editor
+Type "Editable content before readonly toggle"
+Verify the text "Editable content before readonly toggle" is visible in the editor
+
 Click the "Toggle Readonly" button
-Verify that the editor does not accept new text input
-Click the "Toggle Readonly" button again
-Verify the editor is editable again
+Attempt to click into the editor and type "THIS SHOULD NOT APPEAR"
+Verify the editor still shows only "Editable content before readonly toggle"
+Verify the text "THIS SHOULD NOT APPEAR" is NOT visible in the editor
+Verify the editor's contenteditable attribute is "false" or the ProseMirror element is not editable
+
+Click the "Toggle Readonly" button again to re-enable editing
+Click into the editor
+Press End key to move to the end of the line
+Type " - now editable again"
+Verify the editor shows "Editable content before readonly toggle - now editable again"
+
+Switch to source mode by clicking the "Source" button
+Verify the source contains "now editable again"

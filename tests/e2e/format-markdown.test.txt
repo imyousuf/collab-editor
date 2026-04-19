@@ -1,9 +1,28 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
-Select "welcome.md" from the document dropdown
-Wait for the document to load
-Verify content is visible in the editor
+Wait for the status indicator to show "Connected"
+Verify the document dropdown shows "welcome.md" as the selected option
+
+Click into the WYSIWYG editor
+Type "# Project Plan"
+Press Enter twice
+Type "This is a **bold statement** about the project."
+Press Enter
+Type "Here is a list:"
+Press Enter
+Type "- First item"
+Press Enter
+Type "- Second item"
+Verify "Project Plan" is visible and rendered as a heading (larger/bold text)
+Verify "bold statement" is visible and rendered in bold
+
 Click the "Source" button to switch to source mode
-Verify the source view shows text content
+Verify line 1 of the source contains "# Project Plan" (Markdown heading syntax, NOT <h1>)
+Verify the source contains "**bold statement**" (Markdown bold syntax, NOT <strong>)
+Verify the source contains "- First item" (Markdown list syntax)
+Verify the source contains "- Second item"
+Verify the source does NOT contain "<p>" or "<h1>" — it must be Markdown, not HTML
+
+Add a new line in the source: "- Third item added in source mode"
 Click the "WYSIWYG" button to switch back
-Verify the WYSIWYG editor renders the content
+Verify "Third item added in source mode" is visible in the rendered WYSIWYG view
+Verify the list now shows three items

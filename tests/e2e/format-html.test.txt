@@ -1,8 +1,23 @@
 Navigate to http://localhost:3000
-Wait for the editor to load
+Wait for the status indicator to show "Connected"
+
 Select "page.html" from the document dropdown
-Wait for the document to load
-Verify the editor shows content
+Wait 1 second for the document format to update
+Verify the document dropdown shows "page.html" as selected
+
+Click into the WYSIWYG editor
+Type "Welcome to the HTML editor"
+Press Enter
+Type "This paragraph has regular text."
+Verify "Welcome to the HTML editor" is visible in the editor
+
 Click the "Source" button to switch to source mode
-Verify raw HTML markup is visible in the source editor
+Verify the source view is visible with line numbers
+Verify the source contains "<p>" tags — HTML format wraps paragraphs in <p> tags
+Verify the source contains "Welcome to the HTML editor" inside a <p> element
+Verify the source does NOT use Markdown syntax (no "# " headings, no "**" bold)
+Verify HTML tags like "<p>" and "</p>" have syntax highlighting (colored differently from text content)
+
+Type a new line in the source: "<strong>Bold from source</strong>"
 Click the "WYSIWYG" button to switch back
+Verify "Bold from source" appears in bold in the rendered WYSIWYG view

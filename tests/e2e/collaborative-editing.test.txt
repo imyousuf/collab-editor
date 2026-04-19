@@ -1,6 +1,21 @@
 Navigate to http://localhost:3000
-Verify the page loads and contains an element with text "Collaborative Editor"
-Click into the editor area (the multi-editor element)
-Type "Hello from Tab 1"
-Verify the text "Hello from Tab 1" is visible in the editor
-Verify the status indicator shows "Connected"
+Verify the page title is "Collaborative Editor Demo"
+Verify the heading "Collaborative Editor" is visible
+Verify the "WYSIWYG" button has the class "active"
+Verify the document dropdown shows "welcome.md" as the selected option
+Verify the status indicator text is "Connected" and is green colored
+Verify the user info line below the editor starts with "Editing as User-"
+
+Click into the WYSIWYG editor area inside the multi-editor web component
+Type "The quick brown fox jumps over the lazy dog"
+Verify the text "The quick brown fox jumps over the lazy dog" appears in the editor
+
+Open a new browser tab and navigate to http://localhost:3000
+Wait 2 seconds for the WebSocket connection to establish
+Verify the second tab's status indicator shows "Connected"
+Verify the text "The quick brown fox jumps over the lazy dog" is visible in the second tab's editor — confirming real-time sync between tabs
+
+Switch back to the first tab
+Type " - edited in tab 1"
+Switch to the second tab
+Verify the editor now contains "The quick brown fox jumps over the lazy dog - edited in tab 1"
