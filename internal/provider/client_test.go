@@ -12,16 +12,13 @@ import (
 )
 
 func TestLoad_OK(t *testing.T) {
-	ts := time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/documents/doc-1/load" {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		if r.Method != "POST" || r.URL.Path != "/documents/load" || r.URL.Query().Get("path") != "doc-1" {
+			t.Errorf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(spi.LoadResponse{
-			Updates: []spi.UpdatePayload{
-				{Sequence: 1, Data: "dGVzdA==", ClientID: 100, CreatedAt: ts},
-			},
+			Content: "# Test Document",
 		})
 	}))
 	defer srv.Close()
@@ -31,8 +28,8 @@ func TestLoad_OK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Updates) != 1 {
-		t.Errorf("expected 1 update, got %d", len(resp.Updates))
+	if resp.Content != "# Test Document" {
+		t.Errorf("expected content, got %q", resp.Content)
 	}
 }
 
@@ -113,8 +110,8 @@ func TestStore_PartialFailure(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "DELETE" {
-			t.Errorf("expected DELETE, got %s", r.Method)
+		if r.Method != "DELETE" || r.URL.Path != "/documents" || r.URL.Query().Get("path") != "doc-1" {
+			t.Errorf("unexpected: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))

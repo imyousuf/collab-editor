@@ -45,7 +45,7 @@ func (c *Client) Load(ctx context.Context, documentID string, stateVector string
 	body := spi.LoadRequest{StateVector: stateVector}
 
 	resp, err := c.doJSON(ctx, http.MethodPost,
-		fmt.Sprintf("/documents/%s/load", url.PathEscape(documentID)),
+		"/documents/load?path="+url.QueryEscape(documentID),
 		body,
 	)
 	if err != nil {
@@ -73,7 +73,7 @@ func (c *Client) Store(ctx context.Context, documentID string, updates []spi.Upd
 	body := spi.StoreRequest{Updates: updates}
 
 	resp, err := c.doJSON(ctx, http.MethodPost,
-		fmt.Sprintf("/documents/%s/updates", url.PathEscape(documentID)),
+		"/documents/updates?path="+url.QueryEscape(documentID),
 		body,
 	)
 	if err != nil {
@@ -95,7 +95,7 @@ func (c *Client) Store(ctx context.Context, documentID string, updates []spi.Upd
 
 func (c *Client) Delete(ctx context.Context, documentID string) error {
 	resp, err := c.doJSON(ctx, http.MethodDelete,
-		fmt.Sprintf("/documents/%s", url.PathEscape(documentID)),
+		"/documents?path="+url.QueryEscape(documentID),
 		nil,
 	)
 	if err != nil {
@@ -110,7 +110,7 @@ func (c *Client) Delete(ctx context.Context, documentID string) error {
 
 func (c *Client) Compact(ctx context.Context, documentID string, req *spi.CompactRequest) (*spi.CompactResponse, error) {
 	resp, err := c.doJSON(ctx, http.MethodPost,
-		fmt.Sprintf("/documents/%s/compact", url.PathEscape(documentID)),
+		"/documents/compact?path="+url.QueryEscape(documentID),
 		req,
 	)
 	if err != nil {
@@ -137,6 +137,23 @@ func (c *Client) Health(ctx context.Context) (*spi.HealthResponse, error) {
 		return nil, fmt.Errorf("decoding health response: %w", err)
 	}
 	return &result, nil
+}
+
+// ListDocuments fetches the document list from the provider.
+func (c *Client) ListDocuments(ctx context.Context) ([]spi.DocumentListEntry, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet, "/documents", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Documents []spi.DocumentListEntry `json:"documents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding document list: %w", err)
+	}
+	return result.Documents, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, body any) (*http.Response, error) {

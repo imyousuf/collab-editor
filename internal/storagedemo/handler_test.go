@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -60,7 +62,7 @@ func TestHealth(t *testing.T) {
 
 func TestLoad_NewDocument(t *testing.T) {
 	srv, _ := newTestServer(t)
-	resp := doRequest(t, srv, "POST", "/documents/new-doc/load", spi.LoadRequest{})
+	resp := doRequest(t, srv, "POST", "/documents/load?path=new-doc.md", spi.LoadRequest{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204, got %d", resp.StatusCode)
@@ -69,12 +71,12 @@ func TestLoad_NewDocument(t *testing.T) {
 
 func TestLoad_ExistingDocument(t *testing.T) {
 	srv, store := newTestServer(t)
-	ts := time.Now().UTC()
-	store.StoreUpdates("doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "dGVzdA==", ClientID: 100, CreatedAt: ts},
-	})
 
-	resp := doRequest(t, srv, "POST", "/documents/doc-1/load", spi.LoadRequest{})
+	// Write a file directly to simulate a seed document
+	content := "# Test Document\n\nHello world."
+	os.WriteFile(filepath.Join(store.baseDir, "test.md"), []byte(content), 0o644)
+
+	resp := doRequest(t, srv, "POST", "/documents/load?path=test.md", spi.LoadRequest{})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -82,8 +84,8 @@ func TestLoad_ExistingDocument(t *testing.T) {
 
 	var loadResp spi.LoadResponse
 	json.NewDecoder(resp.Body).Decode(&loadResp)
-	if len(loadResp.Updates) != 1 {
-		t.Errorf("expected 1 update, got %d", len(loadResp.Updates))
+	if loadResp.Content != content {
+		t.Errorf("expected content %q, got %q", content, loadResp.Content)
 	}
 }
 
@@ -93,12 +95,11 @@ func TestStoreUpdates_Success(t *testing.T) {
 
 	req := spi.StoreRequest{
 		Updates: []spi.UpdatePayload{
-			{Sequence: 1, Data: "dGVzdA==", ClientID: 100, CreatedAt: ts},
-			{Sequence: 2, Data: "dGVzdDI=", ClientID: 200, CreatedAt: ts},
+			{Sequence: 1, Data: "# Updated Content", ClientID: 100, CreatedAt: ts},
 		},
 	}
 
-	resp := doRequest(t, srv, "POST", "/documents/doc-1/updates", req)
+	resp := doRequest(t, srv, "POST", "/documents/updates?path=doc.md", req)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d", resp.StatusCode)
@@ -106,15 +107,24 @@ func TestStoreUpdates_Success(t *testing.T) {
 
 	var storeResp spi.StoreResponse
 	json.NewDecoder(resp.Body).Decode(&storeResp)
-	if storeResp.Stored != 2 {
-		t.Errorf("stored: got %d, want 2", storeResp.Stored)
+	if storeResp.Stored != 1 {
+		t.Errorf("stored: got %d, want 1", storeResp.Stored)
+	}
+
+	// Verify the file was written
+	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
+	defer loadResp.Body.Close()
+	var lr spi.LoadResponse
+	json.NewDecoder(loadResp.Body).Decode(&lr)
+	if lr.Content != "# Updated Content" {
+		t.Errorf("expected stored content, got %q", lr.Content)
 	}
 }
 
 func TestStoreUpdates_EmptyBody(t *testing.T) {
 	srv, _ := newTestServer(t)
 	req := spi.StoreRequest{Updates: []spi.UpdatePayload{}}
-	resp := doRequest(t, srv, "POST", "/documents/doc-1/updates", req)
+	resp := doRequest(t, srv, "POST", "/documents/updates?path=doc.md", req)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", resp.StatusCode)
@@ -123,62 +133,55 @@ func TestStoreUpdates_EmptyBody(t *testing.T) {
 
 func TestDeleteDocument_Handler(t *testing.T) {
 	srv, store := newTestServer(t)
-	ts := time.Now().UTC()
-	store.StoreUpdates("doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "data", ClientID: 100, CreatedAt: ts},
-	})
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("content"), 0o644)
 
-	resp := doRequest(t, srv, "DELETE", "/documents/doc-1", nil)
+	resp := doRequest(t, srv, "DELETE", "/documents?path=doc.md", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204, got %d", resp.StatusCode)
 	}
 
 	// Verify deleted
-	loadResp := doRequest(t, srv, "POST", "/documents/doc-1/load", spi.LoadRequest{})
+	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
 	defer loadResp.Body.Close()
 	if loadResp.StatusCode != http.StatusNoContent {
 		t.Errorf("expected 204 after delete, got %d", loadResp.StatusCode)
 	}
 }
 
-func TestCompact_Handler(t *testing.T) {
+func TestListDocuments(t *testing.T) {
 	srv, store := newTestServer(t)
-	ts := time.Now().UTC()
-	store.StoreUpdates("doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "d1", ClientID: 100, CreatedAt: ts},
-		{Sequence: 2, Data: "d2", ClientID: 100, CreatedAt: ts},
-	})
 
-	req := spi.CompactRequest{
-		Snapshot: spi.SnapshotPayload{
-			Data:        "snap",
-			StateVector: "sv",
-			CreatedAt:   ts,
-			UpdateCount: 2,
-		},
-		ReplaceSequencesUpTo: 2,
+	os.WriteFile(filepath.Join(store.baseDir, "welcome.md"), []byte("# Welcome"), 0o644)
+	os.WriteFile(filepath.Join(store.baseDir, "page.html"), []byte("<h1>Page</h1>"), 0o644)
+
+	req, _ := http.NewRequest("GET", srv.URL+"/documents", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	resp := doRequest(t, srv, "POST", "/documents/doc-1/compact", req)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var compactResp spi.CompactResponse
-	json.NewDecoder(resp.Body).Decode(&compactResp)
-	if !compactResp.Compacted {
-		t.Error("expected compacted=true")
+	var result struct {
+		Documents []struct {
+			Name string `json:"name"`
+			Size int64  `json:"size"`
+		} `json:"documents"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	if len(result.Documents) != 2 {
+		t.Errorf("expected 2 documents, got %d", len(result.Documents))
 	}
 }
 
 func TestAuth_Unauthorized(t *testing.T) {
 	srv, _ := newTestServer(t)
-
-	req, _ := http.NewRequest("POST", srv.URL+"/documents/doc-1/load", nil)
+	req, _ := http.NewRequest("POST", srv.URL+"/documents/load?path=doc.md", nil)
 	req.Header.Set("Content-Type", "application/json")
-	// No auth header
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +194,7 @@ func TestAuth_Unauthorized(t *testing.T) {
 
 func TestAuth_WrongToken(t *testing.T) {
 	srv, _ := newTestServer(t)
-
-	req, _ := http.NewRequest("POST", srv.URL+"/documents/doc-1/load", nil)
+	req, _ := http.NewRequest("POST", srv.URL+"/documents/load?path=doc.md", nil)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer wrong-token")
 	resp, err := http.DefaultClient.Do(req)
@@ -207,7 +209,6 @@ func TestAuth_WrongToken(t *testing.T) {
 
 func TestHealth_NoAuth(t *testing.T) {
 	srv, _ := newTestServer(t)
-	// Health endpoint should not require auth
 	resp, err := http.Get(srv.URL + "/health")
 	if err != nil {
 		t.Fatal(err)

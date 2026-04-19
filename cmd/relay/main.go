@@ -99,6 +99,44 @@ func main() {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]string{"status": status})
 			})
+
+			// REST API endpoints — frontend talks to these, relay proxies to provider
+			r.Route("/api", func(r chi.Router) {
+				r.Get("/documents", func(w http.ResponseWriter, r *http.Request) {
+					docs, err := providerClient.ListDocuments(r.Context())
+					if err != nil {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusBadGateway)
+						json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"documents": docs})
+				})
+
+				r.Post("/documents/load", func(w http.ResponseWriter, r *http.Request) {
+					path := r.URL.Query().Get("path")
+					if path == "" {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusBadRequest)
+						json.NewEncoder(w).Encode(map[string]string{"error": "missing 'path' query parameter"})
+						return
+					}
+					resp, err := providerClient.Load(r.Context(), path, "")
+					if err != nil {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusBadGateway)
+						json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+						return
+					}
+					if resp.Content == "" {
+						w.WriteHeader(http.StatusNoContent)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(resp)
+				})
+			})
 		},
 	}
 

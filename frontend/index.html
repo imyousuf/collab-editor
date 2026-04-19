@@ -58,12 +58,7 @@
     <button id="btn-wysiwyg" class="active">WYSIWYG</button>
     <button id="btn-source">Source</button>
     <button id="btn-readonly">Toggle Readonly</button>
-    <select id="doc-select">
-      <option value="welcome.md" data-format="markdown" data-lang="markdown">welcome.md</option>
-      <option value="page.html" data-format="html" data-lang="html">page.html</option>
-      <option value="script.py" data-format="markdown" data-lang="python">script.py</option>
-      <option value="app.jsx" data-format="markdown" data-lang="javascript">app.jsx</option>
-    </select>
+    <select id="doc-select"></select>
     <span class="status" id="status">Disconnected</span>
   </div>
 
@@ -91,7 +86,42 @@
     const userColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
     userInfo.textContent = `Editing as ${userName}`;
 
-    function connectToRoom(roomName) {
+    // Detect format and language from file extension
+    function detectFormat(name) {
+      if (name.endsWith('.html') || name.endsWith('.htm')) return { format: 'html', language: 'html' };
+      if (name.endsWith('.py')) return { format: 'markdown', language: 'python' };
+      if (name.endsWith('.jsx') || name.endsWith('.tsx')) return { format: 'markdown', language: 'javascript' };
+      if (name.endsWith('.js') || name.endsWith('.ts')) return { format: 'markdown', language: 'javascript' };
+      return { format: 'markdown', language: 'markdown' };
+    }
+
+    async function connectToRoom(roomName) {
+      const { format, language } = detectFormat(roomName);
+      editor.format = format;
+      editor.language = language;
+
+      // Load document content from the storage provider API
+      try {
+        const resp = await fetch('/api/documents/load?path=' + encodeURIComponent(roomName), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.content) {
+            editor.setContent(data.content);
+          } else {
+            editor.setContent('');
+          }
+        } else if (resp.status === 204) {
+          editor.setContent('');
+        }
+      } catch (e) {
+        console.warn('Failed to load document:', e);
+        editor.setContent('');
+      }
+
       editor.collaboration = {
         enabled: true,
         roomName: roomName,
@@ -100,12 +130,46 @@
       };
     }
 
-    connectToRoom(docSelect.value);
+    // Load document list from the storage provider
+    async function loadDocumentList() {
+      try {
+        const resp = await fetch('/api/documents');
+        if (!resp.ok) throw new Error(`${resp.status}`);
+        const data = await resp.json();
+        docSelect.innerHTML = '';
+        if (data.documents && data.documents.length > 0) {
+          for (const doc of data.documents) {
+            const opt = document.createElement('option');
+            opt.value = doc.name;
+            opt.textContent = doc.name;
+            docSelect.appendChild(opt);
+          }
+          connectToRoom(docSelect.value);
+        } else {
+          // No documents — create empty editor
+          const opt = document.createElement('option');
+          opt.value = 'untitled';
+          opt.textContent = 'untitled';
+          docSelect.appendChild(opt);
+          connectToRoom('untitled');
+        }
+      } catch (e) {
+        console.warn('Failed to load document list, using default:', e);
+        const opt = document.createElement('option');
+        opt.value = 'untitled';
+        opt.textContent = 'untitled';
+        docSelect.appendChild(opt);
+        connectToRoom('untitled');
+      }
+    }
+
+    // Wait for the multi-editor element to be defined and initialized before loading content
+    customElements.whenDefined('multi-editor').then(() => {
+      // Give the element time to run firstUpdated and create internal editors
+      setTimeout(() => loadDocumentList(), 200);
+    });
 
     docSelect.addEventListener('change', () => {
-      const opt = docSelect.selectedOptions[0];
-      editor.format = opt.dataset.format;
-      editor.language = opt.dataset.lang;
       connectToRoom(docSelect.value);
     });
 

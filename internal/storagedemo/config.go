@@ -2,7 +2,6 @@ package storagedemo
 
 import (
 	"log/slog"
-	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/env"
@@ -53,11 +52,16 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 
-	if err := k.Load(env.Provider("COLLAB_PROVIDER_", ".", func(s string) string {
-		return strings.ReplaceAll(
-			strings.ToLower(strings.TrimPrefix(s, "COLLAB_PROVIDER_")),
-			"_", ".",
-		)
+	envMappings := map[string]string{
+		"COLLAB_PROVIDER_AUTH_TOKEN":    "auth.token",
+		"COLLAB_PROVIDER_STORAGE_BASE_DIR": "storage.base_dir",
+		"COLLAB_PROVIDER_SERVER_ADDR":  "server.addr",
+	}
+	if err := k.Load(env.ProviderWithValue("COLLAB_PROVIDER_", ".", func(key, value string) (string, interface{}) {
+		if mapped, ok := envMappings[key]; ok {
+			return mapped, value
+		}
+		return "", nil
 	}), nil); err != nil {
 		slog.Warn("failed to load env vars", "err", err)
 	}

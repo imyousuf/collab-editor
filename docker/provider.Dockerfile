@@ -9,7 +9,8 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /provider /usr/local/bin/provider
 COPY config/provider.yaml /etc/collab-editor/provider.yaml
-RUN mkdir -p /data/documents
+COPY docker/seed-entrypoint.sh /usr/local/bin/seed-entrypoint.sh
+RUN chmod +x /usr/local/bin/seed-entrypoint.sh && mkdir -p /data/documents
 EXPOSE 8081
-ENTRYPOINT ["provider"]
+ENTRYPOINT ["seed-entrypoint.sh"]
 CMD ["--config", "/etc/collab-editor/provider.yaml"]

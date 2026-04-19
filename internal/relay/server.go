@@ -45,10 +45,10 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 		loadCtx, cancel := context.WithTimeout(ctx, s.config.Storage.LoadTimeout)
 		defer cancel()
 
+		// Verify document exists in the provider (logging only)
 		_, loadErr := s.provider.Load(loadCtx, documentID, "")
 		if loadErr != nil {
 			slog.Error("failed to load document from provider", "doc", documentID, "err", loadErr)
-			// Continue anyway — degrade gracefully
 		}
 		return nil
 	})

@@ -115,12 +115,6 @@ export class MultiEditor extends LitElement {
     if (changed.has('collaboration') && this._initialized && this.collaboration !== this._lastCollabConfig) {
       this._lastCollabConfig = this.collaboration;
       this._setupCollaboration();
-      // Enable collaboration on the WYSIWYG editor via dynamic import
-      if (this._collabProvider && this._wysiwygEditor) {
-        this._wysiwygEditor.enableCollaboration(this._collabProvider).catch((e) => {
-          console.warn('Failed to enable collaboration:', e);
-        });
-      }
     }
     if (changed.has('readonly')) {
       this._wysiwygEditor?.setReadonly(this.readonly);
@@ -171,7 +165,6 @@ export class MultiEditor extends LitElement {
       try {
         this._wysiwygEditor = new WysiwygEditor(
           wysiwygContainer,
-          this._collabProvider,
           { placeholder: this.placeholder, readonly: this.readonly, theme: this.theme },
         );
         this._wysiwygEditor.editor.on('update', () => this._emitChange());

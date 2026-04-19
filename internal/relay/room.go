@@ -9,17 +9,17 @@ import (
 
 // Room represents a collaborative editing session for a single document.
 type Room struct {
-	mu         sync.RWMutex
-	documentID string
-	peers      map[*Peer]struct{}
-	buffer     *UpdateBuffer
-	flusher    *Flusher
-	flushMu    sync.Mutex // guards doFlush to prevent concurrent flushes
-	flushTimer *time.Timer
-	config     RoomConfig
-	metrics    *Metrics
-	closeCh    chan struct{}
-	closeOnce  sync.Once
+	mu           sync.RWMutex
+	documentID   string
+	peers        map[*Peer]struct{}
+	buffer       *UpdateBuffer
+	flusher      *Flusher
+	flushMu      sync.Mutex // guards doFlush to prevent concurrent flushes
+	flushTimer   *time.Timer
+	config       RoomConfig
+	metrics      *Metrics
+	closeCh      chan struct{}
+	closeOnce    sync.Once
 }
 
 func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metrics) *Room {

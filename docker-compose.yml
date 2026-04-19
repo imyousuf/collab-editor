@@ -7,6 +7,7 @@ services:
       - "8081:8081"
     volumes:
       - doc-storage:/data/documents
+      - ./examples/basic/seed-documents:/seed-documents:ro
     environment:
       COLLAB_PROVIDER_AUTH_TOKEN: "dev-token"
     healthcheck:

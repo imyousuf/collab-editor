@@ -4,12 +4,18 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/imyousuf/collab-editor/pkg/spi"
 )
 
 func (h *handlers) storeUpdates(w http.ResponseWriter, r *http.Request) {
-	docID := chi.URLParam(r, "documentId")
+	docID := r.URL.Query().Get("path")
+	if docID == "" {
+		writeJSON(w, http.StatusBadRequest, spi.ErrorResponse{
+			Error:   "bad_request",
+			Message: "missing 'path' query parameter",
+		})
+		return
+	}
 
 	var req spi.StoreRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

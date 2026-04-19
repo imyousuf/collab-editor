@@ -21,10 +21,11 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 
 	r.Group(func(r chi.Router) {
 		r.Use(bearerAuth(authToken))
-		r.Post("/documents/{documentId}/load", h.load)
-		r.Post("/documents/{documentId}/updates", h.storeUpdates)
-		r.Post("/documents/{documentId}/compact", h.compact)
-		r.Delete("/documents/{documentId}", h.deleteDoc)
+		r.Get("/documents", h.listDocuments)
+		r.Post("/documents/load", h.load)
+		r.Post("/documents/updates", h.storeUpdates)
+		r.Post("/documents/compact", h.compact)
+		r.Delete("/documents", h.deleteDoc)
 	})
 
 	return r

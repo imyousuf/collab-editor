@@ -2,7 +2,6 @@ package relay
 
 import (
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -111,11 +110,19 @@ func LoadConfig(path string) (Config, error) {
 		}
 	}
 
-	if err := k.Load(env.Provider("COLLAB_", ".", func(s string) string {
-		return strings.ReplaceAll(
-			strings.ToLower(strings.TrimPrefix(s, "COLLAB_")),
-			"_", ".",
-		)
+	// Load specific env vars that map to config fields
+	envMappings := map[string]string{
+		"COLLAB_STORAGE_PROVIDER_URL": "storage.provider_url",
+		"COLLAB_STORAGE_AUTH_TOKEN":   "storage.auth_token",
+		"COLLAB_SERVER_ADDR":          "server.addr",
+		"COLLAB_METRICS_ADDR":         "metrics.addr",
+		"COLLAB_LOG_LEVEL":            "log.level",
+	}
+	if err := k.Load(env.ProviderWithValue("COLLAB_", ".", func(key, value string) (string, interface{}) {
+		if mapped, ok := envMappings[key]; ok {
+			return mapped, value
+		}
+		return "", nil
 	}), nil); err != nil {
 		slog.Warn("failed to load env vars", "err", err)
 	}
