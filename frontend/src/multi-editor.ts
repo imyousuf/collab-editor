@@ -128,7 +128,8 @@ export class MultiEditor extends LitElement {
     if (changed.has('collaboration') && this._initialized && this.collaboration !== this._lastCollabConfig) {
       this._lastCollabConfig = this.collaboration;
       this._setupCollaboration();
-      // Create or recreate WYSIWYG editor with the new collaboration provider
+      // Recreate BOTH editors with the collaboration provider
+      this._recreateSourceEditor();
       this._createWysiwygEditor();
     }
     if (changed.has('mimeType') && this._initialized) {
@@ -198,8 +199,16 @@ export class MultiEditor extends LitElement {
     } catch (e) {
       console.error('Failed to create Source editor:', e);
     }
-    // Source editor's yCollab stays active even when hidden — both editors
-    // share the same Y.Text, so changes propagate between modes.
+  }
+
+  private _recreateSourceEditor() {
+    if (this._sourceEditor) {
+      this._sourceEditor.destroy();
+      this._sourceEditor = null;
+    }
+    const sourceContainer = this.renderRoot.querySelector('#source-container') as HTMLElement;
+    if (sourceContainer) sourceContainer.innerHTML = '';
+    this._createSourceEditor();
   }
 
   private _createWysiwygEditor() {
