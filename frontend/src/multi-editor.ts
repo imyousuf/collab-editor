@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { WysiwygEditor } from './editors/wysiwyg-editor.js';
+import { WysiwygEditor, createWysiwygEditor } from './editors/wysiwyg-editor.js';
 import { SourceEditor } from './editors/source-editor.js';
 import { CollabProvider } from './collab/yjs-provider.js';
 import { EditorChangeEvent, ModeChangeEvent, EditorSaveEvent, CollabStatusEvent } from './events.js';
@@ -31,6 +31,7 @@ export class MultiEditor extends LitElement {
   private _changeDebounce: ReturnType<typeof setTimeout> | null = null;
   private _initialized = false;
   private _lastCollabConfig: CollaborationConfig | null = null;
+  private _pendingContent: { content: string; mimeType: string } | null = null;
 
   static styles = css`
     :host {
@@ -111,16 +112,23 @@ export class MultiEditor extends LitElement {
 
   firstUpdated() {
     this._setupKeyboardShortcuts();
-    this._setupCollaboration();
-    this._createEditors();
+    this._createSourceEditor();
     this._initialized = true;
     this._lastCollabConfig = this.collaboration;
+
+    // If collaboration is already set (unlikely but possible), create WYSIWYG now
+    if (this.collaboration?.enabled) {
+      this._setupCollaboration();
+      this._createWysiwygEditor();
+    }
   }
 
   updated(changed: Map<string, unknown>) {
     if (changed.has('collaboration') && this._initialized && this.collaboration !== this._lastCollabConfig) {
       this._lastCollabConfig = this.collaboration;
       this._setupCollaboration();
+      // Create or recreate WYSIWYG editor with the new collaboration provider
+      this._createWysiwygEditor();
     }
     if (changed.has('mimeType') && this._initialized) {
       this.alternateCapability = getAlternateCapability(this.mimeType);
@@ -177,52 +185,52 @@ export class MultiEditor extends LitElement {
     }
   }
 
-  private _createEditors() {
-    const wysiwygContainer = this.renderRoot.querySelector('#wysiwyg-container') as HTMLElement;
+  private _createSourceEditor() {
     const sourceContainer = this.renderRoot.querySelector('#source-container') as HTMLElement;
-
-    if (wysiwygContainer) {
-      try {
-        this._wysiwygEditor = new WysiwygEditor(
-          wysiwygContainer,
-          { placeholder: this.placeholder, readonly: this.readonly, theme: this.theme },
-        );
-        this._wysiwygEditor.editor.on('update', () => this._emitChange());
-      } catch (e) {
-        (window as any).__wysiwygErr = e instanceof Error ? e.message + '\n' + e.stack : String(e);
-        console.error('Failed to create WYSIWYG editor: ' + (window as any).__wysiwygErr);
-      }
+    if (!sourceContainer) return;
+    try {
+      this._sourceEditor = new SourceEditor(
+        sourceContainer,
+        this._collabProvider,
+        { language: this.language, readonly: this.readonly, theme: this.theme },
+      );
+    } catch (e) {
+      console.error('Failed to create Source editor:', e);
     }
-
-    if (sourceContainer) {
-      try {
-        this._sourceEditor = new SourceEditor(
-          sourceContainer,
-          this._collabProvider,
-          { language: this.language, readonly: this.readonly, theme: this.theme },
-        );
-      } catch (e) {
-        console.error('Failed to create Source editor: ' + (e instanceof Error ? e.message + ' ' + e.stack : String(e)));
-      }
-    }
-
     if (this.mode === 'wysiwyg') {
       this._sourceEditor?.deactivate();
     }
   }
 
-  private _recreateEditors() {
-    this._wysiwygEditor?.destroy();
-    this._sourceEditor?.destroy();
-    this._wysiwygEditor = null;
-    this._sourceEditor = null;
-
+  private async _createWysiwygEditor() {
+    // Destroy existing WYSIWYG editor if any
+    if (this._wysiwygEditor) {
+      this._wysiwygEditor.destroy();
+      this._wysiwygEditor = null;
+    }
     const wysiwygContainer = this.renderRoot.querySelector('#wysiwyg-container') as HTMLElement;
-    const sourceContainer = this.renderRoot.querySelector('#source-container') as HTMLElement;
-    if (wysiwygContainer) wysiwygContainer.innerHTML = '';
-    if (sourceContainer) sourceContainer.innerHTML = '';
+    if (!wysiwygContainer) return;
+    wysiwygContainer.innerHTML = '';
 
-    this._createEditors();
+    try {
+      // Async factory: dynamically imports collaboration extensions if needed
+      this._wysiwygEditor = await createWysiwygEditor(
+        wysiwygContainer,
+        { placeholder: this.placeholder, readonly: this.readonly, theme: this.theme },
+        this._collabProvider,
+      );
+      this._wysiwygEditor.editor.on('update', () => this._emitChange());
+
+      // Apply any content that was set while the editor was being created
+      if (this._pendingContent) {
+        const { content, mimeType } = this._pendingContent;
+        this._pendingContent = null;
+        this._wysiwygEditor.setContent(content, mimeType);
+      }
+    } catch (e) {
+      (window as any).__wysiwygErr = e instanceof Error ? e.message + '\n' + e.stack : String(e);
+      console.error('Failed to create WYSIWYG editor:', (window as any).__wysiwygErr);
+    }
   }
 
   private _setupKeyboardShortcuts() {
@@ -302,8 +310,13 @@ export class MultiEditor extends LitElement {
     const mime = mimeType ?? this.mimeType;
     const wysiwygSupported = supportsWysiwyg(mime);
 
-    if (wysiwygSupported && this.mode === 'wysiwyg' && this._wysiwygEditor) {
-      this._wysiwygEditor.setContent(content, mime);
+    if (wysiwygSupported && this.mode === 'wysiwyg') {
+      if (this._wysiwygEditor) {
+        this._wysiwygEditor.setContent(content, mime);
+      } else {
+        // WYSIWYG editor is still being created async — queue the content
+        this._pendingContent = { content, mimeType: mime };
+      }
     } else if (this._sourceEditor) {
       this._sourceEditor.setContent(content);
     }
