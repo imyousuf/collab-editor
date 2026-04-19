@@ -1,7 +1,7 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
-import { DOMParser as PmDOMParser } from '@tiptap/pm/model';
+import { TextSync } from '../collab/text-sync.js';
 import type { CollabProvider } from '../collab/yjs-provider.js';
 import type { EditorFormat, EditorTheme } from '../types.js';
 
@@ -12,56 +12,40 @@ export interface WysiwygEditorOptions {
 }
 
 /**
- * Create a WysiwygEditor. If a CollabProvider is given, the Collaboration
- * and CollaborationCursor extensions are dynamically imported and included
- * from the start — avoiding the destroy/recreate cycle.
+ * Create a WysiwygEditor. The editor uses StarterKit + Markdown only.
+ * Collaboration is handled via TextSync (bidirectional Y.Text ↔ Tiptap sync)
+ * instead of the Tiptap Collaboration extension.
  */
-export async function createWysiwygEditor(
+export function createWysiwygEditor(
   container: HTMLElement,
   options: WysiwygEditorOptions,
   collabProvider?: CollabProvider | null,
-): Promise<WysiwygEditor> {
-  const extensions: any[] = [Markdown];
-
-  if (collabProvider?.provider && collabProvider.ydoc) {
-    // Dynamic import avoids module-level side effects that break prod bundling
-    const [{ default: Collaboration }, { default: CollaborationCursor }] = await Promise.all([
-      import('@tiptap/extension-collaboration'),
-      import('@tiptap/extension-collaboration-cursor'),
-    ]);
-
-    extensions.push(
-      StarterKit.configure({ history: false } as any),
-      Collaboration.configure({ fragment: collabProvider.content }),
-    );
-    // CollaborationCursor disabled for now — causes reconfigure crash
-    // if (collabProvider.awareness) {
-    //   extensions.push(
-    //     CollaborationCursor.configure({ provider: collabProvider.provider }),
-    //   );
-    // }
-  } else {
-    extensions.push(StarterKit);
-  }
-
+  mimeType?: string,
+): WysiwygEditor {
   const editor = new Editor({
     element: container,
-    extensions,
+    extensions: [StarterKit, Markdown],
     editable: !options.readonly,
   });
 
-  return new WysiwygEditor(editor, collabProvider);
+  let textSync: TextSync | null = null;
+  if (collabProvider) {
+    textSync = new TextSync(editor, collabProvider.sourceText, mimeType ?? 'text/html');
+  }
+
+  return new WysiwygEditor(editor, textSync, mimeType);
 }
 
 export class WysiwygEditor {
-  private _collabProvider: CollabProvider | null;
-
-  constructor(editor: Editor, collabProvider?: CollabProvider | null) {
-    this.editor = editor;
-    this._collabProvider = collabProvider ?? null;
-  }
-
   readonly editor: Editor;
+  private _textSync: TextSync | null;
+  private _mimeType: string;
+
+  constructor(editor: Editor, textSync: TextSync | null, mimeType?: string) {
+    this.editor = editor;
+    this._textSync = textSync;
+    this._mimeType = mimeType ?? 'text/html';
+  }
 
   getContent(format: EditorFormat = 'html'): string {
     if (format === 'markdown') {
@@ -71,20 +55,19 @@ export class WysiwygEditor {
   }
 
   /**
-   * Set editor content. When collaboration is active:
-   * - force=false (default): only sets content if Y.Doc is empty (initial load)
-   * - force=true: always sets content (mode switch from source)
+   * Set content. If TextSync is active, uses loadInitialContent
+   * which respects existing collaborative state.
    */
   setContent(content: string, mimeType?: string, force = false): void {
-    if (this._collabProvider && !force) {
-      const fragment = this._collabProvider.content;
-      if (fragment.length > 0) {
-        // Y.Doc already has collaborative content — don't overwrite on initial load
-        return;
-      }
+    const mime = mimeType ?? this._mimeType;
+
+    if (this._textSync && !force) {
+      this._textSync.loadInitialContent(content);
+      return;
     }
 
-    if (mimeType === 'text/markdown') {
+    // Direct set (no collaboration or force mode)
+    if (mime === 'text/markdown') {
       this.editor.commands.setContent(content, { contentType: 'markdown' } as any);
     } else {
       this.editor.commands.setContent(content);
@@ -96,6 +79,7 @@ export class WysiwygEditor {
   }
 
   destroy(): void {
+    this._textSync?.destroy();
     this.editor.destroy();
   }
 }

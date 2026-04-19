@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { WysiwygEditor, createWysiwygEditor } from './editors/wysiwyg-editor.js';
+import type { WysiwygEditorOptions } from './editors/wysiwyg-editor.js';
 import { SourceEditor } from './editors/source-editor.js';
 import { CollabProvider } from './collab/yjs-provider.js';
 import { EditorChangeEvent, ModeChangeEvent, EditorSaveEvent, CollabStatusEvent } from './events.js';
@@ -197,12 +198,11 @@ export class MultiEditor extends LitElement {
     } catch (e) {
       console.error('Failed to create Source editor:', e);
     }
-    if (this.mode === 'wysiwyg') {
-      this._sourceEditor?.deactivate();
-    }
+    // Source editor's yCollab stays active even when hidden — both editors
+    // share the same Y.Text, so changes propagate between modes.
   }
 
-  private async _createWysiwygEditor() {
+  private _createWysiwygEditor() {
     // Destroy existing WYSIWYG editor if any
     if (this._wysiwygEditor) {
       this._wysiwygEditor.destroy();
@@ -213,23 +213,22 @@ export class MultiEditor extends LitElement {
     wysiwygContainer.innerHTML = '';
 
     try {
-      // Async factory: dynamically imports collaboration extensions if needed
-      this._wysiwygEditor = await createWysiwygEditor(
+      this._wysiwygEditor = createWysiwygEditor(
         wysiwygContainer,
         { placeholder: this.placeholder, readonly: this.readonly, theme: this.theme },
         this._collabProvider,
+        this.mimeType,
       );
       this._wysiwygEditor.editor.on('update', () => this._emitChange());
 
-      // Apply any content that was set while the editor was being created
+      // Apply any content that was set before the editor was created
       if (this._pendingContent) {
         const { content, mimeType } = this._pendingContent;
         this._pendingContent = null;
         this._wysiwygEditor.setContent(content, mimeType);
       }
     } catch (e) {
-      (window as any).__wysiwygErr = e instanceof Error ? e.message + '\n' + e.stack : String(e);
-      console.error('Failed to create WYSIWYG editor:', (window as any).__wysiwygErr);
+      console.error('Failed to create WYSIWYG editor:', e);
     }
   }
 
@@ -266,18 +265,22 @@ export class MultiEditor extends LitElement {
 
     const previousMode = this.mode;
 
-    if (previousMode === 'wysiwyg' && newMode === 'source') {
-      if (this._wysiwygEditor && this._sourceEditor) {
-        this._sourceEditor.deactivate();
-        this._sourceEditor.setContent(this._wysiwygEditor.getContent(this.format));
+    // Both editors share the same Y.Text via the collaboration layer.
+    // No content transfer needed on mode switch — Y.Text is the source of truth.
+    // For non-collaborative mode, transfer content directly.
+    if (!this._collabProvider) {
+      if (previousMode === 'wysiwyg' && newMode === 'source') {
+        if (this._wysiwygEditor && this._sourceEditor) {
+          this._sourceEditor.setContent(this._wysiwygEditor.getContent(this.format));
+        }
+      } else if (previousMode === 'source' && newMode === 'wysiwyg') {
+        if (this._sourceEditor && this._wysiwygEditor) {
+          this._wysiwygEditor.setContent(this._sourceEditor.getContent(), this.mimeType, true);
+        }
       }
-    } else if (previousMode === 'source' && newMode === 'wysiwyg') {
-      if (this._sourceEditor && this._wysiwygEditor) {
-        // force=true: source edits must overwrite the Y.Doc state
-        this._wysiwygEditor.setContent(this._sourceEditor.getContent(), this.mimeType, true);
-        this._sourceEditor.deactivate();
-      }
-    } else if (previousMode === 'source' && newMode === 'preview') {
+    }
+
+    if (previousMode === 'source' && newMode === 'preview') {
       // Compile and render the source code in the preview iframe
       this._ensurePreview();
       if (this._sourceEditor && this._jsxPreview) {
