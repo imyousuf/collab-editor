@@ -3,13 +3,17 @@ package storagedemo
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/imyousuf/collab-editor/pkg/spi"
 )
 
@@ -258,9 +262,220 @@ func detectMimeType(name string) string {
 	return "text/plain"
 }
 
+// --- spi.OptionalVersions implementation ---
+
+func (fs *FileStore) versionsDir(docID string) string {
+	return filepath.Join(fs.baseDir, ".versions", docID)
+}
+
+func (fs *FileStore) clientMappingsPath(docID string) string {
+	return filepath.Join(fs.baseDir, ".clients", docID+".json")
+}
+
+// ListVersions implements spi.OptionalVersions.
+func (fs *FileStore) ListVersions(_ context.Context, documentID string) ([]spi.VersionListEntry, error) {
+	if err := validateDocID(documentID); err != nil {
+		return nil, err
+	}
+
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	dir := fs.versionsDir(documentID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading versions dir: %w", err)
+	}
+
+	var versions []spi.VersionListEntry
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var entry spi.VersionEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			continue
+		}
+		versions = append(versions, spi.VersionListEntry{
+			ID:        entry.ID,
+			CreatedAt: entry.CreatedAt,
+			Type:      entry.Type,
+			Label:     entry.Label,
+			Creator:   entry.Creator,
+			MimeType:  entry.MimeType,
+		})
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].CreatedAt.After(versions[j].CreatedAt) // newest first
+	})
+
+	return versions, nil
+}
+
+// CreateVersion implements spi.OptionalVersions.
+func (fs *FileStore) CreateVersion(_ context.Context, documentID string, req *spi.CreateVersionRequest) (*spi.VersionListEntry, error) {
+	if err := validateDocID(documentID); err != nil {
+		return nil, err
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir := fs.versionsDir(documentID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating versions dir: %w", err)
+	}
+
+	id := uuid.New().String()
+	now := time.Now().UTC()
+	vType := req.Type
+	if vType == "" {
+		vType = "manual"
+	}
+
+	entry := spi.VersionEntry{
+		ID:        id,
+		CreatedAt: now,
+		Type:      vType,
+		Label:     req.Label,
+		Creator:   req.Creator,
+		Content:   req.Content,
+		MimeType:  req.MimeType,
+		Blame:     req.Blame,
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling version: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, id+".json"), data, 0o644); err != nil {
+		return nil, fmt.Errorf("writing version file: %w", err)
+	}
+
+	return &spi.VersionListEntry{
+		ID:        id,
+		CreatedAt: now,
+		Type:      vType,
+		Label:     req.Label,
+		Creator:   req.Creator,
+		MimeType:  req.MimeType,
+	}, nil
+}
+
+// GetVersion implements spi.OptionalVersions.
+func (fs *FileStore) GetVersion(_ context.Context, documentID string, versionID string) (*spi.VersionEntry, error) {
+	if err := validateDocID(documentID); err != nil {
+		return nil, err
+	}
+
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	path := filepath.Join(fs.versionsDir(documentID), versionID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading version file: %w", err)
+	}
+
+	var entry spi.VersionEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return nil, fmt.Errorf("unmarshaling version: %w", err)
+	}
+
+	return &entry, nil
+}
+
+// --- spi.OptionalClientMappings implementation ---
+
+// GetClientMappings implements spi.OptionalClientMappings.
+func (fs *FileStore) GetClientMappings(_ context.Context, documentID string) ([]spi.ClientUserMapping, error) {
+	if err := validateDocID(documentID); err != nil {
+		return nil, err
+	}
+
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	path := fs.clientMappingsPath(documentID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading client mappings: %w", err)
+	}
+
+	var mappings []spi.ClientUserMapping
+	if err := json.Unmarshal(data, &mappings); err != nil {
+		return nil, fmt.Errorf("unmarshaling client mappings: %w", err)
+	}
+
+	return mappings, nil
+}
+
+// StoreClientMappings implements spi.OptionalClientMappings.
+func (fs *FileStore) StoreClientMappings(_ context.Context, documentID string, mappings []spi.ClientUserMapping) error {
+	if err := validateDocID(documentID); err != nil {
+		return err
+	}
+
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	dir := filepath.Join(fs.baseDir, ".clients")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating clients dir: %w", err)
+	}
+
+	// Merge with existing mappings (new entries override by client_id)
+	existing := make(map[uint64]spi.ClientUserMapping)
+	path := fs.clientMappingsPath(documentID)
+	if data, err := os.ReadFile(path); err == nil {
+		var old []spi.ClientUserMapping
+		json.Unmarshal(data, &old)
+		for _, m := range old {
+			existing[m.ClientID] = m
+		}
+	}
+
+	for _, m := range mappings {
+		existing[m.ClientID] = m
+	}
+
+	merged := make([]spi.ClientUserMapping, 0, len(existing))
+	for _, m := range existing {
+		merged = append(merged, m)
+	}
+
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("marshaling client mappings: %w", err)
+	}
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("writing client mappings: %w", err)
+	}
+
+	return nil
+}
+
 // Compile-time interface assertions.
 var (
-	_ spi.Provider     = (*FileStore)(nil)
-	_ spi.OptionalDelete = (*FileStore)(nil)
-	_ spi.OptionalList   = (*FileStore)(nil)
+	_ spi.Provider             = (*FileStore)(nil)
+	_ spi.OptionalDelete       = (*FileStore)(nil)
+	_ spi.OptionalList         = (*FileStore)(nil)
+	_ spi.OptionalVersions     = (*FileStore)(nil)
+	_ spi.OptionalClientMappings = (*FileStore)(nil)
 )

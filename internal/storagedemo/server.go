@@ -34,6 +34,15 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 		r.Delete("/documents", spiHandler.ServeHTTP)
 		r.Get("/documents", spiHandler.ServeHTTP)
 
+		// Version history endpoints (SDK-handled).
+		r.Get("/documents/versions", spiHandler.ServeHTTP)
+		r.Post("/documents/versions", spiHandler.ServeHTTP)
+		r.Get("/documents/versions/detail", spiHandler.ServeHTTP)
+
+		// Client mapping endpoints (SDK-handled).
+		r.Get("/documents/clients", spiHandler.ServeHTTP)
+		r.Post("/documents/clients", spiHandler.ServeHTTP)
+
 		// Extra endpoint not in the SDK.
 		r.Post("/documents/compact", compactHandler(store))
 	})
