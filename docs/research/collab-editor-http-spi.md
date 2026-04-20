@@ -240,6 +240,99 @@ Authorization: Bearer {relay-token}
 
 ---
 
+#### `GET /documents/versions?path={documentId}` (Optional)
+
+List version snapshots for a document. Returns lightweight entries (no content or blame).
+
+**Response — 200 OK:**
+```json
+{
+  "versions": [
+    {
+      "id": "a1b2c3d4",
+      "created_at": "2026-04-14T10:30:00Z",
+      "type": "manual",
+      "label": "Before refactor",
+      "creator": "alice"
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /documents/versions?path={documentId}` (Optional)
+
+Create a new version snapshot.
+
+```json
+{
+  "content": "Document text at this version",
+  "mime_type": "text/markdown",
+  "label": "Before refactor",
+  "creator": "alice",
+  "type": "manual"
+}
+```
+
+**Response — 201 Created:** Returns the created `VersionListEntry`.
+
+---
+
+#### `GET /documents/versions/detail?path={documentId}&version={versionId}` (Optional)
+
+Get a full version with content and blame attribution.
+
+**Response — 200 OK:**
+```json
+{
+  "id": "a1b2c3d4",
+  "created_at": "2026-04-14T10:30:00Z",
+  "type": "manual",
+  "content": "Document text at this version",
+  "blame": [
+    { "start": 0, "end": 15, "user_name": "alice" },
+    { "start": 15, "end": 30, "user_name": "bob" }
+  ]
+}
+```
+
+Blame segments attribute character ranges to users. Color is NOT included — the frontend assigns colors.
+
+---
+
+#### `GET /documents/clients?path={documentId}` (Optional)
+
+Get client-ID-to-user mappings for blame attribution across sessions.
+
+**Response — 200 OK:**
+```json
+{
+  "mappings": [
+    { "client_id": 1234567890, "user_name": "alice" },
+    { "client_id": 9876543210, "user_name": "bob" }
+  ]
+}
+```
+
+---
+
+#### `POST /documents/clients?path={documentId}` (Optional)
+
+Store client-ID-to-user mappings.
+
+```json
+{
+  "mappings": [
+    { "client_id": 1234567890, "user_name": "alice" }
+  ]
+}
+```
+
+**Response — 200 OK:** `{ "stored": 1 }`
+
+---
+
 ## Async Pipeline with HTTP
 
 ```
@@ -303,6 +396,11 @@ Optional Endpoints:
   ⬜ DELETE  /documents?path={id}
   ⬜ GET    /documents
   ⬜ POST   /documents/compact?path={id}
+  ⬜ GET    /documents/versions?path={id}
+  ⬜ POST   /documents/versions?path={id}
+  ⬜ GET    /documents/versions/detail?path={id}&version={versionId}
+  ⬜ GET    /documents/clients?path={id}
+  ⬜ POST   /documents/clients?path={id}
 
 Requirements:
   ✅ Idempotent writes (duplicate sequence numbers ignored)

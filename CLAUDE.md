@@ -27,6 +27,7 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
 internal/provider/     — HTTP client for the storage provider SPI
 internal/storagedemo/  — Demo filesystem-based storage provider
   store.go             — FileStore implementing spi.Provider + OptionalDelete + OptionalList
+                         + OptionalVersions + OptionalClientMappings
   server.go            — chi router: spi.NewHTTPHandler() + bearer auth + compact endpoint
   config.go            — koanf config loader
   handler_compact.go   — Extra compact endpoint (not in SDK)
@@ -35,23 +36,27 @@ packages/              — SDK packages
     src/engine.ts      — Yjs diff extraction, Y.Doc management, LRU cache
     src/provider.ts    — Provider interface + ProviderProcessor
     src/handler.ts     — Express router factory + standalone server
-    src/types.ts       — SPI types
+    src/types.ts       — SPI types (including VersionEntry, BlameSegment, ClientUserMapping)
+    src/blame.ts       — computeBlameFromVersions (LCS-based line diff)
   provider-sdk-py/     — Python provider SDK (collab-editor-provider)
     collab_editor_provider/engine.py    — pycrdt-based Yjs engine
     collab_editor_provider/provider.py  — Provider ABC + ProviderProcessor
     collab_editor_provider/handler.py   — FastAPI router factory
     collab_editor_provider/cache.py     — LRU DocCache
-    collab_editor_provider/types.py     — Dataclass types
+    collab_editor_provider/types.py     — Dataclass types (including version + blame types)
+    collab_editor_provider/blame.py    — compute_blame_from_versions
   grpc-client-ts/      — gRPC TypeScript client (@imyousuf/collab-editor-grpc)
     src/index.ts       — createRelayClient(), checkHealth(), PROTO_PATH
     proto/relay.proto  — Bundled proto file
 frontend/src/          — Lit web component (TypeScript)
   interfaces/          — IEditorBinding, IContentHandler, ICollaborationProvider,
-                         IFormattingCapability, ToolbarConfig, StatusBarConfig, events
+                         IFormattingCapability, IBlameCapability, ToolbarConfig, StatusBarConfig, events
   bindings/            — DualMode, SourceOnly, PreviewSource + shared editor instances
+                         (DualMode + SourceOnly implement IBlameCapability)
   handlers/            — Markdown, HTML, PlainText content handlers
   collab/              — CollaborationProvider (y-websocket + SocketIOProvider),
-                         TextBinding (Y.Text <-> Tiptap)
+                         TextBinding (Y.Text <-> Tiptap), BlameEngine (dual-mode),
+                         VersionManager, diff-engine, blame-cm-extension, blame-tiptap-plugin
   toolbar/             — Built-in editor-toolbar and editor-status-bar Lit components
   react/               — React wrapper via @lit/react
   registry.ts          — EditorBindingFactory + MIME-type registration
@@ -80,11 +85,11 @@ make proto              # Generate gRPC stubs (requires buf CLI)
 # Frontend
 cd frontend && npm install && npm run dev   # Dev server on :5173
 cd frontend && npm run build                # Production build (tsc + vite)
-cd frontend && npm test                     # Run vitest (269 tests)
+cd frontend && npm test                     # Run vitest (299 tests)
 
 # Provider SDKs
-cd packages/provider-sdk-ts && npm test     # 41 tests
-cd packages/provider-sdk-py && pytest -v    # 52 tests
+cd packages/provider-sdk-ts && npm test     # 51 tests
+cd packages/provider-sdk-py && pytest -v    # 62 tests
 cd packages/grpc-client-ts && npm test      # 4 tests
 
 # Docker (full stack)
@@ -108,7 +113,11 @@ make test-e2e                               # Run ATR browser tests
 - Multi-instance scaling via Redis pub/sub: broker peer pattern adds a synthetic peer to each room that relays messages cross-instance without changing Room code
 - Distributed flush lock (Redis SETNX + Lua release) ensures only one instance flushes per document
 - Provider SDKs support dual storage: raw updates mode (append-only journal) and/or resolved text mode (SDK applies Yjs diffs, gives you plain text)
-- The demo provider implements `spi.Provider`, `spi.OptionalDelete`, and `spi.OptionalList`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
+- The demo provider implements `spi.Provider`, `spi.OptionalDelete`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
+- Version history: SPI is Yjs-agnostic — `VersionEntry` returns plain text content, not CRDT binary. SDKs compute blame from version content chain (LCS-based line diff). Demo provider stores versions as JSON files in `.versions/{docID}/`
+- Blame has two modes: **live blame** (captures Y.Doc update events in localStorage, resets on refresh) and **version blame** (read-only, blame segments from SPI). Developer controls which modes are available via `liveBlameEnabled`/`versionBlameEnabled` config
+- `IBlameCapability` is an optional interface — `DualModeBinding` and `SourceOnlyBinding` implement it. Checked via `isBlameCapable()` type guard
+- Relay proxies version/client-mapping API calls to the provider via `/api/documents/versions`, `/api/documents/clients` endpoints
 
 ## Conventions
 
