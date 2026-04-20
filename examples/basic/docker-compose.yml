@@ -2,7 +2,7 @@ services:
   provider:
     build:
       context: ../..
-      dockerfile: docker/provider.Dockerfile
+      dockerfile: docker/demo-provider.Dockerfile
     ports:
       - "8081:8081"
     volumes:

@@ -18,8 +18,8 @@ jobs:
         include:
           - image: relay
             dockerfile: docker/relay.Dockerfile
-          - image: provider
-            dockerfile: docker/provider.Dockerfile
+          - image: demo-provider
+            dockerfile: docker/demo-provider.Dockerfile
     steps:
       - uses: actions/checkout@v4
 
