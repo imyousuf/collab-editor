@@ -22,6 +22,8 @@ export interface BlameSegment {
 /** Stored in localStorage for live blame attribution. */
 interface LiveBlameEntry {
   userName: string;
+  /** The Yjs client ID of the user who made this change. */
+  clientId: number;
   timestamp: number;
   /** Base64-encoded Yjs update for replay. */
   update: string;
@@ -61,6 +63,7 @@ export class BlameEngine {
       const userName = this._resolveUserName(origin);
       const entry: LiveBlameEntry = {
         userName,
+        clientId: this._ydoc.clientID,
         timestamp: Date.now(),
         update: uint8ArrayToBase64(update),
       };
@@ -94,21 +97,18 @@ export class BlameEngine {
     const entries = this._loadEntries();
     if (entries.length === 0) return [];
 
-    // Replay updates onto a fresh doc to build blame
+    // Build client-ID-to-user map from captured entries
+    const clientToUser = new Map<number, string>();
+    for (const entry of entries) {
+      clientToUser.set(entry.clientId, entry.userName);
+    }
+
+    // Replay updates onto a fresh doc
     const replayDoc = new Y.Doc();
     const text = replayDoc.getText('source');
-
-    // Track which client created which items
-    const clientToUser = new Map<number, string>();
-
     for (const entry of entries) {
       const update = base64ToUint8Array(entry.update);
-      // Before applying, record this user for the client IDs in the update
-      // After apply, new items will have their client ID set
       Y.applyUpdate(replayDoc, update);
-      // Map the doc's clientID to the user name
-      // Note: updates from remote peers have their own clientID embedded
-      clientToUser.set(replayDoc.clientID, entry.userName);
     }
 
     // Iterate text items to build blame

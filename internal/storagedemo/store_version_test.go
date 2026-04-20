@@ -111,12 +111,23 @@ func TestGetVersion_NotFound(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	entry, err := store.GetVersion(ctx, "doc.md", "nonexistent")
+	// Use a valid UUID format that doesn't exist
+	entry, err := store.GetVersion(ctx, "doc.md", "00000000-0000-0000-0000-000000000000")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if entry != nil {
 		t.Error("expected nil for nonexistent version")
+	}
+}
+
+func TestGetVersion_InvalidID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	_, err := store.GetVersion(ctx, "doc.md", "../../etc/passwd")
+	if err == nil {
+		t.Error("expected error for path traversal attempt")
 	}
 }
 

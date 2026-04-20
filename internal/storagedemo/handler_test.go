@@ -158,9 +158,9 @@ func TestDeleteDocument_Handler(t *testing.T) {
 
 	resp := doRequest(t, srv, "DELETE", "/documents?path=doc.md", nil)
 	defer resp.Body.Close()
-	// SDK returns 200 on successful delete
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200, got %d", resp.StatusCode)
+	// SDK returns 204 on successful delete
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", resp.StatusCode)
 	}
 
 	// Verify deleted — load returns empty content

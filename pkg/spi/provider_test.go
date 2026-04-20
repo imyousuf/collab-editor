@@ -224,8 +224,8 @@ func TestHTTPHandler_Delete(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusNoContent {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusNoContent)
 	}
 	if p.deletedDoc != "doc1" {
 		t.Errorf("deleted doc: got %q", p.deletedDoc)

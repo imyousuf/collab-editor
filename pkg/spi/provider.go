@@ -156,7 +156,7 @@ func NewHTTPHandler(p Provider) http.Handler {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 		})
 	}
 

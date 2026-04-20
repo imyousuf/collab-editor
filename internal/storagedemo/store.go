@@ -20,6 +20,9 @@ import (
 // validDocID matches only safe document IDs (alphanumeric, hyphens, underscores, dots).
 var validDocID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 
+// validUUID matches UUID v4 format.
+var validUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 func validateDocID(docID string) error {
 	if docID == "" || len(docID) > 255 || !validDocID.MatchString(docID) {
 		return errors.New("invalid document ID")
@@ -376,6 +379,9 @@ func (fs *FileStore) GetVersion(_ context.Context, documentID string, versionID 
 	if err := validateDocID(documentID); err != nil {
 		return nil, err
 	}
+	if !validUUID.MatchString(versionID) {
+		return nil, errors.New("invalid version ID")
+	}
 
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
@@ -444,7 +450,9 @@ func (fs *FileStore) StoreClientMappings(_ context.Context, documentID string, m
 	path := fs.clientMappingsPath(documentID)
 	if data, err := os.ReadFile(path); err == nil {
 		var old []spi.ClientUserMapping
-		json.Unmarshal(data, &old)
+		if err := json.Unmarshal(data, &old); err != nil {
+			return fmt.Errorf("corrupt client mappings file: %w", err)
+		}
 		for _, m := range old {
 			existing[m.ClientID] = m
 		}

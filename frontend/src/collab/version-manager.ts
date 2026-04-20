@@ -48,6 +48,7 @@ export class VersionManager {
   private _observer: ((update: Uint8Array, origin: any) => void) | null = null;
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _destroyed = false;
+  private _snapshotInFlight = false;
 
   constructor(ydoc: Y.Doc, config: VersionManagerConfig) {
     this._ydoc = ydoc;
@@ -108,7 +109,7 @@ export class VersionManager {
   async getVersion(versionId: string): Promise<VersionEntry | null> {
     const resp = await this._fetch(
       'GET',
-      `/documents/versions/detail&version=${encodeURIComponent(versionId)}`,
+      `/documents/versions/detail?version=${encodeURIComponent(versionId)}`,
     );
     if (!resp.ok) return null;
     return resp.json();
@@ -153,7 +154,8 @@ export class VersionManager {
   // --- Internal ---
 
   private async _autoSnapshot(): Promise<void> {
-    if (this._destroyed) return;
+    if (this._destroyed || this._snapshotInFlight) return;
+    this._snapshotInFlight = true;
     try {
       const content = this._ydoc.getText('source').toString();
       await this._fetch('POST', '/documents/versions', {
@@ -164,6 +166,8 @@ export class VersionManager {
       this._lastSnapshotTime = Date.now();
     } catch {
       // Auto-snapshot failures are non-fatal
+    } finally {
+      this._snapshotInFlight = false;
     }
   }
 

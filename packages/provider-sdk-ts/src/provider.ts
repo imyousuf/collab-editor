@@ -228,10 +228,11 @@ export class ProviderProcessor {
       this._provider.getVersion
     ) {
       const allVersions = await this._provider.listVersions(documentId);
-      // Find versions up to and including the requested one
+      // Find versions up to and including the requested one (use Date for correct timezone handling)
+      const entryTime = new Date(entry.created_at!).getTime();
       const sorted = allVersions
-        .filter((v) => v.created_at <= entry.created_at!)
-        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+        .filter((v) => new Date(v.created_at).getTime() <= entryTime)
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
       if (sorted.length > 0) {
         // Fetch full content for each version in the chain
