@@ -60,17 +60,22 @@ export class PreviewSourceBinding implements IEditorBinding {
 
     this._sourceEditor.onUpdate((content) => {
       this._contentCallbacks.forEach(cb => cb(content));
+      // Re-render preview when source changes (e.g., Y.Text sync after mount)
+      if (this._activeMode === 'preview' && this._previewRenderer) {
+        this._previewRenderer.render(content);
+      }
     });
 
     if (this._collab) {
       observeRemoteChanges(this._collab, this._remoteCallbacks);
     }
 
-    // Create preview renderer eagerly if mounting in preview mode
+    // Create preview renderer eagerly if mounting in preview mode.
+    // Don't render yet — content arrives via Y.Text seed after mount,
+    // and the onUpdate callback above will trigger the render.
     if (mode === 'preview' && this._previewContainer) {
       this._previewRenderer = new PreviewRendererInstance(this._previewContainer);
       await this._previewRenderer.whenReady();
-      this._previewRenderer.render(this._sourceEditor?.getContent() ?? '');
     }
 
     this._showMode(mode);
