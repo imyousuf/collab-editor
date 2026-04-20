@@ -10,12 +10,17 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from .types import (
+    BlameSegment,
+    ClientUserMapping,
     ContentResult,
+    CreateVersionRequest,
     DocumentListEntry,
     HealthResponse,
     LoadResponse,
     StoreResponse,
     UpdatePayload,
+    VersionEntry,
+    VersionListEntry,
 )
 from .engine import (
     apply_base64_update,
@@ -95,6 +100,46 @@ class Provider(ABC):
     @property
     def supports_list(self) -> bool:
         return type(self).list_documents is not Provider.list_documents
+
+    # --- Version history (optional) ---
+
+    async def list_versions(self, document_id: str) -> list[VersionListEntry]:
+        """List versions for a document."""
+        raise NotImplementedError
+
+    async def create_version(
+        self, document_id: str, req: CreateVersionRequest
+    ) -> VersionListEntry:
+        """Create a new version snapshot."""
+        raise NotImplementedError
+
+    async def get_version(
+        self, document_id: str, version_id: str
+    ) -> VersionEntry | None:
+        """Get a full version with content and blame."""
+        raise NotImplementedError
+
+    # --- Client mappings (optional) ---
+
+    async def get_client_mappings(
+        self, document_id: str
+    ) -> list[ClientUserMapping]:
+        """Get client-ID-to-user mappings for blame."""
+        raise NotImplementedError
+
+    async def store_client_mappings(
+        self, document_id: str, mappings: list[ClientUserMapping]
+    ) -> None:
+        """Store client-ID-to-user mappings."""
+        raise NotImplementedError
+
+    @property
+    def supports_versions(self) -> bool:
+        return type(self).list_versions is not Provider.list_versions
+
+    @property
+    def supports_client_mappings(self) -> bool:
+        return type(self).get_client_mappings is not Provider.get_client_mappings
 
 
 class ProviderProcessor:
@@ -177,6 +222,61 @@ class ProviderProcessor:
         if self._provider.supports_list:
             return await self._provider.list_documents()
         return []
+
+    async def process_list_versions(
+        self, document_id: str
+    ) -> list[VersionListEntry]:
+        if self._provider.supports_versions:
+            return await self._provider.list_versions(document_id)
+        return []
+
+    async def process_create_version(
+        self, document_id: str, req: CreateVersionRequest
+    ) -> VersionListEntry | None:
+        if self._provider.supports_versions:
+            return await self._provider.create_version(document_id, req)
+        return None
+
+    async def process_get_version(
+        self, document_id: str, version_id: str
+    ) -> VersionEntry | None:
+        if not self._provider.supports_versions:
+            return None
+        entry = await self._provider.get_version(document_id, version_id)
+        if entry is None:
+            return None
+
+        # Auto-compute blame from version history if not populated
+        if not entry.blame and self._provider.supports_versions:
+            all_versions = await self._provider.list_versions(document_id)
+            sorted_versions = sorted(
+                [v for v in all_versions if v.created_at <= entry.created_at],
+                key=lambda v: v.created_at,
+            )
+            if sorted_versions:
+                full_versions: list[VersionEntry] = []
+                for v in sorted_versions:
+                    full = await self._provider.get_version(document_id, v.id)
+                    if full is not None:
+                        full_versions.append(full)
+                if full_versions:
+                    from .blame import compute_blame_from_versions
+                    entry.blame = compute_blame_from_versions(full_versions)
+
+        return entry
+
+    async def process_get_client_mappings(
+        self, document_id: str
+    ) -> list[ClientUserMapping]:
+        if self._provider.supports_client_mappings:
+            return await self._provider.get_client_mappings(document_id)
+        return []
+
+    async def process_store_client_mappings(
+        self, document_id: str, mappings: list[ClientUserMapping]
+    ) -> None:
+        if self._provider.supports_client_mappings:
+            await self._provider.store_client_mappings(document_id, mappings)
 
     def clear_cache(self) -> None:
         self._cache.clear()
