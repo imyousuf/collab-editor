@@ -11,6 +11,11 @@ import type {
   UpdatePayload,
   HealthResponse,
   DocumentListEntry,
+  VersionEntry,
+  VersionListEntry,
+  CreateVersionRequest,
+  BlameSegment,
+  ClientUserMapping,
 } from './types.js';
 import {
   applyBase64Update,
@@ -57,6 +62,21 @@ export interface Provider {
 
   /** Optional: custom health check */
   onHealth?(): Promise<HealthResponse>;
+
+  /** Optional: list versions for a document */
+  listVersions?(documentId: string): Promise<VersionListEntry[]>;
+
+  /** Optional: create a new version snapshot */
+  createVersion?(documentId: string, req: CreateVersionRequest): Promise<VersionListEntry>;
+
+  /** Optional: get a full version with content and blame */
+  getVersion?(documentId: string, versionId: string): Promise<VersionEntry | null>;
+
+  /** Optional: get client-ID-to-user mappings for blame */
+  getClientMappings?(documentId: string): Promise<ClientUserMapping[]>;
+
+  /** Optional: store client-ID-to-user mappings */
+  storeClientMappings?(documentId: string, mappings: ClientUserMapping[]): Promise<void>;
 }
 
 /** SDK processor — bridges Provider interface with the relay's SPI protocol */
@@ -169,6 +189,83 @@ export class ProviderProcessor {
       return this._provider.listDocuments();
     }
     return [];
+  }
+
+  /** Process a list versions request */
+  async processListVersions(documentId: string): Promise<VersionListEntry[]> {
+    if (this._provider.listVersions) {
+      return this._provider.listVersions(documentId);
+    }
+    return [];
+  }
+
+  /** Process a create version request */
+  async processCreateVersion(
+    documentId: string,
+    req: CreateVersionRequest,
+  ): Promise<VersionListEntry | null> {
+    if (this._provider.createVersion) {
+      return this._provider.createVersion(documentId, req);
+    }
+    return null;
+  }
+
+  /** Process a get version request. Auto-computes blame if not populated. */
+  async processGetVersion(
+    documentId: string,
+    versionId: string,
+  ): Promise<VersionEntry | null> {
+    if (!this._provider.getVersion) {
+      return null;
+    }
+    const entry = await this._provider.getVersion(documentId, versionId);
+    if (!entry) return null;
+
+    // Auto-compute blame from version history if not populated
+    if (
+      (!entry.blame || entry.blame.length === 0) &&
+      this._provider.listVersions &&
+      this._provider.getVersion
+    ) {
+      const allVersions = await this._provider.listVersions(documentId);
+      // Find versions up to and including the requested one
+      const sorted = allVersions
+        .filter((v) => v.created_at <= entry.created_at!)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+
+      if (sorted.length > 0) {
+        // Fetch full content for each version in the chain
+        const fullVersions: VersionEntry[] = [];
+        for (const v of sorted) {
+          const full = await this._provider.getVersion(documentId, v.id);
+          if (full) fullVersions.push(full);
+        }
+        if (fullVersions.length > 0) {
+          const { computeBlameFromVersions } = await import('./blame.js');
+          entry.blame = computeBlameFromVersions(fullVersions);
+        }
+      }
+    }
+
+    return entry;
+  }
+
+  /** Process a get client mappings request */
+  async processGetClientMappings(documentId: string): Promise<ClientUserMapping[]> {
+    if (this._provider.getClientMappings) {
+      return this._provider.getClientMappings(documentId);
+    }
+    return [];
+  }
+
+  /** Process a store client mappings request */
+  async processStoreClientMappings(
+    documentId: string,
+    mappings: ClientUserMapping[],
+  ): Promise<void> {
+    if (this._provider.storeClientMappings) {
+      await this._provider.storeClientMappings(documentId, mappings);
+    }
   }
 
   /** Clear the Y.Doc cache (for testing or shutdown) */

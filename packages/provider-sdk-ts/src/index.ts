@@ -15,6 +15,11 @@ export type {
   FailedUpdate,
   SnapshotPayload,
   DocumentMetadata,
+  VersionEntry,
+  VersionListEntry,
+  BlameSegment,
+  CreateVersionRequest,
+  ClientUserMapping,
 } from './types.js';
 
 export {
@@ -25,6 +30,10 @@ export {
   encodeDocState,
   DocCache,
 } from './engine.js';
+
+export {
+  computeBlameFromVersions,
+} from './blame.js';
 
 export {
   createExpressRouter,

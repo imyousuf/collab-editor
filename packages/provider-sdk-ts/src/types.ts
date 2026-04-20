@@ -60,3 +60,52 @@ export interface ContentResult {
   content: string;
   mimeType: string;
 }
+
+// --- Version History ---
+
+/** Full version record with content and blame. Returned by getVersion(). */
+export interface VersionEntry {
+  id: string;
+  created_at: string;
+  type: 'auto' | 'manual';
+  label?: string;
+  creator?: string;
+  content: string;
+  mime_type?: string;
+  blame?: BlameSegment[];
+}
+
+/** Lightweight version summary for list responses. No content or blame. */
+export interface VersionListEntry {
+  id: string;
+  created_at: string;
+  type: 'auto' | 'manual';
+  label?: string;
+  creator?: string;
+  mime_type?: string;
+}
+
+/** Attributes a character range to a user. Color is NOT included — frontend assigns. */
+export interface BlameSegment {
+  start: number;
+  end: number;
+  user_name: string;
+}
+
+/** Request body for creating a new version. */
+export interface CreateVersionRequest {
+  content: string;
+  mime_type?: string;
+  label?: string;
+  creator?: string;
+  type?: 'auto' | 'manual';
+  blame?: BlameSegment[];
+}
+
+// --- Client User Mappings ---
+
+/** Maps a Yjs client ID to a user identity for blame attribution. */
+export interface ClientUserMapping {
+  client_id: number;
+  user_name: string;
+}
