@@ -30,8 +30,8 @@ jobs:
       - name: Set dev version
         if: github.event_name == 'push'
         run: |
-          SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
-          sed -i "s/version = \"0.1.0\"/version = \"0.1.0.dev${SHORT_SHA}\"/" pyproject.toml
+          # PEP 440 requires numeric dev suffix
+          sed -i "s/version = \"0.1.0\"/version = \"0.1.0.dev${{ github.run_number }}\"/" pyproject.toml
 
       - name: Set release version
         if: github.event_name == 'release'

@@ -4,6 +4,8 @@
 
 The Go WebSocket relay delegates all document persistence to an external HTTP service — the **Storage Provider**. Implementors deploy their own service conforming to this API contract, in any language, backed by any storage system. The relay is configured with a single provider base URL and communicates exclusively via REST.
 
+Provider SDKs are available in [Go, TypeScript, and Python](../provider-sdk.md) to handle protocol details automatically.
+
 ```
 ┌──────────────┐          ┌──────────────────┐          ┌──────────────────┐
 │  Browser     │  ws://   │  Go Relay         │  HTTP    │  Storage Provider│
@@ -21,7 +23,9 @@ The Go WebSocket relay delegates all document persistence to an external HTTP se
 
 ## HTTP SPI Contract
 
-All request and response bodies are either JSON (metadata) or raw binary (`application/octet-stream` for Yjs update blobs). The provider MUST support concurrent requests for different document IDs and SHOULD be idempotent on writes.
+All request and response bodies are JSON. The provider MUST support concurrent requests for different document IDs and SHOULD be idempotent on writes.
+
+Document IDs are passed as the `path` query parameter (e.g., `?path=my-doc.md`), not as path segments. This avoids URL encoding issues with document IDs containing dots or slashes.
 
 ### Base Configuration
 
@@ -30,12 +34,11 @@ All request and response bodies are either JSON (metadata) or raw binary (`appli
 storage:
   provider_url: "https://storage.internal.example.com"
   auth:
-    type: "bearer"           # or "hmac", "mtls"
-    token: "${STORAGE_TOKEN}" # relay authenticates to provider
+    type: "bearer"
+    token: "${STORAGE_TOKEN}"
   timeouts:
     load: 10s
     store: 5s
-    compact: 30s
   retry:
     max_attempts: 3
     backoff: exponential     # 100ms, 200ms, 400ms
@@ -45,37 +48,57 @@ storage:
 
 ### Endpoints
 
-#### `POST /documents/{documentId}/load`
+#### `GET /health`
+
+Health check. The relay uses this for circuit-breaking.
+
+**Response — 200 OK:**
+```json
+{
+  "status": "ok",
+  "storage": "connected"
+}
+```
+
+**Response — 503 Service Unavailable:**
+```json
+{
+  "status": "degraded",
+  "storage": "disconnected"
+}
+```
+
+---
+
+#### `POST /documents/load?path={documentId}`
 
 Load document state for room bootstrap. Called once when the first peer joins a room.
 
 ```
-POST /documents/{documentId}/load
+POST /documents/load?path=my-doc.md
 Content-Type: application/json
 Authorization: Bearer {relay-token}
-
-{
-  "state_vector": "base64-encoded-state-vector"  // optional, from relay cache
-}
 ```
 
 **Response — 200 OK:**
 ```json
 {
+  "content": "# Hello World\n\nDocument text.",
+  "mime_type": "text/markdown",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "<base64-encoded y-websocket message>",
+      "client_id": 1234567890,
+      "created_at": "2026-04-14T10:31:12Z"
+    }
+  ],
   "snapshot": {
     "data": "<base64>",
     "state_vector": "<base64>",
     "created_at": "2026-04-14T10:30:00Z",
     "update_count": 847
   },
-  "updates": [
-    {
-      "sequence": 848,
-      "data": "<base64>",
-      "client_id": 1234567890,
-      "created_at": "2026-04-14T10:31:12Z"
-    }
-  ],
   "metadata": {
     "format": "markdown",
     "language": "javascript",
@@ -85,24 +108,23 @@ Authorization: Bearer {relay-token}
 }
 ```
 
-**Response — 204 No Content:**
-Document doesn't exist yet (new document). Relay creates an empty room.
+Fields:
+- `content` — The plain text of the document (seed content for new peers)
+- `mime_type` — MIME type for editor mode selection
+- `updates` — Stored Yjs updates for replay (base64-encoded y-websocket protocol messages)
+- `snapshot` — Optional compacted snapshot
+- `metadata` — Optional document metadata
 
-**Response — 403 Forbidden:**
-```json
-{ "error": "insufficient_permissions", "message": "Document requires write access" }
-```
-
-> **Why POST instead of GET?** The optional `state_vector` in the request body enables differential loading — the provider can compute and return only the updates the relay is missing, rather than the full document. This is critical for reconnection scenarios where the relay already has a cached partial state.
+A response with empty `content` and no `updates` means a new/empty document.
 
 ---
 
-#### `POST /documents/{documentId}/updates`
+#### `POST /documents/updates?path={documentId}`
 
 Persist a batch of incremental updates. Called asynchronously by the relay's flush pipeline.
 
 ```
-POST /documents/{documentId}/updates
+POST /documents/updates?path=my-doc.md
 Content-Type: application/json
 Authorization: Bearer {relay-token}
 
@@ -146,12 +168,54 @@ Authorization: Bearer {relay-token}
 
 ---
 
-#### `POST /documents/{documentId}/compact`
+#### `DELETE /documents?path={documentId}`
 
-Compact accumulated updates into a single snapshot. Called by the relay's background compaction worker.
+Delete all document data (optional).
 
 ```
-POST /documents/{documentId}/compact
+DELETE /documents?path=my-doc.md
+Authorization: Bearer {relay-token}
+```
+
+**Response — 200 OK**
+
+---
+
+#### `GET /documents`
+
+List available documents (optional).
+
+```
+GET /documents
+Authorization: Bearer {relay-token}
+```
+
+**Response — 200 OK:**
+```json
+{
+  "documents": [
+    {
+      "name": "welcome.md",
+      "size": 545,
+      "mime_type": "text/markdown"
+    },
+    {
+      "name": "app.jsx",
+      "size": 2172,
+      "mime_type": "text/jsx"
+    }
+  ]
+}
+```
+
+---
+
+#### `POST /documents/compact?path={documentId}` (Optional)
+
+Compact accumulated updates into a single snapshot.
+
+```
+POST /documents/compact?path=my-doc.md
 Content-Type: application/json
 Authorization: Bearer {relay-token}
 
@@ -173,361 +237,6 @@ Authorization: Bearer {relay-token}
   "snapshot_size_bytes": 24576
 }
 ```
-
-> **Who merges?** The relay (or a sidecar) performs the Yjs merge using Yrs FFI, then sends the merged binary to the provider. The provider only needs to atomically replace old updates with the new snapshot. This keeps the provider Yjs-unaware.
-
----
-
-#### `POST /documents/{documentId}/versions`
-
-Create a named version (explicit save point).
-
-```
-POST /documents/{documentId}/versions
-Content-Type: application/json
-Authorization: Bearer {relay-token}
-
-{
-  "label": "v2.1 — before refactor",
-  "snapshot": {
-    "data": "<base64>",
-    "state_vector": "<base64>"
-  },
-  "created_by": "user-alice"
-}
-```
-
-**Response — 201 Created:**
-```json
-{
-  "version_id": "ver_abc123",
-  "created_at": "2026-04-14T10:35:00Z"
-}
-```
-
----
-
-#### `GET /documents/{documentId}/versions`
-
-List available versions for the version history UI.
-
-```
-GET /documents/{documentId}/versions
-Authorization: Bearer {relay-token}
-```
-
-**Response — 200 OK:**
-```json
-{
-  "versions": [
-    {
-      "version_id": "ver_abc123",
-      "label": "v2.1 — before refactor",
-      "created_by": "user-alice",
-      "created_at": "2026-04-14T10:35:00Z",
-      "snapshot_size_bytes": 18432
-    },
-    {
-      "version_id": "ver_def456",
-      "label": "Initial draft",
-      "created_by": "user-bob",
-      "created_at": "2026-04-12T08:00:00Z",
-      "snapshot_size_bytes": 2048
-    }
-  ]
-}
-```
-
----
-
-#### `GET /documents/{documentId}/versions/{versionId}`
-
-Load a specific version's snapshot (for diff view or restore).
-
-```
-GET /documents/{documentId}/versions/{versionId}
-Authorization: Bearer {relay-token}
-```
-
-**Response — 200 OK:**
-```json
-{
-  "version_id": "ver_abc123",
-  "label": "v2.1 — before refactor",
-  "snapshot": {
-    "data": "<base64>",
-    "state_vector": "<base64>"
-  },
-  "created_by": "user-alice",
-  "created_at": "2026-04-14T10:35:00Z"
-}
-```
-
----
-
-#### `DELETE /documents/{documentId}`
-
-Delete all document data (cleanup, GDPR).
-
-```
-DELETE /documents/{documentId}
-Authorization: Bearer {relay-token}
-```
-
-**Response — 204 No Content**
-
----
-
-#### `POST /documents/{documentId}/lock` (Optional)
-
-Acquire an advisory lock for exclusive operations like compaction. Prevents concurrent compaction from multiple relay instances.
-
-```
-POST /documents/{documentId}/lock
-Content-Type: application/json
-Authorization: Bearer {relay-token}
-
-{
-  "owner": "relay-instance-7",
-  "ttl_seconds": 60,
-  "purpose": "compaction"
-}
-```
-
-**Response — 200 OK:**
-```json
-{ "lock_id": "lock_xyz", "expires_at": "2026-04-14T10:36:00Z" }
-```
-
-**Response — 409 Conflict:**
-```json
-{ "error": "already_locked", "owner": "relay-instance-3", "expires_at": "..." }
-```
-
----
-
-## Webhook: Provider → Relay (Optional)
-
-For scenarios where the provider needs to push changes to the relay (e.g., document updated by an external system, or permissions revoked):
-
-```
-POST {relay_callback_url}/hooks/documents/{documentId}
-Content-Type: application/json
-X-Provider-Signature: hmac-sha256=...
-
-{
-  "event": "document.updated",     // or "document.deleted", "permissions.changed"
-  "document_id": "project-123",
-  "updates": [                     // optional: external updates to merge
-    { "data": "<base64>" }
-  ]
-}
-```
-
-This enables the provider to inject updates from external sources (CI pipelines, API edits, batch imports) into active collaborative sessions.
-
----
-
-## Go Relay: HTTP Client
-
-```go
-package storage
-
-import (
-    "bytes"
-    "context"
-    "encoding/json"
-    "fmt"
-    "net/http"
-    "time"
-)
-
-// HTTPProvider implements the storage client that calls the external provider.
-type HTTPProvider struct {
-    baseURL    string
-    httpClient *http.Client
-    authToken  string
-}
-
-type HTTPProviderConfig struct {
-    BaseURL      string
-    AuthToken    string
-    LoadTimeout  time.Duration
-    StoreTimeout time.Duration
-}
-
-func NewHTTPProvider(cfg HTTPProviderConfig) *HTTPProvider {
-    return &HTTPProvider{
-        baseURL:   cfg.BaseURL,
-        authToken: cfg.AuthToken,
-        httpClient: &http.Client{
-            Timeout: cfg.StoreTimeout,
-            Transport: &http.Transport{
-                MaxIdleConns:        100,
-                MaxIdleConnsPerHost: 20,
-                IdleConnTimeout:    90 * time.Second,
-            },
-        },
-    }
-}
-
-// LoadRequest is the body sent to POST /documents/{id}/load
-type LoadRequest struct {
-    StateVector string `json:"state_vector,omitempty"`
-}
-
-// LoadResponse is returned by the provider.
-type LoadResponse struct {
-    Snapshot *SnapshotPayload  `json:"snapshot,omitempty"`
-    Updates  []UpdatePayload   `json:"updates,omitempty"`
-    Metadata *DocumentMetadata `json:"metadata,omitempty"`
-}
-
-type SnapshotPayload struct {
-    Data        string    `json:"data"`         // base64
-    StateVector string    `json:"state_vector"` // base64
-    CreatedAt   time.Time `json:"created_at"`
-    UpdateCount int       `json:"update_count"`
-}
-
-type UpdatePayload struct {
-    Sequence  uint64    `json:"sequence"`
-    Data      string    `json:"data"`      // base64
-    ClientID  uint64    `json:"client_id"`
-    CreatedAt time.Time `json:"created_at"`
-}
-
-type DocumentMetadata struct {
-    Format      string `json:"format"`
-    Language    string `json:"language"`
-    CreatedBy   string `json:"created_by"`
-    Permissions string `json:"permissions"` // "read-only" | "read-write"
-}
-
-func (p *HTTPProvider) Load(ctx context.Context, documentID string, stateVector []byte) (*LoadResponse, error) {
-    body := LoadRequest{}
-    if stateVector != nil {
-        body.StateVector = base64.StdEncoding.EncodeToString(stateVector)
-    }
-
-    resp, err := p.doJSON(ctx, http.MethodPost,
-        fmt.Sprintf("/documents/%s/load", url.PathEscape(documentID)),
-        body,
-    )
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-
-    switch resp.StatusCode {
-    case http.StatusNoContent:
-        return &LoadResponse{}, nil // new document
-    case http.StatusOK:
-        var result LoadResponse
-        if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-            return nil, fmt.Errorf("decoding load response: %w", err)
-        }
-        return &result, nil
-    case http.StatusForbidden:
-        return nil, ErrForbidden
-    default:
-        return nil, fmt.Errorf("unexpected status %d from provider", resp.StatusCode)
-    }
-}
-
-// StoreRequest is the body sent to POST /documents/{id}/updates
-type StoreRequest struct {
-    Updates []UpdatePayload `json:"updates"`
-}
-
-type StoreResponse struct {
-    Stored           int             `json:"stored"`
-    DuplicatesIgnored int            `json:"duplicates_ignored"`
-    Failed           []FailedUpdate  `json:"failed,omitempty"`
-}
-
-type FailedUpdate struct {
-    Sequence uint64 `json:"sequence"`
-    Error    string `json:"error"`
-}
-
-func (p *HTTPProvider) Store(ctx context.Context, documentID string, updates []UpdatePayload) (*StoreResponse, error) {
-    body := StoreRequest{Updates: updates}
-
-    resp, err := p.doJSON(ctx, http.MethodPost,
-        fmt.Sprintf("/documents/%s/updates", url.PathEscape(documentID)),
-        body,
-    )
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-
-    var result StoreResponse
-    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-        return nil, fmt.Errorf("decoding store response: %w", err)
-    }
-
-    return &result, nil
-}
-
-// doJSON is the shared HTTP helper with auth and content-type.
-func (p *HTTPProvider) doJSON(ctx context.Context, method, path string, body interface{}) (*http.Response, error) {
-    var buf bytes.Buffer
-    if body != nil {
-        if err := json.NewEncoder(&buf).Encode(body); err != nil {
-            return nil, err
-        }
-    }
-
-    req, err := http.NewRequestWithContext(ctx, method, p.baseURL+path, &buf)
-    if err != nil {
-        return nil, err
-    }
-
-    req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", "Bearer "+p.authToken)
-    req.Header.Set("X-Request-ID", generateRequestID())
-
-    return p.httpClient.Do(req)
-}
-```
-
----
-
-## Binary Transport Optimization
-
-Base64 encoding inflates Yjs updates by ~33%. For high-throughput scenarios, the provider MAY support binary transport:
-
-```
-POST /documents/{documentId}/updates
-Content-Type: application/x-yjs-updates
-Authorization: Bearer {relay-token}
-X-Update-Count: 3
-X-Sequences: 1042,1043,1044
-
-<raw binary: length-prefixed Yjs updates concatenated>
-```
-
-Wire format for the binary body:
-
-```
-┌──────────────────────────────────────────┐
-│ Update 1                                  │
-│ ┌──────────┬──────────┬─────────────────┐│
-│ │ uint32   │ uint64   │ []byte          ││
-│ │ length   │ sequence │ yjs update data ││
-│ └──────────┴──────────┴─────────────────┘│
-│ Update 2                                  │
-│ ┌──────────┬──────────┬─────────────────┐│
-│ │ uint32   │ uint64   │ []byte          ││
-│ │ length   │ sequence │ yjs update data ││
-│ └──────────┴──────────┴─────────────────┘│
-│ ...                                       │
-└──────────────────────────────────────────┘
-```
-
-The relay negotiates format via `Accept` headers. JSON+base64 is the default for simplicity; binary is opt-in for performance-sensitive deployments.
 
 ---
 
@@ -552,7 +261,7 @@ The relay negotiates format via `Accept` headers. JSON+base64 is the default for
  │  Flush goroutine                               │
  │                                                │
  │  1. Drain buffer → []UpdatePayload             │
- │  2. POST /documents/{id}/updates               │
+ │  2. POST /documents/updates?path={id}          │
  │  3. On 202 → discard buffer, done              │
  │  4. On 207 → re-queue failed updates only      │
  │  5. On 5xx/timeout → re-queue all, backoff     │
@@ -563,87 +272,9 @@ The relay negotiates format via `Accept` headers. JSON+base64 is the default for
  └───────────────────────────────────────────────┘
 ```
 
-### Room Lifecycle with HTTP Provider
-
-```go
-// Simplified room lifecycle
-
-func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-    documentID := chi.URLParam(r, "documentId")
-    token := r.URL.Query().Get("token")
-
-    // 1. Validate JWT (local, no HTTP call)
-    claims, err := s.auth.ValidateToken(token)
-    if err != nil {
-        http.Error(w, "unauthorized", 401)
-        return
-    }
-
-    // 2. Get or create room
-    room := s.rooms.GetOrCreate(documentID, func() *Room {
-        // Cold start: load from provider via HTTP
-        ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-        defer cancel()
-
-        state, err := s.provider.Load(ctx, documentID, nil)
-        if err != nil {
-            slog.Error("failed to load document", "doc", documentID, "err", err)
-            return NewEmptyRoom(documentID) // degrade gracefully
-        }
-
-        room := NewRoom(documentID, state)
-
-        // Check permissions from provider metadata
-        if state.Metadata != nil && state.Metadata.Permissions == "read-only" {
-            room.SetReadOnly(claims.UserID)
-        }
-
-        return room
-    })
-
-    // 3. Upgrade to WebSocket
-    conn, err := s.upgrader.Upgrade(w, r, nil)
-    if err != nil {
-        return
-    }
-
-    // 4. Add peer, sync initial state, enter relay loop
-    peer := room.AddPeer(conn, claims)
-    defer room.RemovePeer(peer)
-
-    room.SyncInitialState(peer)
-    room.RelayLoop(peer) // blocks until disconnect
-}
-
-// When the last peer leaves:
-func (r *Room) onLastPeerLeft() {
-    // Final flush — persist any remaining buffered updates
-    r.flush()
-
-    // Schedule room cleanup after idle timeout
-    time.AfterFunc(r.config.IdleTimeout, func() {
-        if r.PeerCount() == 0 {
-            r.server.rooms.Remove(r.documentID)
-        }
-    })
-}
-```
-
 ---
 
-## Health & Observability
-
-The provider SHOULD expose a health endpoint for relay circuit-breaking:
-
-```
-GET /health
-→ 200 { "status": "ok", "storage": "connected" }
-→ 503 { "status": "degraded", "storage": "disconnected" }
-```
-
-The relay uses this for circuit-breaking — if the provider is unhealthy, the relay continues real-time collaboration (peers still sync via WebSocket) but stops attempting flushes until the provider recovers. Clients' y-indexeddb ensures no data loss during provider outages.
-
-### Metrics the Relay Emits
+## Metrics the Relay Emits
 
 ```
 collab_relay_rooms_active          gauge
@@ -660,115 +291,27 @@ collab_relay_provider_circuit_open gauge
 
 ## Provider Implementation Checklist
 
-For implementors building their own storage provider:
+For implementors building their own storage provider (or use the [Provider SDKs](../provider-sdk.md)):
 
 ```
 Required Endpoints:
-  ✅ POST   /documents/{documentId}/load
-  ✅ POST   /documents/{documentId}/updates
-  ✅ DELETE  /documents/{documentId}
-
-Recommended Endpoints:
-  ⬜ POST   /documents/{documentId}/compact
-  ⬜ POST   /documents/{documentId}/versions
-  ⬜ GET    /documents/{documentId}/versions
-  ⬜ GET    /documents/{documentId}/versions/{versionId}
-  ⬜ GET    /health
+  ✅ GET    /health
+  ✅ POST   /documents/load?path={id}
+  ✅ POST   /documents/updates?path={id}
 
 Optional Endpoints:
-  ⬜ POST   /documents/{documentId}/lock
-  ⬜ POST   /documents/{documentId}/updates  (binary Content-Type)
+  ⬜ DELETE  /documents?path={id}
+  ⬜ GET    /documents
+  ⬜ POST   /documents/compact?path={id}
 
 Requirements:
   ✅ Idempotent writes (duplicate sequence numbers ignored)
   ✅ Concurrent-safe (multiple relay instances may call simultaneously)
   ✅ Auth via Bearer token
   ✅ JSON request/response bodies
-  ✅ UTF-8 document IDs (URL-encoded in path)
+  ✅ Document IDs via 'path' query parameter
 
 Performance Targets:
   • /load    < 500ms p99 (cold start path)
   • /updates < 100ms p99 (async, but affects flush throughput)
-  • /compact < 5s p99   (background, can be slow)
-```
-
----
-
-## OpenAPI Spec (Summary)
-
-```yaml
-openapi: 3.1.0
-info:
-  title: Collaborative Editor Storage Provider API
-  version: 1.0.0
-  description: >
-    SPI contract for pluggable document storage backends.
-    Implementors deploy this API and configure the relay with the base URL.
-
-paths:
-  /documents/{documentId}/load:
-    post:
-      summary: Load document state for room bootstrap
-      parameters:
-        - name: documentId
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                state_vector: { type: string, format: base64 }
-      responses:
-        '200': { description: Document found, state returned }
-        '204': { description: New document, no existing state }
-        '403': { description: Access denied }
-
-  /documents/{documentId}/updates:
-    post:
-      summary: Persist a batch of incremental updates
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [updates]
-              properties:
-                updates:
-                  type: array
-                  items:
-                    type: object
-                    required: [sequence, data, created_at]
-                    properties:
-                      sequence: { type: integer }
-                      data: { type: string, format: base64 }
-                      client_id: { type: integer }
-                      created_at: { type: string, format: date-time }
-      responses:
-        '202': { description: All updates accepted }
-        '207': { description: Partial success }
-
-  /documents/{documentId}/compact:
-    post:
-      summary: Replace updates with merged snapshot
-
-  /documents/{documentId}/versions:
-    post:
-      summary: Create a named version
-    get:
-      summary: List versions
-
-  /documents/{documentId}/versions/{versionId}:
-    get:
-      summary: Load a specific version
-
-  /documents/{documentId}:
-    delete:
-      summary: Delete all document data
-
-  /health:
-    get:
-      summary: Provider health check
 ```

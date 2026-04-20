@@ -1,6 +1,6 @@
 # collab-editor
 
-A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agnostic web component with a Go relay server.
+A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agnostic web component with a Go relay server and multi-language provider SDKs.
 
 ## Features
 
@@ -9,7 +9,7 @@ A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agn
 - **11 MIME types** — Markdown, HTML, JSX/TSX (with preview), JavaScript, TypeScript, Python, CSS, JSON, YAML, plain text
 - **Configurable UI** — Built-in toolbar with formatting buttons, status bar with presence avatars, document switcher
 - **60+ CSS custom properties** — Full theming with `--me-*` variables, `::part()` exports, dark mode, slot escape hatches
-- **Pluggable storage** — REST SPI for persistence (any language, any backend)
+- **Pluggable storage** — REST SPI for persistence with SDKs in Go, TypeScript, and Python
 - **Multi-instance scaling** — Redis pub/sub for horizontal scaling on Cloud Run / Kubernetes
 - **Dual transport** — WebSocket (direct browser) and gRPC (service-to-service, e.g., Socket.io bridge)
 - **Socket.io support** — Frontend `SocketIOProvider` for environments that use Socket.io instead of raw WebSocket
@@ -32,13 +32,14 @@ Browser ──WebSocket──> Go Relay ──HTTP──> Storage Provider (SPI)
 Browser ──Socket.io──> ws-gateway ──gRPC──> Go Relay
 ```
 
-**Three components:**
+**Four components:**
 
 | Component | Language | Purpose |
 |-----------|----------|---------|
 | `<multi-editor>` | TypeScript (Lit) | Web component with Tiptap + CodeMirror + Yjs |
 | Relay Server | Go | WebSocket + gRPC relay, room management, buffer/flush |
 | Storage Provider | Any | REST SPI for document persistence |
+| Provider SDKs | Go, TS, Python | Handle Yjs diffs, HTTP routing, Y.Doc caching |
 
 The relay is stateless — it does NOT maintain server-side Y.Docs. Peers sync directly through it via the y-websocket protocol. All persistence is delegated to the storage provider via HTTP REST.
 
@@ -117,6 +118,42 @@ multi-editor::part(editor-area) { padding: 2rem; }
 | `text/jsx`, `text/tsx` | preview, source | PreviewSourceBinding |
 | `text/javascript`, `text/typescript`, `text/x-python`, `text/css`, `application/json`, `text/yaml`, `text/plain` | source | SourceOnlyBinding |
 
+## Storage Provider SDKs
+
+Build your own storage backend using the provider SDKs. Each SDK handles Yjs diff extraction, HTTP routing, Y.Doc caching, and state encoding — you only implement `read`/`write` for your storage.
+
+| SDK | Package | Framework | Install |
+|-----|---------|-----------|---------|
+| **Go** | `pkg/spi` | net/http (built-in) | `go get github.com/imyousuf/collab-editor/pkg/spi` |
+| **TypeScript** | `@imyousuf/collab-editor-provider` | Express | `npm install @imyousuf/collab-editor-provider` |
+| **Python** | `collab-editor-provider` | FastAPI | `pip install collab-editor-provider` |
+
+Quick example (Go):
+
+```go
+type MyProvider struct{}
+
+func (p *MyProvider) Load(ctx context.Context, id string) (*spi.LoadResponse, error) {
+    content, _ := readFromDB(ctx, id)
+    return &spi.LoadResponse{Content: content, MimeType: "text/plain"}, nil
+}
+
+func (p *MyProvider) Store(ctx context.Context, id string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
+    appendToDB(ctx, id, updates)
+    return &spi.StoreResponse{Stored: len(updates)}, nil
+}
+
+func (p *MyProvider) Health(ctx context.Context) (*spi.HealthResponse, error) {
+    return &spi.HealthResponse{Status: "ok"}, nil
+}
+
+func main() {
+    http.ListenAndServe(":8081", spi.NewHTTPHandler(&MyProvider{}))
+}
+```
+
+See the [Provider SDK Guide](docs/provider-sdk.md) for TypeScript, Python examples, and the dual storage strategy (raw updates vs resolved text).
+
 ## Configuration
 
 ### Toolbar
@@ -156,18 +193,6 @@ Environment variables or `config/relay.yaml`:
 | `COLLAB_REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
 | `COLLAB_STORAGE_PROVIDER_URL` | `http://localhost:8081` | Storage provider base URL |
 
-## Storage Provider SPI
-
-The relay communicates with the storage provider via REST. Required endpoints:
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Health check |
-| `/documents/load?path={documentId}` | POST | Load document state for room bootstrap |
-| `/documents/updates?path={documentId}` | POST | Persist batched incremental updates |
-
-See [docs/research/collab-editor-http-spi.md](docs/research/collab-editor-http-spi.md) for the full SPI contract.
-
 ## Development
 
 ```bash
@@ -184,6 +209,11 @@ npm run dev             # Dev server on :5173
 npm run build           # Production build (tsc + vite)
 npm test                # Run vitest (269 tests)
 
+# Provider SDKs
+cd packages/provider-sdk-ts && npm test    # 41 tests
+cd packages/provider-sdk-py && pytest -v   # 52 tests
+cd packages/grpc-client-ts && npm test     # 4 tests
+
 # Full stack
 docker compose up --build
 make test-e2e           # ATR browser tests
@@ -193,7 +223,10 @@ make test-e2e           # ATR browser tests
 
 | Artifact | Registry | Install |
 |----------|----------|---------|
-| npm package | GitHub Packages | `npm install @imyousuf/collab-editor` |
+| Frontend npm package | GitHub Packages | `npm install @imyousuf/collab-editor` |
+| TS Provider SDK | GitHub Packages | `npm install @imyousuf/collab-editor-provider` |
+| gRPC TS Client | GitHub Packages | `npm install @imyousuf/collab-editor-grpc` |
+| Python Provider SDK | PyPI | `pip install collab-editor-provider` |
 | Docker images | GHCR | `docker pull ghcr.io/imyousuf/collab-editor/relay:dev` |
 | Go module | GitHub | `go get github.com/imyousuf/collab-editor` |
 | Proto stubs | Buf Schema Registry | `buf generate buf.build/imyousuf/collab-editor` |
@@ -212,14 +245,18 @@ CI publishes `:dev` / `@dev` on every push to main. Release tags publish version
 | JSX/TSX Preview | Babel standalone + React 18 (iframe) |
 | Relay Server | Go (coder/websocket, gRPC, chi, koanf, Prometheus) |
 | Multi-instance | Redis pub/sub (go-redis) |
+| Provider SDK (TS) | yjs + lib0 (Yjs diff application) |
+| Provider SDK (Py) | pycrdt (Rust Yjs bindings) |
+| Provider SDK (Go) | net/http (opaque update passthrough) |
 | Frontend Tests | Vitest (269 tests across 14 files) |
 | Backend Tests | Go testing + miniredis |
-| CI/CD | GitHub Actions (CI, npm publish, Docker publish, proto lint) |
+| CI/CD | GitHub Actions (CI, npm publish, PyPI publish, Docker publish, proto lint) |
 
 ## Documentation
 
-- [Editor Architecture Research](docs/research/collaborative-editor-architecture.md)
-- [HTTP Storage Provider SPI](docs/research/collab-editor-http-spi.md)
+- [Provider SDK Guide](docs/provider-sdk.md) — Go, TypeScript, Python SDKs for building storage providers
+- [HTTP Storage Provider SPI](docs/research/collab-editor-http-spi.md) — Full REST contract specification
+- [Editor Architecture Research](docs/research/collaborative-editor-architecture.md) — Design decisions and architecture overview
 
 ## License
 

@@ -2,17 +2,18 @@
 
 ## Project Overview
 
-A collaborative editor system with three components:
+A collaborative editor system with four components:
 1. **Web Component** (`<multi-editor>`) — Lit-based custom element with Tiptap v3 (WYSIWYG) and CodeMirror 6 (source editing), using Yjs CRDTs for real-time collaboration. Built-in configurable toolbar, status bar, formatting buttons, document switcher, and collaborator presence.
 2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Persistence delegated to an external HTTP storage provider.
-3. **Storage Provider SPI** — Pluggable REST API contract for document persistence (any language, any backend).
+3. **Storage Provider SPI** — Pluggable REST API contract for document persistence (any language, any backend). Document IDs passed via `?path=` query parameter.
+4. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs that handle Yjs diff application, HTTP routing, and Y.Doc caching. Implementors only write `read`/`write` for their storage.
 
 ## Project Structure
 
 ```
 cmd/relay/             — Go relay server entrypoint
-cmd/demo-provider/     — Demo storage provider entrypoint (reference implementation)
-pkg/spi/               — Shared SPI types (public, importable by external providers)
+cmd/demo-provider/     — Demo storage provider (reference implementation using Go SDK)
+pkg/spi/               — Go provider SDK: Provider interface, NewHTTPHandler(), types
 pkg/relayapi/v1/       — gRPC proto definition + generated Go stubs
 internal/relay/        — Relay server: transport, rooms, peers, buffer, flush, metrics
   transport.go         — Transport/Conn/ConnectionHandler interfaces
@@ -25,6 +26,25 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
   redis_flush_lock.go  — Redis SETNX distributed flush lock
 internal/provider/     — HTTP client for the storage provider SPI
 internal/storagedemo/  — Demo filesystem-based storage provider
+  store.go             — FileStore implementing spi.Provider + OptionalDelete + OptionalList
+  server.go            — chi router: spi.NewHTTPHandler() + bearer auth + compact endpoint
+  config.go            — koanf config loader
+  handler_compact.go   — Extra compact endpoint (not in SDK)
+packages/              — SDK packages
+  provider-sdk-ts/     — TypeScript provider SDK (@imyousuf/collab-editor-provider)
+    src/engine.ts      — Yjs diff extraction, Y.Doc management, LRU cache
+    src/provider.ts    — Provider interface + ProviderProcessor
+    src/handler.ts     — Express router factory + standalone server
+    src/types.ts       — SPI types
+  provider-sdk-py/     — Python provider SDK (collab-editor-provider)
+    collab_editor_provider/engine.py    — pycrdt-based Yjs engine
+    collab_editor_provider/provider.py  — Provider ABC + ProviderProcessor
+    collab_editor_provider/handler.py   — FastAPI router factory
+    collab_editor_provider/cache.py     — LRU DocCache
+    collab_editor_provider/types.py     — Dataclass types
+  grpc-client-ts/      — gRPC TypeScript client (@imyousuf/collab-editor-grpc)
+    src/index.ts       — createRelayClient(), checkHealth(), PROTO_PATH
+    proto/relay.proto  — Bundled proto file
 frontend/src/          — Lit web component (TypeScript)
   interfaces/          — IEditorBinding, IContentHandler, ICollaborationProvider,
                          IFormattingCapability, ToolbarConfig, StatusBarConfig, events
@@ -36,13 +56,14 @@ frontend/src/          — Lit web component (TypeScript)
   react/               — React wrapper via @lit/react
   registry.ts          — EditorBindingFactory + MIME-type registration
   multi-editor.ts      — <multi-editor> Lit orchestrator
+test/fixtures/         — 10 shared JSON test fixtures generated from canonical yjs
 config/                — Default YAML configs for relay and provider
 docker/                — Dockerfiles and nginx config
 examples/basic/        — Docker Compose example with seed documents
 examples/react-app/    — React integration example
 tests/e2e/             — ATR browser test files
-docs/research/         — Architecture research and SPI contract specs
-.github/workflows/     — CI, npm publish, Docker publish, proto lint/push
+docs/                  — Provider SDK guide and SPI contract spec
+.github/workflows/     — CI, npm publish, PyPI publish, Docker publish, proto lint/push
 buf.yaml, buf.gen.yaml — Buf proto config and codegen
 ```
 
@@ -60,6 +81,11 @@ make proto              # Generate gRPC stubs (requires buf CLI)
 cd frontend && npm install && npm run dev   # Dev server on :5173
 cd frontend && npm run build                # Production build (tsc + vite)
 cd frontend && npm test                     # Run vitest (269 tests)
+
+# Provider SDKs
+cd packages/provider-sdk-ts && npm test     # 41 tests
+cd packages/provider-sdk-py && pytest -v    # 52 tests
+cd packages/grpc-client-ts && npm test      # 4 tests
 
 # Docker (full stack)
 docker compose up --build                   # Start all 3 services
@@ -81,6 +107,8 @@ make test-e2e                               # Run ATR browser tests
 - CSS custom properties (`--me-*`) define all visual values. Dark mode via `:host([theme="dark"])`. `::part()` exports on all structural sections
 - Multi-instance scaling via Redis pub/sub: broker peer pattern adds a synthetic peer to each room that relays messages cross-instance without changing Room code
 - Distributed flush lock (Redis SETNX + Lua release) ensures only one instance flushes per document
+- Provider SDKs support dual storage: raw updates mode (append-only journal) and/or resolved text mode (SDK applies Yjs diffs, gives you plain text)
+- The demo provider implements `spi.Provider`, `spi.OptionalDelete`, and `spi.OptionalList`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
 
 ## Conventions
 
@@ -91,7 +119,10 @@ make test-e2e                               # Run ATR browser tests
 - Use `coder/websocket` (not `nhooyr.io/websocket` which is deprecated)
 - Prometheus metrics use a per-instance registry (not global) to support testing
 - Proto stubs generated with `buf generate` and committed to the repo
-- npm package published to GitHub Packages as `@imyousuf/collab-editor`
-- Docker images published to GHCR as `ghcr.io/imyousuf/collab-editor/{relay,provider}`
-- CI runs on every push: Go tests + vet, frontend build + tests
+- npm packages published to GitHub Packages (`@imyousuf/collab-editor`, `@imyousuf/collab-editor-provider`, `@imyousuf/collab-editor-grpc`)
+- Python package published to PyPI as `collab-editor-provider`
+- Docker images published to GHCR as `ghcr.io/imyousuf/collab-editor/{relay,demo-provider}`
+- CI runs on every push: Go tests + vet, frontend build + tests, all SDK tests
 - CSS custom properties use `--me-` prefix (me = multi-editor)
+- All provider SDKs share the same 10 JSON test fixtures (`test/fixtures/`) generated from canonical yjs for cross-language consistency
+- SPI endpoints use `?path=` query parameter for document IDs (not path segments)
