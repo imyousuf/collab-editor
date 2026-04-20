@@ -92,26 +92,27 @@ export class BlameEngine {
     localStorage.removeItem(STORAGE_KEY_PREFIX + this._documentId);
   }
 
-  /** Build blame segments from stored live blame entries. */
+  /** Build blame segments from the live Y.Doc's current state. */
   getLiveBlame(): BlameSegment[] {
-    const entries = this._loadEntries();
-    if (entries.length === 0) return [];
-
-    // Build client-ID-to-user map from captured entries
+    // Build client-ID-to-user map from stored entries + awareness
     const clientToUser = new Map<number, string>();
-    for (const entry of entries) {
+    for (const entry of this._loadEntries()) {
       clientToUser.set(entry.clientId, entry.userName);
     }
-
-    // Replay updates onto a fresh doc
-    const replayDoc = new Y.Doc();
-    const text = replayDoc.getText('source');
-    for (const entry of entries) {
-      const update = base64ToUint8Array(entry.update);
-      Y.applyUpdate(replayDoc, update);
+    // Also read from awareness for live connected users
+    if (this._awareness) {
+      const states = this._awareness.getStates?.() as Map<number, any> | undefined;
+      if (states) {
+        states.forEach((state: any, clientId: number) => {
+          if (state?.user?.name) {
+            clientToUser.set(clientId, state.user.name);
+          }
+        });
+      }
     }
 
-    // Iterate text items to build blame
+    // Use the LIVE doc's Y.Text — its items have the correct client IDs
+    const text = this._ydoc.getText('source');
     return this._extractBlameFromText(text, clientToUser);
   }
 

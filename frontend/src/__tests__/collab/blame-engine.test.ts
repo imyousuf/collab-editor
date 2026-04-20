@@ -137,5 +137,67 @@ describe('BlameEngine', () => {
       // Should have exactly 1 entry, not 2
       expect(entries.length).toBe(1);
     });
+
+    test('getLiveBlame reads from live doc items, not replay', () => {
+      // Pre-populate the doc with some content BEFORE starting blame
+      doc.getText('source').insert(0, 'existing content');
+
+      engine.startLiveBlame();
+
+      // getLiveBlame should return segments for existing content
+      // even though blame was started after the content was inserted
+      const blame = engine.getLiveBlame();
+      expect(blame.length).toBeGreaterThan(0);
+      expect(blame[0].start).toBe(0);
+      expect(blame[0].end).toBe(16); // "existing content"
+    });
+
+    test('getLiveBlame uses awareness for user names', () => {
+      const awareness = {
+        getStates: () => {
+          const map = new Map();
+          map.set(doc.clientID, { user: { name: 'alice' } });
+          return map;
+        },
+      };
+      engine.setAwareness(awareness);
+
+      doc.getText('source').insert(0, 'hello');
+      engine.startLiveBlame();
+
+      const blame = engine.getLiveBlame();
+      expect(blame.length).toBeGreaterThan(0);
+      expect(blame[0].userName).toBe('alice');
+    });
+
+    test('getLiveBlame shows different users for multi-client content', () => {
+      // Simulate two clients editing the same doc
+      const doc2 = new Y.Doc();
+      const text2 = doc2.getText('source');
+
+      // Client 1 types "hello"
+      doc.getText('source').insert(0, 'hello');
+
+      // Sync doc1 -> doc2
+      const update1 = Y.encodeStateAsUpdate(doc);
+      Y.applyUpdate(doc2, update1);
+
+      // Client 2 types " world"
+      text2.insert(5, ' world');
+
+      // Sync doc2 -> doc1
+      const update2 = Y.encodeStateAsUpdate(doc2);
+      Y.applyUpdate(doc, update2);
+
+      engine.startLiveBlame();
+      const blame = engine.getLiveBlame();
+
+      // Should have 2 segments (different client IDs)
+      expect(blame.length).toBe(2);
+      // The user names will be user-{clientId} since no awareness mapping
+      expect(blame[0].userName).not.toBe(blame[1].userName);
+
+      doc2.destroy();
+    });
   });
 });
