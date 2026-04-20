@@ -11,7 +11,7 @@ A collaborative editor system with three components:
 
 ```
 cmd/relay/             — Go relay server entrypoint
-cmd/provider/          — Demo storage provider entrypoint
+cmd/demo-provider/     — Demo storage provider entrypoint (reference implementation)
 pkg/spi/               — Shared SPI types (public, importable by external providers)
 pkg/relayapi/v1/       — gRPC proto definition + generated Go stubs
 internal/relay/        — Relay server: transport, rooms, peers, buffer, flush, metrics

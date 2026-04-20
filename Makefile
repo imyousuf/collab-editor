@@ -9,7 +9,7 @@ relay:
 	$(GO) build -o $(BIN_DIR)/relay ./cmd/relay
 
 provider:
-	$(GO) build -o $(BIN_DIR)/provider ./cmd/provider
+	$(GO) build -o $(BIN_DIR)/provider ./cmd/demo-provider
 
 test:
 	$(GO) test -v -race -count=1 ./...
