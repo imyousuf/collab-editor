@@ -1,0 +1,57 @@
+name: Publish PyPI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/provider-sdk-py/**'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/provider-sdk-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build hatchling
+
+      - name: Set dev version
+        if: github.event_name == 'push'
+        run: |
+          SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
+          sed -i "s/version = \"0.1.0\"/version = \"0.1.0.dev${SHORT_SHA}\"/" pyproject.toml
+
+      - name: Set release version
+        if: github.event_name == 'release'
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          sed -i "s/version = \"0.1.0\"/version = \"${VERSION}\"/" pyproject.toml
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        if: github.event_name == 'release'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/provider-sdk-py/dist/
+
+      - name: Publish to TestPyPI (dev)
+        if: github.event_name == 'push'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/provider-sdk-py/dist/
+          repository-url: https://test.pypi.org/legacy/

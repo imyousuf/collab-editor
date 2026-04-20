@@ -1,13 +1,23 @@
 # Go
 bin/
 *.exe
+demo-provider
+relay
 
 # Node
 node_modules/
-frontend/dist/
+dist/
+packages/*/node_modules/
 frontend/node_modules/
 examples/react-app/node_modules/
 examples/react-app/dist/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+*.eggs/
+.pytest_cache/
 
 # IDE
 .idea/

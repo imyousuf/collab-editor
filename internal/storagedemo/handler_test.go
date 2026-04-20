@@ -62,10 +62,16 @@ func TestHealth(t *testing.T) {
 
 func TestLoad_NewDocument(t *testing.T) {
 	srv, _ := newTestServer(t)
-	resp := doRequest(t, srv, "POST", "/documents/load?path=new-doc.md", spi.LoadRequest{})
+	resp := doRequest(t, srv, "POST", "/documents/load?path=new-doc.md", nil)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("expected 204, got %d", resp.StatusCode)
+	// SDK returns 200 with empty LoadResponse for non-existent documents
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	var loadResp spi.LoadResponse
+	json.NewDecoder(resp.Body).Decode(&loadResp)
+	if loadResp.Content != "" {
+		t.Errorf("expected empty content, got %q", loadResp.Content)
 	}
 }
 
@@ -76,7 +82,7 @@ func TestLoad_ExistingDocument(t *testing.T) {
 	content := "# Test Document\n\nHello world."
 	os.WriteFile(filepath.Join(store.baseDir, "test.md"), []byte(content), 0o644)
 
-	resp := doRequest(t, srv, "POST", "/documents/load?path=test.md", spi.LoadRequest{})
+	resp := doRequest(t, srv, "POST", "/documents/load?path=test.md", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -114,8 +120,8 @@ func TestStoreUpdates_Success(t *testing.T) {
 		t.Errorf("stored: got %d, want 1", storeResp.Stored)
 	}
 
-	// Verify updates are returned via load (not in Content, but in Updates)
-	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
+	// Verify updates are returned via load
+	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", nil)
 	defer loadResp.Body.Close()
 	var lr spi.LoadResponse
 	json.NewDecoder(loadResp.Body).Decode(&lr)
@@ -135,8 +141,14 @@ func TestStoreUpdates_EmptyBody(t *testing.T) {
 	req := spi.StoreRequest{Updates: []spi.UpdatePayload{}}
 	resp := doRequest(t, srv, "POST", "/documents/updates?path=doc.md", req)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", resp.StatusCode)
+	// SDK passes empty slice to Store, which returns {stored: 0} with 202
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("expected 202, got %d", resp.StatusCode)
+	}
+	var storeResp spi.StoreResponse
+	json.NewDecoder(resp.Body).Decode(&storeResp)
+	if storeResp.Stored != 0 {
+		t.Errorf("stored: got %d, want 0", storeResp.Stored)
 	}
 }
 
@@ -146,15 +158,21 @@ func TestDeleteDocument_Handler(t *testing.T) {
 
 	resp := doRequest(t, srv, "DELETE", "/documents?path=doc.md", nil)
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("expected 204, got %d", resp.StatusCode)
+	// SDK returns 200 on successful delete
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Verify deleted
-	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
+	// Verify deleted — load returns empty content
+	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", nil)
 	defer loadResp.Body.Close()
-	if loadResp.StatusCode != http.StatusNoContent {
-		t.Errorf("expected 204 after delete, got %d", loadResp.StatusCode)
+	if loadResp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 after delete, got %d", loadResp.StatusCode)
+	}
+	var lr spi.LoadResponse
+	json.NewDecoder(loadResp.Body).Decode(&lr)
+	if lr.Content != "" {
+		t.Errorf("expected empty content after delete, got %q", lr.Content)
 	}
 }
 
@@ -204,7 +222,7 @@ func TestLoad_IncludesMimeType(t *testing.T) {
 	srv, store := newTestServer(t)
 	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Test"), 0o644)
 
-	resp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
+	resp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -255,5 +273,41 @@ func TestHealth_NoAuth(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("health should not require auth, got %d", resp.StatusCode)
+	}
+}
+
+func TestDetectMimeType(t *testing.T) {
+	tests := []struct {
+		name     string
+		expected string
+	}{
+		{"welcome.md", "text/markdown"},
+		{"page.html", "text/html"},
+		{"index.htm", "text/html"},
+		{"script.py", "text/x-python"},
+		{"app.jsx", "text/jsx"},
+		{"main.js", "text/javascript"},
+		{"component.tsx", "text/tsx"},
+		{"main.ts", "text/typescript"},
+		{"styles.css", "text/css"},
+		{"config.json", "application/json"},
+		{"data.xml", "application/xml"},
+		{"config.yaml", "text/yaml"},
+		{"config.yml", "text/yaml"},
+		{"main.go", "text/x-go"},
+		{"lib.rs", "text/x-rust"},
+		{"App.java", "text/x-java"},
+		{"readme.txt", "text/plain"},
+		{"unknown.xyz", "text/plain"},
+		{"noextension", "text/plain"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectMimeType(tt.name)
+			if got != tt.expected {
+				t.Errorf("detectMimeType(%q) = %q, want %q", tt.name, got, tt.expected)
+			}
+		})
 	}
 }

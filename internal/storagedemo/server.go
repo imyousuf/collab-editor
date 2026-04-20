@@ -6,26 +6,36 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/imyousuf/collab-editor/pkg/spi"
 )
 
 // NewServer creates the HTTP server for the demo storage provider.
+// Core SPI endpoints are handled by spi.NewHTTPHandler (the Go SDK).
+// Auth middleware and the extra /documents/compact endpoint are layered on top.
 func NewServer(store *FileStore, authToken string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
-	h := &handlers{store: store}
+	// The SDK handler implements all standard SPI routes.
+	spiHandler := spi.NewHTTPHandler(store)
 
-	r.Get("/health", h.health)
+	// Health is public — no auth required.
+	r.Get("/health", spiHandler.ServeHTTP)
 
+	// All document routes require auth.
 	r.Group(func(r chi.Router) {
 		r.Use(bearerAuth(authToken))
-		r.Get("/documents", h.listDocuments)
-		r.Post("/documents/load", h.load)
-		r.Post("/documents/updates", h.storeUpdates)
-		r.Post("/documents/compact", h.compact)
-		r.Delete("/documents", h.deleteDoc)
+
+		// Delegate standard SPI document endpoints to the SDK handler.
+		r.Post("/documents/load", spiHandler.ServeHTTP)
+		r.Post("/documents/updates", spiHandler.ServeHTTP)
+		r.Delete("/documents", spiHandler.ServeHTTP)
+		r.Get("/documents", spiHandler.ServeHTTP)
+
+		// Extra endpoint not in the SDK.
+		r.Post("/documents/compact", compactHandler(store))
 	})
 
 	return r
@@ -42,8 +52,4 @@ func bearerAuth(token string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-type handlers struct {
-	store *FileStore
 }

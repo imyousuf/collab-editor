@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package relayapi.v1;
+
+option go_package = "github.com/imyousuf/collab-editor/pkg/relayapi/v1;relayapiv1";
+
+// RelayService provides real-time collaborative editing relay.
+service RelayService {
+  // JoinRoom opens a bidirectional stream for a document room.
+  // The first message from the client MUST set document_id (join handshake).
+  // Subsequent messages carry only payload (raw Yjs binary frames).
+  rpc JoinRoom(stream RoomMessage) returns (stream RoomMessage);
+
+  // Health returns the relay's health status.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// RoomMessage is the envelope for bidirectional streaming.
+message RoomMessage {
+  // document_id is set only on the first message from client to server (join).
+  string document_id = 1;
+
+  // payload is the raw Yjs binary frame (sync, awareness, etc).
+  bytes payload = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

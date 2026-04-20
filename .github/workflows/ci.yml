@@ -36,3 +36,48 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  provider-sdk-ts-ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/provider-sdk-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: packages/provider-sdk-ts/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  grpc-client-ts-ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/grpc-client-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: packages/grpc-client-ts/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  provider-sdk-py-ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/provider-sdk-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest tests/ -v

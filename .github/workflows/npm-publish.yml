@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'frontend/**'
+      - 'packages/provider-sdk-ts/**'
+      - 'packages/grpc-client-ts/**'
   release:
     types: [published]
 
@@ -13,7 +15,7 @@ permissions:
   packages: write
 
 jobs:
-  publish:
+  publish-frontend:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -26,6 +28,84 @@ jobs:
           registry-url: 'https://npm.pkg.github.com'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+      - name: Set dev version
+        if: github.event_name == 'push'
+        run: npm version "0.1.0-dev.$(echo $GITHUB_SHA | cut -c1-7)" --no-git-tag-version
+
+      - name: Set release version
+        if: github.event_name == 'release'
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Publish dev
+        if: github.event_name == 'push'
+        run: npm publish --tag dev
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish release
+        if: github.event_name == 'release'
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-provider-sdk-ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/provider-sdk-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://npm.pkg.github.com'
+          cache: 'npm'
+          cache-dependency-path: packages/provider-sdk-ts/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+      - name: Set dev version
+        if: github.event_name == 'push'
+        run: npm version "0.1.0-dev.$(echo $GITHUB_SHA | cut -c1-7)" --no-git-tag-version
+
+      - name: Set release version
+        if: github.event_name == 'release'
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Publish dev
+        if: github.event_name == 'push'
+        run: npm publish --tag dev
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish release
+        if: github.event_name == 'release'
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-grpc-client-ts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/grpc-client-ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://npm.pkg.github.com'
+          cache: 'npm'
+          cache-dependency-path: packages/grpc-client-ts/package-lock.json
       - run: npm ci
       - run: npm run build
 

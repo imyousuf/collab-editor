@@ -2,6 +2,7 @@ package storagedemo
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -162,3 +163,104 @@ func (fs *FileStore) Healthy() bool {
 	os.Remove(testFile)
 	return true
 }
+
+// --- spi.Provider implementation ---
+
+// Load implements spi.Provider.
+func (fs *FileStore) Load(_ context.Context, documentID string) (*spi.LoadResponse, error) {
+	resp, err := fs.LoadDocument(documentID)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return &spi.LoadResponse{}, nil
+	}
+	resp.MimeType = detectMimeType(documentID)
+	return resp, nil
+}
+
+// Store implements spi.Provider.
+func (fs *FileStore) Store(_ context.Context, documentID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
+	return fs.StoreUpdates(documentID, updates)
+}
+
+// Health implements spi.Provider.
+func (fs *FileStore) Health(_ context.Context) (*spi.HealthResponse, error) {
+	resp := &spi.HealthResponse{Status: "ok", Storage: "connected"}
+	if !fs.Healthy() {
+		resp.Status = "degraded"
+		resp.Storage = "disconnected"
+	}
+	return resp, nil
+}
+
+// --- spi.OptionalDelete implementation ---
+
+// Delete implements spi.OptionalDelete.
+func (fs *FileStore) Delete(_ context.Context, documentID string) error {
+	return fs.DeleteDocument(documentID)
+}
+
+// --- spi.OptionalList implementation ---
+
+// ListDocuments implements spi.OptionalList.
+func (fs *FileStore) ListDocuments(_ context.Context) ([]spi.DocumentListEntry, error) {
+	entries, err := os.ReadDir(fs.baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("listing documents: %w", err)
+	}
+
+	var docs []spi.DocumentListEntry
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == ".health-check" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		docs = append(docs, spi.DocumentListEntry{
+			Name:     e.Name(),
+			Size:     info.Size(),
+			MimeType: detectMimeType(e.Name()),
+		})
+	}
+	return docs, nil
+}
+
+// --- MIME type detection ---
+
+var mimeTypes = map[string]string{
+	".md":   "text/markdown",
+	".html": "text/html",
+	".htm":  "text/html",
+	".py":   "text/x-python",
+	".js":   "text/javascript",
+	".jsx":  "text/jsx",
+	".ts":   "text/typescript",
+	".tsx":  "text/tsx",
+	".css":  "text/css",
+	".json": "application/json",
+	".xml":  "application/xml",
+	".yaml": "text/yaml",
+	".yml":  "text/yaml",
+	".go":   "text/x-go",
+	".rs":   "text/x-rust",
+	".java": "text/x-java",
+	".txt":  "text/plain",
+}
+
+func detectMimeType(name string) string {
+	ext := filepath.Ext(name)
+	if mt, ok := mimeTypes[ext]; ok {
+		return mt
+	}
+	return "text/plain"
+}
+
+// Compile-time interface assertions.
+var (
+	_ spi.Provider     = (*FileStore)(nil)
+	_ spi.OptionalDelete = (*FileStore)(nil)
+	_ spi.OptionalList   = (*FileStore)(nil)
+)
