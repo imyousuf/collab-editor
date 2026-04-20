@@ -81,6 +81,18 @@ export class PreviewSourceBinding implements IEditorBinding {
     this._showMode(mode);
     this._mounted = true;
     this._activeMode = mode;
+
+    // If mounting in preview mode, render current content.
+    // Handles the race where Y.Text was already populated (from stored messages)
+    // and yCollab synced it during SourceEditorInstance construction — that
+    // onUpdate fires before _activeMode/_previewRenderer are set, so the
+    // render guard skips it. This catches up.
+    if (mode === 'preview' && this._previewRenderer && this._sourceEditor) {
+      const content = this._sourceEditor.getContent();
+      if (content) {
+        this._previewRenderer.render(content);
+      }
+    }
   }
 
   unmount(): void {

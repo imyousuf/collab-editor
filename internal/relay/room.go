@@ -122,30 +122,33 @@ func (r *Room) handleMessage(sender *Peer, data []byte) {
 // StartFlushLoop runs the periodic flush goroutine.
 // Flushes buffered updates to the storage provider on a timer or when
 // the buffer exceeds FlushMaxBytes. Performs a final flush on close.
-func (r *Room) StartFlushLoop(ctx context.Context) {
+//
+// The loop is tied to the room's lifecycle (closeCh), NOT to any
+// specific connection context. This ensures flushing continues even
+// after the first peer disconnects and new peers join later.
+func (r *Room) StartFlushLoop(storeTimeout time.Duration) {
 	ticker := time.NewTicker(r.config.FlushDebounce)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
-			r.flushBuffer(ctx)
-			return
 		case <-r.closeCh:
-			r.flushBuffer(ctx)
+			r.flushBuffer(storeTimeout)
 			return
 		case <-ticker.C:
-			r.flushBuffer(ctx)
+			r.flushBuffer(storeTimeout)
 		case <-r.flushCh:
-			r.flushBuffer(ctx)
+			r.flushBuffer(storeTimeout)
 		}
 	}
 }
 
-func (r *Room) flushBuffer(ctx context.Context) {
+func (r *Room) flushBuffer(storeTimeout time.Duration) {
 	if r.flusher == nil || r.buffer.Len() == 0 {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
 	requeue := r.flusher.Flush(ctx, r.documentID, r.buffer)
 	if len(requeue) > 0 {
 		r.buffer.Prepend(requeue)

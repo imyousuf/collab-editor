@@ -70,8 +70,9 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 			}
 		}
 
-		// Start the flush goroutine for this room
-		go room.StartFlushLoop(ctx)
+		// Start the flush goroutine for this room — uses its own
+		// background context so it survives individual connection closures.
+		go room.StartFlushLoop(s.config.Storage.StoreTimeout)
 
 		return nil
 	})

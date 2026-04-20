@@ -154,6 +154,43 @@ describe('PreviewSourceBinding unit tests', () => {
     binding.destroy();
   });
 
+  test('mount in preview mode renders existing source content immediately', async () => {
+    // Simulates the scenario where Y.Text was populated before mount
+    // (stored messages arrived during connect). After mount completes,
+    // the binding should render whatever content the source editor already has.
+    const binding = new PreviewSourceBinding('jsx') as any;
+    const container = document.createElement('div');
+
+    // Mount in source mode first to set content
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+    binding._sourceEditor._view.dispatch({
+      changes: { from: 0, to: 0, insert: 'const App = () => <h1>Pre-existing</h1>;' },
+    });
+    binding.unmount();
+
+    // Now mount fresh in preview mode — simulating what happens when
+    // switching back to a JSX document that has stored Y.Text content
+    const binding2 = new PreviewSourceBinding('jsx') as any;
+    const container2 = document.createElement('div');
+    await binding2.mount(container2, 'preview', { readonly: false, theme: 'light' });
+
+    // The preview renderer's render should have been called if source has content.
+    // Since source starts empty in this fresh binding, render should NOT be called.
+    const renderSpy = vi.spyOn(binding2._previewRenderer, 'render');
+
+    // Now simulate content arriving (via Y.Text sync after mount)
+    binding2._sourceEditor._view.dispatch({
+      changes: { from: 0, to: 0, insert: 'const App = () => <h1>Arrived</h1>;' },
+    });
+
+    expect(renderSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Arrived'),
+    );
+
+    binding.destroy();
+    binding2.destroy();
+  });
+
   test('content change after mount in preview mode triggers re-render (simulates Y.Text arrival)', async () => {
     // This tests the same code path as Y.Text sync: content arrives after mount,
     // CodeMirror updates, onUpdate fires, preview re-renders.

@@ -276,12 +276,9 @@ func TestRoom_FlushLoop_FlushesOnTimer(t *testing.T) {
 	// Add a sync message to buffer
 	room.buffer.Append([]byte{0x00, 0x02, 0x01}, 0)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	done := make(chan struct{})
 	go func() {
-		room.StartFlushLoop(ctx)
+		room.StartFlushLoop(5 * time.Second)
 		close(done)
 	}()
 
@@ -292,7 +289,7 @@ func TestRoom_FlushLoop_FlushesOnTimer(t *testing.T) {
 		t.Errorf("buffer should be drained by flush loop, got Len() = %d", room.buffer.Len())
 	}
 
-	cancel()
+	room.Close()
 	<-done
 }
 
@@ -304,10 +301,9 @@ func TestRoom_FlushLoop_FinalFlushOnClose(t *testing.T) {
 	room.buffer.Append([]byte{0x00, 0x02, 0x01}, 0)
 	room.buffer.Append([]byte{0x00, 0x02, 0x02}, 0)
 
-	ctx := context.Background()
 	done := make(chan struct{})
 	go func() {
-		room.StartFlushLoop(ctx)
+		room.StartFlushLoop(5 * time.Second)
 		close(done)
 	}()
 
@@ -318,6 +314,38 @@ func TestRoom_FlushLoop_FinalFlushOnClose(t *testing.T) {
 	if room.buffer.Len() != 0 {
 		t.Errorf("buffer should be drained on close, got Len() = %d", room.buffer.Len())
 	}
+}
+
+func TestRoom_FlushLoop_IndependentOfConnectionContext(t *testing.T) {
+	room, _ := newTestRoom(t)
+	room.config.FlushDebounce = 50 * time.Millisecond
+
+	done := make(chan struct{})
+	go func() {
+		room.StartFlushLoop(5 * time.Second)
+		close(done)
+	}()
+
+	// Simulate: first peer sends a message then disconnects
+	room.buffer.Append([]byte{0x00, 0x02, 0x01}, 0)
+	time.Sleep(100 * time.Millisecond)
+
+	// Buffer should have been flushed by the ticker
+	if room.buffer.Len() != 0 {
+		t.Errorf("first batch should have flushed, got Len() = %d", room.buffer.Len())
+	}
+
+	// Simulate: second peer connects later and sends new messages.
+	// The flush loop must still be alive to flush these.
+	room.buffer.Append([]byte{0x00, 0x02, 0x02}, 0)
+	time.Sleep(100 * time.Millisecond)
+
+	if room.buffer.Len() != 0 {
+		t.Errorf("second batch should have flushed, got Len() = %d", room.buffer.Len())
+	}
+
+	room.Close()
+	<-done
 }
 
 func TestRoom_StoredMessages_SetAndSend(t *testing.T) {
