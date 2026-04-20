@@ -60,3 +60,6 @@ export type {
   CollaboratorInfo,
   StatusBarConfig,
 } from './toolbar-config.js';
+
+export type { IBlameCapability } from './blame.js';
+export { isBlameCapable } from './blame.js';

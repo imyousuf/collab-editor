@@ -21,11 +21,13 @@ import type {
   LinkParams,
 } from '../interfaces/formatting.js';
 import { ALL_FORMATTING_COMMANDS, emptyFormattingState } from '../interfaces/formatting.js';
+import type { IBlameCapability } from '../interfaces/blame.js';
+import type { BlameSegment } from '../collab/blame-engine.js';
 import { SourceEditorInstance } from './_source-editor.js';
 import { WysiwygEditorInstance } from './_wysiwyg-editor.js';
 import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
 
-export class DualModeBinding implements IEditorBinding, IFormattingCapability {
+export class DualModeBinding implements IEditorBinding, IFormattingCapability, IBlameCapability {
   readonly supportedModes: readonly EditorMode[] = ['wysiwyg', 'source'];
 
   private _activeMode: EditorMode | null = null;
@@ -237,6 +239,23 @@ export class DualModeBinding implements IEditorBinding, IFormattingCapability {
       link: editor.isActive('link'),
     };
     this._formattingCallbacks.forEach(cb => cb(state));
+  }
+
+  // --- IBlameCapability ---
+
+  enableBlame(segments: BlameSegment[]): void {
+    this._sourceEditor?.enableBlame(segments);
+    this._wysiwygEditor?.enableBlame(segments);
+  }
+
+  disableBlame(): void {
+    this._sourceEditor?.disableBlame();
+    this._wysiwygEditor?.disableBlame();
+  }
+
+  updateBlame(segments: BlameSegment[]): void {
+    this._sourceEditor?.updateBlame(segments);
+    this._wysiwygEditor?.updateBlame(segments);
   }
 
   destroy(): void {

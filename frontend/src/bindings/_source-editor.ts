@@ -5,6 +5,8 @@
 import { EditorView, keymap, lineNumbers } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
+import { createBlameExtensions, setBlameData } from '../collab/blame-cm-extension.js';
+import type { BlameSegment } from '../collab/blame-engine.js';
 import { markdown } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
@@ -42,6 +44,8 @@ export class SourceEditorInstance {
   private _view: EditorView;
   private _languageCompartment = new Compartment();
   private _readonlyCompartment = new Compartment();
+  private _blameCompartment = new Compartment();
+  private _blameActive = false;
   private _updateCallbacks: Set<(content: string) => void> = new Set();
 
   constructor(
@@ -71,6 +75,7 @@ export class SourceEditorInstance {
         }),
         ...themeExtensions,
         cssVarTheme,
+        this._blameCompartment.of([]),
       ],
     });
 
@@ -106,6 +111,31 @@ export class SourceEditorInstance {
   onUpdate(callback: (content: string) => void): () => void {
     this._updateCallbacks.add(callback);
     return () => this._updateCallbacks.delete(callback);
+  }
+
+  enableBlame(segments: BlameSegment[]): void {
+    if (!this._blameActive) {
+      this._view.dispatch({
+        effects: this._blameCompartment.reconfigure(createBlameExtensions()),
+      });
+      this._blameActive = true;
+    }
+    this._view.dispatch({ effects: setBlameData.of(segments) });
+  }
+
+  disableBlame(): void {
+    if (this._blameActive) {
+      this._view.dispatch({
+        effects: this._blameCompartment.reconfigure([]),
+      });
+      this._blameActive = false;
+    }
+  }
+
+  updateBlame(segments: BlameSegment[]): void {
+    if (this._blameActive) {
+      this._view.dispatch({ effects: setBlameData.of(segments) });
+    }
   }
 
   destroy(): void {
