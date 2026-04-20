@@ -13,6 +13,7 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import { basicSetup } from 'codemirror';
 import { yCollab } from 'y-codemirror.next';
 import type { CollaborationContext } from '../interfaces/editor-binding.js';
+import { cssVarTheme } from './_cm-theme.js';
 
 export interface SourceEditorOptions {
   language: string;
@@ -69,6 +70,7 @@ export class SourceEditorInstance {
           }
         }),
         ...themeExtensions,
+        cssVarTheme,
       ],
     });
 

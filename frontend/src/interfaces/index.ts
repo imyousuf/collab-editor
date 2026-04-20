@@ -39,3 +39,22 @@ export {
 } from './events.js';
 
 export type { IEditorBindingFactory } from './factory.js';
+
+export type {
+  FormattingCommand,
+  FormattingState,
+  LinkParams,
+  IFormattingCapability,
+} from './formatting.js';
+
+export {
+  isFormattingCapable,
+  ALL_FORMATTING_COMMANDS,
+  emptyFormattingState,
+} from './formatting.js';
+
+export type {
+  ToolbarGroup,
+  ToolbarConfig,
+  StatusBarConfig,
+} from './toolbar-config.js';

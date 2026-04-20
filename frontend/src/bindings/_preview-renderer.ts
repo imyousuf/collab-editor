@@ -12,7 +12,8 @@ export class PreviewRendererInstance {
 
   constructor(container: HTMLElement) {
     this._iframe = document.createElement('iframe');
-    this._iframe.style.cssText = 'width:100%;min-height:300px;border:none;background:#fff;';
+    this._iframe.classList.add('me-preview-iframe');
+    this._iframe.setAttribute('part', 'preview-iframe');
     container.appendChild(this._iframe);
 
     this._readyPromise = new Promise<void>((resolve) => {

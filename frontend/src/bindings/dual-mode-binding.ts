@@ -14,11 +14,18 @@ import type {
   RemoteChangeCallback,
 } from '../interfaces/editor-binding.js';
 import type { IContentHandler } from '../interfaces/content-handler.js';
+import type {
+  IFormattingCapability,
+  FormattingCommand,
+  FormattingState,
+  LinkParams,
+} from '../interfaces/formatting.js';
+import { ALL_FORMATTING_COMMANDS, emptyFormattingState } from '../interfaces/formatting.js';
 import { SourceEditorInstance } from './_source-editor.js';
 import { WysiwygEditorInstance } from './_wysiwyg-editor.js';
 import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
 
-export class DualModeBinding implements IEditorBinding {
+export class DualModeBinding implements IEditorBinding, IFormattingCapability {
   readonly supportedModes: readonly EditorMode[] = ['wysiwyg', 'source'];
 
   private _activeMode: EditorMode | null = null;
@@ -34,6 +41,7 @@ export class DualModeBinding implements IEditorBinding {
   private _language: string;
   private _contentCallbacks = new Set<ContentChangeCallback>();
   private _remoteCallbacks = new Set<RemoteChangeCallback>();
+  private _formattingCallbacks = new Set<(state: FormattingState) => void>();
 
   constructor(contentHandler: IContentHandler, language: string) {
     this._contentHandler = contentHandler;
@@ -58,7 +66,9 @@ export class DualModeBinding implements IEditorBinding {
 
     // Create sub-containers
     this._wysiwygContainer = document.createElement('div');
+    this._wysiwygContainer.setAttribute('part', 'wysiwyg-container');
     this._sourceContainer = document.createElement('div');
+    this._sourceContainer.setAttribute('part', 'source-container');
     container.appendChild(this._wysiwygContainer);
     container.appendChild(this._sourceContainer);
 
@@ -95,6 +105,10 @@ export class DualModeBinding implements IEditorBinding {
     this._wysiwygEditor.onUpdate((content) => {
       this._contentCallbacks.forEach(cb => cb(content));
     });
+
+    // Wire formatting state emission on selection/transaction changes
+    this._wysiwygEditor.editor.on('selectionUpdate', () => this._emitFormattingState());
+    this._wysiwygEditor.editor.on('transaction', () => this._emitFormattingState());
 
     this._showMode(mode);
     this._mounted = true;
@@ -164,10 +178,72 @@ export class DualModeBinding implements IEditorBinding {
     return () => this._remoteCallbacks.delete(callback);
   }
 
+  // --- IFormattingCapability ---
+
+  executeCommand(command: FormattingCommand, params?: LinkParams): void {
+    if (this._activeMode !== 'wysiwyg' || !this._wysiwygEditor) return;
+    const editor = this._wysiwygEditor.editor;
+    const chain = editor.chain().focus();
+
+    switch (command) {
+      case 'bold': chain.toggleBold().run(); break;
+      case 'italic': chain.toggleItalic().run(); break;
+      case 'strike': chain.toggleStrike().run(); break;
+      case 'code': chain.toggleCode().run(); break;
+      case 'heading1': chain.toggleHeading({ level: 1 }).run(); break;
+      case 'heading2': chain.toggleHeading({ level: 2 }).run(); break;
+      case 'heading3': chain.toggleHeading({ level: 3 }).run(); break;
+      case 'bulletList': chain.toggleBulletList().run(); break;
+      case 'orderedList': chain.toggleOrderedList().run(); break;
+      case 'codeBlock': chain.toggleCodeBlock().run(); break;
+      case 'blockquote': chain.toggleBlockquote().run(); break;
+      case 'horizontalRule': chain.setHorizontalRule().run(); break;
+      case 'link':
+        if (params?.href) {
+          chain.setLink({ href: params.href }).run();
+        } else {
+          chain.unsetLink().run();
+        }
+        break;
+    }
+  }
+
+  getAvailableCommands(): FormattingCommand[] {
+    if (this._activeMode !== 'wysiwyg') return [];
+    return [...ALL_FORMATTING_COMMANDS];
+  }
+
+  onFormattingStateChange(callback: (state: FormattingState) => void): () => void {
+    this._formattingCallbacks.add(callback);
+    return () => this._formattingCallbacks.delete(callback);
+  }
+
+  private _emitFormattingState(): void {
+    if (!this._wysiwygEditor || this._formattingCallbacks.size === 0) return;
+    const editor = this._wysiwygEditor.editor;
+    const state: FormattingState = {
+      bold: editor.isActive('bold'),
+      italic: editor.isActive('italic'),
+      strike: editor.isActive('strike'),
+      code: editor.isActive('code'),
+      heading1: editor.isActive('heading', { level: 1 }),
+      heading2: editor.isActive('heading', { level: 2 }),
+      heading3: editor.isActive('heading', { level: 3 }),
+      bulletList: editor.isActive('bulletList'),
+      orderedList: editor.isActive('orderedList'),
+      codeBlock: editor.isActive('codeBlock'),
+      blockquote: editor.isActive('blockquote'),
+      horizontalRule: false,
+      link: editor.isActive('link'),
+    };
+    this._formattingCallbacks.forEach(cb => cb(state));
+  }
+
   destroy(): void {
     this.unmount();
     this._contentCallbacks.clear();
     this._remoteCallbacks.clear();
+    this._formattingCallbacks.clear();
   }
 
   private _showMode(mode: EditorMode): void {

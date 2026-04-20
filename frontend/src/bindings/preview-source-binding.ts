@@ -48,7 +48,9 @@ export class PreviewSourceBinding implements IEditorBinding {
     this._collab = collab ?? null;
 
     this._sourceContainer = document.createElement('div');
+    this._sourceContainer.setAttribute('part', 'source-container');
     this._previewContainer = document.createElement('div');
+    this._previewContainer.setAttribute('part', 'preview-container');
     container.appendChild(this._sourceContainer);
     container.appendChild(this._previewContainer);
 

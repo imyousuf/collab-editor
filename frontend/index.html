@@ -9,82 +9,47 @@
     * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #fafafa; }
     h1 { margin: 0 0 16px; font-size: 24px; }
-    .toolbar {
+    .doc-bar {
       display: flex;
       gap: 8px;
       margin-bottom: 12px;
       align-items: center;
-      flex-wrap: wrap;
     }
-    .toolbar button {
-      padding: 6px 14px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      background: #fff;
-      cursor: pointer;
-      font-size: 14px;
-    }
-    .toolbar button:hover { background: #f0f0f0; }
-    .toolbar button.active { background: #333; color: #fff; border-color: #333; }
-    .toolbar select {
+    .doc-bar label { font-size: 14px; color: #555; }
+    .doc-bar select {
       padding: 6px 10px;
       border: 1px solid #ccc;
       border-radius: 4px;
       font-size: 14px;
     }
-    .status {
-      margin-left: auto;
-      font-size: 14px;
-      padding: 4px 10px;
-      border-radius: 12px;
-      background: #fee;
-      color: #c33;
-    }
-    .status[data-status="connected"] { background: #efe; color: #3a3; }
-    .status[data-status="connecting"] { background: #ffe; color: #a80; }
     multi-editor {
       display: block;
       border: 1px solid #ddd;
       border-radius: 6px;
       background: #fff;
-      min-height: 400px;
     }
-    .user-info { font-size: 12px; color: #666; margin-top: 8px; }
   </style>
 </head>
 <body>
   <h1>Collaborative Editor</h1>
-  <div class="toolbar">
-    <button id="btn-alternate" class="active">WYSIWYG</button>
-    <button id="btn-source">Source</button>
-    <button id="btn-readonly">Toggle Readonly</button>
+  <div class="doc-bar">
+    <label for="doc-select">Document:</label>
     <select id="doc-select" autocomplete="off"></select>
-    <span class="status" id="status">Disconnected</span>
   </div>
 
   <multi-editor
     id="editor"
     mode="wysiwyg"
-    format="markdown"
-    language="markdown"
     placeholder="Start writing..."
     theme="light"
   ></multi-editor>
 
-  <div class="user-info" id="user-info"></div>
-
   <script type="module">
     const editor = document.getElementById('editor');
-    const status = document.getElementById('status');
     const docSelect = document.getElementById('doc-select');
-    const btnAlternate = document.getElementById('btn-alternate');
-    const btnSource = document.getElementById('btn-source');
-    const btnReadonly = document.getElementById('btn-readonly');
-    const userInfo = document.getElementById('user-info');
 
     const userName = 'User-' + Math.floor(Math.random() * 1000);
     const userColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
-    userInfo.textContent = `Editing as ${userName}`;
 
     // Store MIME types from the document list API
     const docMimeTypes = {};
@@ -123,8 +88,6 @@
         },
         initialContent: content,
       });
-
-      updateAlternateButton();
     }
 
     async function loadDocumentList() {
@@ -144,7 +107,6 @@
           await connectToRoom(docSelect.value);
           documentListLoaded = true;
         } else {
-          // No documents — create empty editor
           const opt = document.createElement('option');
           opt.value = 'untitled';
           opt.textContent = 'untitled';
@@ -167,54 +129,8 @@
     let documentListLoaded = false;
     docSelect.addEventListener('change', () => {
       if (!documentListLoaded) return; // Ignore browser form restoration
+      currentRoom = null; // Reset so connectToRoom re-runs
       connectToRoom(docSelect.value);
-    });
-
-    function updateAlternateButton() {
-      const modes = editor.supportedModes || ['source'];
-      const hasWysiwyg = modes.includes('wysiwyg');
-      const hasPreview = modes.includes('preview');
-
-      if (hasWysiwyg) {
-        btnAlternate.textContent = 'WYSIWYG';
-        btnAlternate.disabled = false;
-        btnAlternate.style.opacity = '1';
-      } else if (hasPreview) {
-        btnAlternate.textContent = 'Preview';
-        btnAlternate.disabled = false;
-        btnAlternate.style.opacity = '1';
-      } else {
-        btnAlternate.textContent = 'WYSIWYG';
-        btnAlternate.disabled = true;
-        btnAlternate.style.opacity = '0.4';
-      }
-      const isAlternateMode = editor.mode === 'wysiwyg' || editor.mode === 'preview';
-      btnAlternate.classList.toggle('active', isAlternateMode);
-      btnSource.classList.toggle('active', editor.mode === 'source');
-    }
-
-    btnAlternate.addEventListener('click', () => {
-      const modes = editor.supportedModes || ['source'];
-      if (modes.includes('wysiwyg')) {
-        editor.switchMode('wysiwyg');
-      } else if (modes.includes('preview')) {
-        editor.switchMode('preview');
-      }
-    });
-    btnSource.addEventListener('click', () => {
-      editor.switchMode('source');
-    });
-    btnReadonly.addEventListener('click', () => {
-      editor.readonly = !editor.readonly;
-    });
-
-    editor.addEventListener('mode-change', () => {
-      updateAlternateButton();
-    });
-
-    editor.addEventListener('collab-status', (e) => {
-      status.textContent = e.detail.status.charAt(0).toUpperCase() + e.detail.status.slice(1);
-      status.dataset.status = e.detail.status;
     });
 
     editor.addEventListener('editor-save', (e) => {

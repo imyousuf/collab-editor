@@ -4,7 +4,7 @@
  * Thin orchestrator that delegates to IEditorBinding instances
  * created by the EditorBindingFactory.
  */
-import { LitElement, html, css } from 'lit';
+import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type {
   EditorMode,
@@ -19,7 +19,12 @@ import type {
   BeforeModeChangeDetail,
   CollabStatus,
   CollaborationConfig,
+  ToolbarConfig,
+  StatusBarConfig,
+  FormattingState,
+  FormattingCommand,
 } from './interfaces/index.js';
+import { isFormattingCapable, emptyFormattingState } from './interfaces/index.js';
 import {
   EditorChangeEvent,
   ModeChangeEvent,
@@ -28,6 +33,10 @@ import {
 } from './interfaces/events.js';
 import { EditorBindingFactory, registerDefaults } from './registry.js';
 import { CollaborationProvider } from './collab/collab-provider.js';
+
+// Register internal toolbar components
+import './toolbar/editor-toolbar.js';
+import './toolbar/editor-status-bar.js';
 
 @customElement('multi-editor')
 export class MultiEditor extends LitElement implements IEditorEventEmitter {
@@ -38,8 +47,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @property({ type: Boolean }) readonly: boolean = false;
   @property({ attribute: false }) collaboration: CollaborationConfig | null = null;
   @property({ attribute: false }) initialContent: string = '';
+  @property({ attribute: false }) toolbarConfig: ToolbarConfig | null = null;
+  @property({ attribute: false }) statusBarConfig: StatusBarConfig | null = null;
 
   @state() private _collabStatus: CollabStatus = 'disconnected';
+  @state() private _formattingState: FormattingState = emptyFormattingState();
+  @state() private _availableCommands: FormattingCommand[] = [];
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -59,6 +72,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _collabStatusCallbacks = new Set<(detail: CollabStatusDetail) => void>();
   private _remoteChangeCallbacks = new Set<(detail: RemoteChangeDetail) => void>();
   private _beforeModeChangeCallbacks = new Set<(detail: BeforeModeChangeDetail) => boolean>();
+  private _formattingUnsub: (() => void) | null = null;
 
   constructor() {
     super();
@@ -78,21 +92,277 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   static styles = css`
-    :host { display: block; position: relative; }
-    .editor-root { width: 100%; min-height: 200px; }
-    .ProseMirror { outline: none; padding: 12px; min-height: 200px; }
-    .ProseMirror p.is-editor-empty:first-child::before {
-      content: attr(data-placeholder); float: left; color: #adb5bd;
-      pointer-events: none; height: 0;
+    /* ── Root tokens ── */
+    :host {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+
+      --me-font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      --me-font-size: 14px;
+      --me-line-height: 1.6;
+      --me-color: #1a1a1a;
+      --me-bg: #ffffff;
+      --me-border-color: #e0e0e0;
+      --me-border-radius: 4px;
+      --me-focus-ring-color: rgba(59, 130, 246, 0.5);
+      --me-selection-bg: rgba(59, 130, 246, 0.2);
+      --me-min-height: 200px;
+      --me-padding: 12px;
+
+      /* Source / CodeMirror tokens */
+      --me-source-bg: var(--me-bg);
+      --me-source-color: var(--me-color);
+      --me-source-font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      --me-source-font-size: 13px;
+      --me-source-line-height: 1.5;
+      --me-source-gutter-bg: #f5f5f5;
+      --me-source-gutter-color: #999;
+      --me-source-gutter-border: var(--me-border-color);
+      --me-source-cursor-color: #000;
+      --me-source-selection-bg: var(--me-selection-bg);
+      --me-source-active-line-bg: rgba(0, 0, 0, 0.04);
+      --me-source-matching-bracket-bg: rgba(0, 0, 0, 0.1);
+
+      /* WYSIWYG / ProseMirror tokens */
+      --me-wysiwyg-bg: var(--me-bg);
+      --me-wysiwyg-color: var(--me-color);
+      --me-wysiwyg-font-family: var(--me-font-family);
+      --me-wysiwyg-font-size: var(--me-font-size);
+      --me-wysiwyg-padding: var(--me-padding);
+      --me-wysiwyg-placeholder-color: #adb5bd;
+      --me-wysiwyg-link-color: #2563eb;
+      --me-wysiwyg-heading-color: var(--me-color);
+      --me-wysiwyg-heading-font-weight: 600;
+      --me-wysiwyg-blockquote-border: var(--me-border-color);
+      --me-wysiwyg-blockquote-color: #666;
+      --me-wysiwyg-hr-color: var(--me-border-color);
+
+      /* Code block tokens (inside WYSIWYG) */
+      --me-code-bg: #1e1e1e;
+      --me-code-color: #d4d4d4;
+      --me-code-padding: 12px;
+      --me-code-border-radius: var(--me-border-radius);
+      --me-code-font-family: var(--me-source-font-family);
+      --me-code-font-size: 0.9em;
+      --me-code-inline-bg: #f0f0f0;
+      --me-code-inline-color: var(--me-color);
+      --me-code-inline-padding: 2px 4px;
+      --me-code-inline-border-radius: 2px;
+
+      /* Preview tokens */
+      --me-preview-bg: #ffffff;
+      --me-preview-min-height: 300px;
+      --me-preview-border: none;
+
+      /* Toolbar tokens */
+      --me-toolbar-bg: #f8f9fa;
+      --me-toolbar-border: var(--me-border-color);
+      --me-toolbar-button-bg: transparent;
+      --me-toolbar-button-hover-bg: #e9ecef;
+      --me-toolbar-button-active-bg: #333;
+      --me-toolbar-button-active-color: #fff;
+      --me-toolbar-button-radius: var(--me-border-radius);
+      --me-toolbar-gap: 2px;
+      --me-toolbar-padding: 6px 8px;
+      --me-toolbar-separator-color: var(--me-border-color);
+
+      /* Status bar tokens */
+      --me-status-bg: #f8f9fa;
+      --me-status-color: #666;
+      --me-status-font-size: 12px;
+      --me-status-connected-color: #22c55e;
+      --me-status-connecting-color: #eab308;
+      --me-status-disconnected-color: #ef4444;
+
+      /* Icon tokens */
+      --me-icon-color: var(--me-color);
+      --me-icon-size: 18px;
+
+      /* Scrollbar tokens */
+      --me-scrollbar-width: 8px;
+      --me-scrollbar-track: transparent;
+      --me-scrollbar-thumb: rgba(0, 0, 0, 0.2);
+      --me-scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
     }
-    .ProseMirror pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; overflow-x: auto; }
-    .ProseMirror code { background: #f0f0f0; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }
-    .ProseMirror pre code { background: none; padding: 0; }
-    .cm-editor { min-height: 200px; }
+
+    /* ── Dark theme overrides ── */
+    :host([theme="dark"]) {
+      --me-bg: #1e1e1e;
+      --me-color: #e0e0e0;
+      --me-border-color: #333;
+      --me-selection-bg: rgba(59, 130, 246, 0.35);
+      --me-focus-ring-color: rgba(96, 165, 250, 0.5);
+
+      --me-source-gutter-bg: #252525;
+      --me-source-gutter-color: #666;
+      --me-source-cursor-color: #fff;
+      --me-source-active-line-bg: rgba(255, 255, 255, 0.04);
+      --me-source-matching-bracket-bg: rgba(255, 255, 255, 0.1);
+
+      --me-wysiwyg-placeholder-color: #555;
+      --me-wysiwyg-link-color: #60a5fa;
+      --me-wysiwyg-blockquote-color: #aaa;
+
+      --me-code-inline-bg: #2d2d2d;
+      --me-code-inline-color: #e0e0e0;
+
+      --me-preview-bg: #1e1e1e;
+
+      --me-toolbar-bg: #2d2d2d;
+      --me-toolbar-button-hover-bg: #3d3d3d;
+      --me-toolbar-button-active-bg: #e0e0e0;
+      --me-toolbar-button-active-color: #1a1a1a;
+
+      --me-status-bg: rgba(45, 45, 45, 0.85);
+      --me-status-color: #aaa;
+
+      --me-scrollbar-thumb: rgba(255, 255, 255, 0.2);
+      --me-scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
+    }
+
+    /* ── Editor wrapper (positions the status bar overlay) ── */
+    .editor-wrapper {
+      position: relative;
+      flex: 1;
+      width: 100%;
+      min-height: 0; /* allow flex child to shrink below content size */
+      overflow: hidden;
+    }
+
+    /* ── Editor area ── */
+    .editor-root {
+      width: 100%;
+      height: 100%;
+      overflow-y: auto;
+      background: var(--me-bg);
+      color: var(--me-color);
+      font-family: var(--me-font-family);
+      font-size: var(--me-font-size);
+      line-height: var(--me-line-height);
+    }
+
+    /* ── ProseMirror / WYSIWYG ── */
+    .ProseMirror {
+      outline: none;
+      padding: var(--me-wysiwyg-padding);
+      padding-bottom: 32px;
+      font-family: var(--me-wysiwyg-font-family);
+      font-size: var(--me-wysiwyg-font-size);
+      color: var(--me-wysiwyg-color);
+      background: var(--me-wysiwyg-bg);
+    }
+    .ProseMirror p.is-editor-empty:first-child::before {
+      content: attr(data-placeholder);
+      float: left;
+      color: var(--me-wysiwyg-placeholder-color);
+      pointer-events: none;
+      height: 0;
+    }
+    .ProseMirror a { color: var(--me-wysiwyg-link-color); }
+    .ProseMirror h1, .ProseMirror h2, .ProseMirror h3,
+    .ProseMirror h4, .ProseMirror h5, .ProseMirror h6 {
+      color: var(--me-wysiwyg-heading-color);
+      font-weight: var(--me-wysiwyg-heading-font-weight);
+    }
+    .ProseMirror blockquote {
+      border-left: 3px solid var(--me-wysiwyg-blockquote-border);
+      color: var(--me-wysiwyg-blockquote-color);
+      padding-left: 1em;
+      margin-left: 0;
+    }
+    .ProseMirror hr {
+      border: none;
+      border-top: 1px solid var(--me-wysiwyg-hr-color);
+    }
+    .ProseMirror pre {
+      background: var(--me-code-bg);
+      color: var(--me-code-color);
+      padding: var(--me-code-padding);
+      border-radius: var(--me-code-border-radius);
+      overflow-x: auto;
+      font-family: var(--me-code-font-family);
+    }
+    .ProseMirror code {
+      background: var(--me-code-inline-bg);
+      color: var(--me-code-inline-color);
+      padding: var(--me-code-inline-padding);
+      border-radius: var(--me-code-inline-border-radius);
+      font-size: var(--me-code-font-size);
+      font-family: var(--me-code-font-family);
+    }
+    .ProseMirror pre code {
+      background: none;
+      padding: 0;
+      color: inherit;
+    }
+
+    /* ── CodeMirror ── */
+    .cm-editor { padding-bottom: 32px; }
+
+    /* ── Preview iframe ── */
+    .me-preview-iframe {
+      width: 100%;
+      min-height: var(--me-preview-min-height);
+      border: var(--me-preview-border);
+      background: var(--me-preview-bg);
+    }
+
+    /* ── Scrollbar ── */
+    .editor-root ::-webkit-scrollbar { width: var(--me-scrollbar-width); }
+    .editor-root ::-webkit-scrollbar-track { background: var(--me-scrollbar-track); }
+    .editor-root ::-webkit-scrollbar-thumb {
+      background: var(--me-scrollbar-thumb);
+      border-radius: 4px;
+    }
+    .editor-root ::-webkit-scrollbar-thumb:hover { background: var(--me-scrollbar-thumb-hover); }
   `;
 
   render() {
-    return html`<div id="editor-root" class="editor-root"></div>`;
+    const toolbarVisible = this.toolbarConfig?.visible !== false;
+    const statusBarVisible = this.statusBarConfig?.visible !== false;
+    const toolbarOnTop = this.toolbarConfig?.position !== 'bottom';
+
+    return html`
+      ${toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
+      <div class="editor-wrapper">
+        <div id="editor-root" class="editor-root" part="editor-area"></div>
+        ${statusBarVisible ? this._renderStatusBarSlot() : nothing}
+      </div>
+      ${!toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
+    `;
+  }
+
+  private _renderToolbarSlot() {
+    return html`
+      <slot name="toolbar">
+        <editor-toolbar
+          part="toolbar"
+          .mode=${this.mode}
+          .supportedModes=${this.supportedModes}
+          .formattingState=${this._formattingState}
+          .availableCommands=${this._availableCommands}
+          .config=${this.toolbarConfig}
+          .readonly=${this.readonly}
+          @toolbar-command=${this._handleToolbarCommand}
+          @toolbar-mode-switch=${this._handleToolbarModeSwitch}
+        ></editor-toolbar>
+      </slot>
+    `;
+  }
+
+  private _renderStatusBarSlot() {
+    return html`
+      <slot name="status-bar">
+        <editor-status-bar
+          part="status-bar"
+          .status=${this._collabStatus}
+          .userName=${this.collaboration?.user?.name ?? ''}
+          .config=${this.statusBarConfig}
+        ></editor-status-bar>
+      </slot>
+    `;
   }
 
   async firstUpdated() {
@@ -252,6 +522,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     });
 
     this.mode = mode;
+    this._wireFormattingState();
   }
 
   // --- Public API ---
@@ -280,6 +551,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       console.error('Mode switch failed:', e);
       return;
     }
+
+    // Update formatting state — available commands change with mode
+    this._wireFormattingState();
 
     const detail: ModeChangeDetail = { mode: newMode, previousMode };
     this.dispatchEvent(new ModeChangeEvent(detail));
@@ -347,6 +621,31 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   // --- Private helpers ---
 
+  private _handleToolbarCommand(e: CustomEvent): void {
+    if (!this._binding || !isFormattingCapable(this._binding)) return;
+    this._binding.executeCommand(e.detail.command, e.detail.params);
+  }
+
+  private _handleToolbarModeSwitch(e: CustomEvent): void {
+    this.switchMode(e.detail.mode);
+  }
+
+  private _wireFormattingState(): void {
+    // Unsubscribe previous
+    this._formattingUnsub?.();
+    this._formattingUnsub = null;
+
+    if (this._binding && isFormattingCapable(this._binding)) {
+      this._availableCommands = this._binding.getAvailableCommands();
+      this._formattingUnsub = this._binding.onFormattingStateChange((state) => {
+        this._formattingState = state;
+      });
+    } else {
+      this._availableCommands = [];
+      this._formattingState = emptyFormattingState();
+    }
+  }
+
   private _emitContentChange(content: string): void {
     if (this._changeDebounce) clearTimeout(this._changeDebounce);
     this._changeDebounce = setTimeout(() => {
@@ -373,6 +672,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this._changeDebounce) clearTimeout(this._changeDebounce);
+    this._formattingUnsub?.();
     this._binding?.destroy();
     this._collabProvider?.destroy();
   }

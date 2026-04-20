@@ -20,6 +20,8 @@ export class SourceOnlyBinding implements IEditorBinding {
   private _activeMode: EditorMode | null = null;
   private _mounted = false;
   private _editor: SourceEditorInstance | null = null;
+  private _container: HTMLElement | null = null;
+  private _sourceContainer: HTMLElement | null = null;
   private _language: string;
   private _collab: CollaborationContext | null = null;
   private _contentCallbacks = new Set<ContentChangeCallback>();
@@ -41,7 +43,12 @@ export class SourceOnlyBinding implements IEditorBinding {
     if (mode !== 'source') throw new Error(`SourceOnlyBinding only supports 'source' mode`);
 
     this._collab = collab ?? null;
-    this._editor = new SourceEditorInstance(container, {
+    this._container = container;
+    this._sourceContainer = document.createElement('div');
+    this._sourceContainer.setAttribute('part', 'source-container');
+    container.appendChild(this._sourceContainer);
+
+    this._editor = new SourceEditorInstance(this._sourceContainer, {
       language: this._language,
       readonly: options.readonly,
       theme: options.theme,
@@ -62,6 +69,8 @@ export class SourceOnlyBinding implements IEditorBinding {
   unmount(): void {
     this._editor?.destroy();
     this._editor = null;
+    if (this._container) this._container.innerHTML = '';
+    this._sourceContainer = null;
     this._mounted = false;
     this._activeMode = null;
   }

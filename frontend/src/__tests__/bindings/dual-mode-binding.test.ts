@@ -3,6 +3,8 @@ import { editorBindingContractTests } from '../interfaces/editor-binding.contrac
 import { DualModeBinding } from '../../bindings/dual-mode-binding.js';
 import { HtmlContentHandler } from '../../handlers/html-handler.js';
 import { MarkdownContentHandler } from '../../handlers/markdown-handler.js';
+import { isFormattingCapable, emptyFormattingState } from '../../interfaces/formatting.js';
+import type { FormattingState } from '../../interfaces/formatting.js';
 
 const htmlHandler = new HtmlContentHandler();
 const mdHandler = new MarkdownContentHandler();
@@ -139,5 +141,114 @@ describe('DualModeBinding unit tests', () => {
 
     binding.destroy();
     ydoc.destroy();
+  });
+});
+
+describe('DualModeBinding IFormattingCapability', () => {
+  test('isFormattingCapable returns true', () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    expect(isFormattingCapable(binding)).toBe(true);
+    binding.destroy();
+  });
+
+  test('getAvailableCommands returns commands in wysiwyg mode', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'wysiwyg', { readonly: false, theme: 'light' });
+
+    const commands = binding.getAvailableCommands();
+    expect(commands).toContain('bold');
+    expect(commands).toContain('italic');
+    expect(commands).toContain('heading1');
+    expect(commands).toContain('bulletList');
+    expect(commands).toContain('link');
+    expect(commands.length).toBeGreaterThan(0);
+
+    binding.destroy();
+  });
+
+  test('getAvailableCommands returns empty in source mode', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    expect(binding.getAvailableCommands()).toEqual([]);
+
+    binding.destroy();
+  });
+
+  test('executeCommand does nothing in source mode', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    // Should not throw
+    expect(() => binding.executeCommand('bold')).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('executeCommand toggleBold in wysiwyg mode', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'wysiwyg', { readonly: false, theme: 'light' });
+
+    // Should not throw — Tiptap processes the command
+    expect(() => binding.executeCommand('bold')).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('onFormattingStateChange fires on subscription', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'wysiwyg', { readonly: false, theme: 'light' });
+
+    const states: FormattingState[] = [];
+    const unsub = binding.onFormattingStateChange((state) => {
+      states.push({ ...state });
+    });
+
+    // Trigger a transaction to fire state emission
+    binding.executeCommand('bold');
+
+    // Should have received at least one state update
+    expect(states.length).toBeGreaterThan(0);
+    expect(typeof states[0].bold).toBe('boolean');
+    expect(typeof states[0].italic).toBe('boolean');
+
+    unsub();
+    binding.destroy();
+  });
+
+  test('unsubscribe stops state emission', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'wysiwyg', { readonly: false, theme: 'light' });
+
+    let callCount = 0;
+    const unsub = binding.onFormattingStateChange(() => { callCount++; });
+
+    binding.executeCommand('bold');
+    const countAfterFirst = callCount;
+
+    unsub();
+    binding.executeCommand('italic');
+    expect(callCount).toBe(countAfterFirst);
+
+    binding.destroy();
+  });
+
+  test('part attributes are set on containers', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const wysiwyg = container.querySelector('[part="wysiwyg-container"]');
+    const source = container.querySelector('[part="source-container"]');
+    expect(wysiwyg).not.toBeNull();
+    expect(source).not.toBeNull();
+
+    binding.destroy();
   });
 });
