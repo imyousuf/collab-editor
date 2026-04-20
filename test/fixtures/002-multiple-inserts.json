@@ -1,0 +1,18 @@
+{
+  "name": "002-multiple-inserts",
+  "description": "Multiple sequential inserts: \"hello\" then \" world\"",
+  "initial_content": "",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "AAIYAQGfws2sBAAEAQZzb3VyY2UFaGVsbG8A",
+      "client_id": 1167286559
+    },
+    {
+      "sequence": 2,
+      "data": "AAIXAQGfws2sBAWEn8LNrAQEBiB3b3JsZAA=",
+      "client_id": 1167286559
+    }
+  ],
+  "expected_text": "hello world"
+}

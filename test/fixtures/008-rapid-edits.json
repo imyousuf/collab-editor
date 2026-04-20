@@ -1,0 +1,228 @@
+{
+  "name": "008-rapid-edits",
+  "description": "Character-by-character typing (44 individual inserts)",
+  "initial_content": "",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "AAIUAQHov5D2DgAEAQZzb3VyY2UBVAA=",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 2,
+      "data": "AAISAQHov5D2DgGE6L+Q9g4AAWgA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 3,
+      "data": "AAISAQHov5D2DgKE6L+Q9g4BAWUA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 4,
+      "data": "AAISAQHov5D2DgOE6L+Q9g4CASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 5,
+      "data": "AAISAQHov5D2DgSE6L+Q9g4DAXEA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 6,
+      "data": "AAISAQHov5D2DgWE6L+Q9g4EAXUA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 7,
+      "data": "AAISAQHov5D2DgaE6L+Q9g4FAWkA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 8,
+      "data": "AAISAQHov5D2DgeE6L+Q9g4GAWMA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 9,
+      "data": "AAISAQHov5D2DgiE6L+Q9g4HAWsA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 10,
+      "data": "AAISAQHov5D2DgmE6L+Q9g4IASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 11,
+      "data": "AAISAQHov5D2DgqE6L+Q9g4JAWIA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 12,
+      "data": "AAISAQHov5D2DguE6L+Q9g4KAXIA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 13,
+      "data": "AAISAQHov5D2DgyE6L+Q9g4LAW8A",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 14,
+      "data": "AAISAQHov5D2Dg2E6L+Q9g4MAXcA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 15,
+      "data": "AAISAQHov5D2Dg6E6L+Q9g4NAW4A",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 16,
+      "data": "AAISAQHov5D2Dg+E6L+Q9g4OASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 17,
+      "data": "AAISAQHov5D2DhCE6L+Q9g4PAWYA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 18,
+      "data": "AAISAQHov5D2DhGE6L+Q9g4QAW8A",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 19,
+      "data": "AAISAQHov5D2DhKE6L+Q9g4RAXgA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 20,
+      "data": "AAISAQHov5D2DhOE6L+Q9g4SASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 21,
+      "data": "AAISAQHov5D2DhSE6L+Q9g4TAWoA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 22,
+      "data": "AAISAQHov5D2DhWE6L+Q9g4UAXUA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 23,
+      "data": "AAISAQHov5D2DhaE6L+Q9g4VAW0A",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 24,
+      "data": "AAISAQHov5D2DheE6L+Q9g4WAXAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 25,
+      "data": "AAISAQHov5D2DhiE6L+Q9g4XAXMA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 26,
+      "data": "AAISAQHov5D2DhmE6L+Q9g4YASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 27,
+      "data": "AAISAQHov5D2DhqE6L+Q9g4ZAW8A",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 28,
+      "data": "AAISAQHov5D2DhuE6L+Q9g4aAXYA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 29,
+      "data": "AAISAQHov5D2DhyE6L+Q9g4bAWUA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 30,
+      "data": "AAISAQHov5D2Dh2E6L+Q9g4cAXIA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 31,
+      "data": "AAISAQHov5D2Dh6E6L+Q9g4dASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 32,
+      "data": "AAISAQHov5D2Dh+E6L+Q9g4eAXQA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 33,
+      "data": "AAISAQHov5D2DiCE6L+Q9g4fAWgA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 34,
+      "data": "AAISAQHov5D2DiGE6L+Q9g4gAWUA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 35,
+      "data": "AAISAQHov5D2DiKE6L+Q9g4hASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 36,
+      "data": "AAISAQHov5D2DiOE6L+Q9g4iAWwA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 37,
+      "data": "AAISAQHov5D2DiSE6L+Q9g4jAWEA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 38,
+      "data": "AAISAQHov5D2DiWE6L+Q9g4kAXoA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 39,
+      "data": "AAISAQHov5D2DiaE6L+Q9g4lAXkA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 40,
+      "data": "AAISAQHov5D2DieE6L+Q9g4mASAA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 41,
+      "data": "AAISAQHov5D2DiiE6L+Q9g4nAWQA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 42,
+      "data": "AAISAQHov5D2DimE6L+Q9g4oAW8A",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 43,
+      "data": "AAISAQHov5D2DiqE6L+Q9g4pAWcA",
+      "client_id": 4005830632
+    },
+    {
+      "sequence": 44,
+      "data": "AAISAQHov5D2DiuE6L+Q9g4qAS4A",
+      "client_id": 4005830632
+    }
+  ],
+  "expected_text": "The quick brown fox jumps over the lazy dog."
+}

@@ -1,0 +1,13 @@
+{
+  "name": "001-simple-insert",
+  "description": "Insert \"hello\" into an empty document",
+  "initial_content": "",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "AAIYAQHXyLW5CwAEAQZzb3VyY2UFaGVsbG8A",
+      "client_id": 3073205335
+    }
+  ],
+  "expected_text": "hello"
+}

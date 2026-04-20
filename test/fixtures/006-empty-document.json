@@ -1,0 +1,7 @@
+{
+  "name": "006-empty-document",
+  "description": "No updates applied — document stays empty",
+  "initial_content": "",
+  "updates": [],
+  "expected_text": ""
+}

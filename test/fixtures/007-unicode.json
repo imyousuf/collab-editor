@@ -1,0 +1,18 @@
+{
+  "name": "007-unicode",
+  "description": "Text with emoji and unicode characters",
+  "initial_content": "",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "AAIgAQGQyu3SBgAEAQZzb3VyY2UNSGVsbG8sIFdvcmxkIQA=",
+      "client_id": 1784374544
+    },
+    {
+      "sequence": 2,
+      "data": "AAIcAQGQyu3SBg3EkMrt0gYFkMrt0gYGBSDwn4yNAA==",
+      "client_id": 1784374544
+    }
+  ],
+  "expected_text": "Hello, 🌍 World!"
+}

@@ -1,0 +1,23 @@
+{
+  "name": "009-replace-content",
+  "description": "Insert text, delete all, insert new text",
+  "initial_content": "",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "AAIjAQHMpPT/CAAEAQZzb3VyY2UQb3JpZ2luYWwgY29udGVudAA=",
+      "client_id": 2415727180
+    },
+    {
+      "sequence": 2,
+      "data": "AAIKAAHMpPT/CAEAEA==",
+      "client_id": 2415727180
+    },
+    {
+      "sequence": 3,
+      "data": "AAIhAQHMpPT/CBCEzKT0/wgPEHJlcGxhY2VkIGNvbnRlbnQA",
+      "client_id": 2415727180
+    }
+  ],
+  "expected_text": "replaced content"
+}

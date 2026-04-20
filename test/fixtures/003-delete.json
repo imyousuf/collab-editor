@@ -1,0 +1,18 @@
+{
+  "name": "003-delete",
+  "description": "Insert \"hello world\" then delete \" world\"",
+  "initial_content": "",
+  "updates": [
+    {
+      "sequence": 1,
+      "data": "AAIeAQHa/JafDQAEAQZzb3VyY2ULaGVsbG8gd29ybGQA",
+      "client_id": 3555049050
+    },
+    {
+      "sequence": 2,
+      "data": "AAIKAAHa/JafDQEFBg==",
+      "client_id": 3555049050
+    }
+  ],
+  "expected_text": "hello"
+}
