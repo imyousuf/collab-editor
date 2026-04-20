@@ -17,6 +17,13 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
 internal/provider/     — HTTP client for the storage provider SPI
 internal/storagedemo/  — Demo filesystem-based storage provider
 frontend/src/          — Lit web component (TypeScript)
+  interfaces/          — IEditorBinding, IContentHandler, ICollaborationProvider, events
+  bindings/            — DualMode, SourceOnly, PreviewSource + shared editor instances
+  handlers/            — Markdown, HTML, PlainText content handlers
+  collab/              — CollaborationProvider (y-websocket), TextBinding (Y.Text ↔ Tiptap)
+  react/               — React wrapper via @lit/react
+  registry.ts          — EditorBindingFactory + MIME-type registration
+  multi-editor.ts      — <multi-editor> Lit orchestrator
 config/                — Default YAML configs for relay and provider
 docker/                — Dockerfiles and nginx config
 examples/basic/        — Docker Compose example with seed documents
@@ -45,12 +52,14 @@ make test-e2e                               # Run ATR browser tests
 
 ## Key Architecture Concepts
 
-- `Y.XmlFragment` is the canonical CRDT type (not `Y.Text`)
-- WYSIWYG and source views use exclusive-view editing with serialization on switch
-- The relay uses `github.com/skyterra/y-crdt` for server-side Yjs operations
+- `Y.Text` is the canonical CRDT type — all modes (WYSIWYG, source, preview) bind to the same Y.Text
+- DualModeBinding keeps both Tiptap (WYSIWYG) and CodeMirror (source) mounted simultaneously, toggling visibility on mode switch. Both bind to Y.Text: CodeMirror via yCollab, Tiptap via TextBinding (diff-based sync)
+- The relay is a stateless broadcast relay — it does NOT maintain server-side Y.Docs. Peers sync directly through it via the y-websocket protocol
 - The WebSocket transport is pluggable via the `Transport` interface in `internal/relay/transport.go`
-- Code blocks in rich text use decoration-based highlighting (lowlight), not embedded CodeMirror
+- y-codemirror.next (yCollab) only observes Y.Text *changes*, not pre-existing content. Content must be seeded AFTER CodeMirror mounts
+- Initialization is serialized via a promise chain (`_initChain`) to prevent race conditions from Lit's async reactive lifecycle
 - Document IDs are validated against `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` to prevent path traversal
+- MIME-type registry pattern: `EditorBindingFactory` maps MIME types to binding constructors (DualModeBinding, SourceOnlyBinding, PreviewSourceBinding) and content handlers
 
 ## Conventions
 
