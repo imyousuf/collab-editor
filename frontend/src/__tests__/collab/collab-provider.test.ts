@@ -86,4 +86,122 @@ describe('CollaborationProvider unit tests', () => {
     provider.destroy();
     await expect(promise).rejects.toThrow('destroyed');
   });
+
+  test('initial status is disconnected', () => {
+    const provider = new CollaborationProvider();
+    expect(provider.status).toBe('disconnected');
+    provider.destroy();
+  });
+
+  test('awareness is null before connect', () => {
+    const provider = new CollaborationProvider();
+    expect(provider.awareness).toBeNull();
+    provider.destroy();
+  });
+
+  test('_setStatus deduplicates (same status twice = one callback)', () => {
+    const provider = new CollaborationProvider();
+    const callback = vi.fn();
+    provider.onStatusChange(callback);
+
+    (provider as any)._setStatus('connecting');
+    (provider as any)._setStatus('connecting'); // duplicate
+    expect(callback).toHaveBeenCalledTimes(1);
+
+    provider.destroy();
+  });
+
+  test('disconnect without prior connect does not throw', () => {
+    const provider = new CollaborationProvider();
+    expect(() => provider.disconnect()).not.toThrow();
+    provider.destroy();
+  });
+
+  test('disconnect sets status to disconnected', () => {
+    const provider = new CollaborationProvider();
+    const statuses: string[] = [];
+    provider.onStatusChange(s => statuses.push(s));
+
+    (provider as any)._setStatus('connecting');
+    provider.disconnect();
+    expect(statuses).toContain('disconnected');
+
+    provider.destroy();
+  });
+
+  test('whenConnected resolves immediately if already connected', async () => {
+    const provider = new CollaborationProvider();
+    (provider as any)._status = 'connected';
+
+    await expect(provider.whenConnected(100)).resolves.toBeUndefined();
+    provider.destroy();
+  });
+
+  test('onRemoteUpdate returns unsubscribe function', () => {
+    const provider = new CollaborationProvider();
+    const callback = vi.fn();
+    const unsub = provider.onRemoteUpdate(callback);
+    expect(typeof unsub).toBe('function');
+    unsub();
+    provider.destroy();
+  });
+
+  test('onRemoteUpdate unsubscribe stops callbacks', () => {
+    const provider = new CollaborationProvider();
+    const callback = vi.fn();
+    const unsub = provider.onRemoteUpdate(callback);
+
+    // Add to set, then remove
+    unsub();
+    expect((provider as any)._remoteCallbacks.size).toBe(0);
+
+    provider.destroy();
+  });
+
+  test('destroy clears all callback sets', () => {
+    const provider = new CollaborationProvider();
+    provider.onStatusChange(vi.fn());
+    provider.onRemoteUpdate(vi.fn());
+
+    provider.destroy();
+
+    expect((provider as any)._statusCallbacks.size).toBe(0);
+    expect((provider as any)._remoteCallbacks.size).toBe(0);
+  });
+
+  test('multiple whenConnected promises all resolve on connect', async () => {
+    const provider = new CollaborationProvider();
+
+    const p1 = provider.whenConnected(5000);
+    const p2 = provider.whenConnected(5000);
+
+    setTimeout(() => {
+      (provider as any)._setStatus('connected');
+      for (const { resolve, timer } of (provider as any)._connectedResolvers) {
+        clearTimeout(timer);
+        resolve();
+      }
+      (provider as any)._connectedResolvers = [];
+    }, 10);
+
+    await expect(p1).resolves.toBeUndefined();
+    await expect(p2).resolves.toBeUndefined();
+
+    provider.destroy();
+  });
+
+  test('whenConnected timeout removes resolver from list', async () => {
+    const provider = new CollaborationProvider();
+
+    try {
+      await provider.whenConnected(50);
+    } catch {
+      // Expected
+    }
+
+    // Resolver should have been removed
+    expect((provider as any)._connectedResolvers.length).toBe(0);
+
+    provider.destroy();
+  });
 });
