@@ -236,6 +236,19 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
       --me-scrollbar-thumb: rgba(255, 255, 255, 0.2);
       --me-scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
+
+      /* Version panel dark mode */
+      --me-version-badge-manual-bg: #1e3a5f;
+      --me-version-badge-manual-color: #93c5fd;
+      --me-version-badge-auto-bg: #14532d;
+      --me-version-badge-auto-color: #86efac;
+      --me-version-btn-primary-bg: #3b82f6;
+      --me-version-btn-primary-color: #fff;
+      --me-version-btn-primary-hover-bg: #2563eb;
+      --me-diff-added-bg: rgba(34, 197, 94, 0.15);
+      --me-diff-added-color: #86efac;
+      --me-diff-removed-bg: rgba(239, 68, 68, 0.15);
+      --me-diff-removed-color: #fca5a5;
     }
 
     /* ── Editor wrapper (positions the status bar overlay) ── */
@@ -398,6 +411,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @version-select=${this._handleVersionSelect}
           @version-view=${this._handleVersionView}
           @version-revert=${this._handleVersionRevert}
+          @version-diff=${this._handleVersionDiff}
         ></version-panel>
       </slot>
     `;
@@ -805,6 +819,21 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     await this._versionManager?.revertToVersion(version);
     this._versions = await this._versionManager?.listVersions() ?? [];
+  }
+
+  private async _handleVersionDiff(e: CustomEvent): Promise<void> {
+    if (!this._versionManager) return;
+    const fromVersion = await this._versionManager.getVersion(e.detail.fromId);
+    const toVersion = await this._versionManager.getVersion(e.detail.toId);
+    if (!fromVersion || !toVersion) return;
+
+    const diff = this._versionManager.diffVersions(fromVersion, toVersion);
+
+    // Set diffResult on the version-panel component
+    const panel = this.renderRoot.querySelector('version-panel') as any;
+    if (panel) {
+      panel.diffResult = diff;
+    }
   }
 
   private _exitVersionView(): void {

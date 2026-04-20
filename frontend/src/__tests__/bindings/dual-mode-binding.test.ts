@@ -255,13 +255,13 @@ describe('DualModeBinding IFormattingCapability', () => {
 
   test('implements IBlameCapability', () => {
     const handler = new MarkdownContentHandler();
-    const binding = new DualModeBinding(handler);
+    const binding = new DualModeBinding(handler, 'markdown');
     expect(isBlameCapable(binding)).toBe(true);
   });
 
   test('blame enable/disable/update do not throw when mounted', async () => {
     const handler = new MarkdownContentHandler();
-    const binding = new DualModeBinding(handler);
+    const binding = new DualModeBinding(handler, 'markdown');
     const container = document.createElement('div');
     await binding.mount(container, 'source', { readonly: false, theme: 'light' });
 
@@ -275,7 +275,7 @@ describe('DualModeBinding IFormattingCapability', () => {
 
   test('blame enable/disable do not throw when unmounted', () => {
     const handler = new MarkdownContentHandler();
-    const binding = new DualModeBinding(handler);
+    const binding = new DualModeBinding(handler, 'markdown');
     expect(() => binding.enableBlame([])).not.toThrow();
     expect(() => binding.disableBlame()).not.toThrow();
   });

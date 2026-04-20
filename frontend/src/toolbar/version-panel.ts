@@ -86,8 +86,14 @@ export class VersionPanel extends LitElement {
       background: var(--me-toolbar-border, #e0e0e0);
       margin-left: 8px;
     }
-    .version-badge.manual { background: #dbeafe; color: #1e40af; }
-    .version-badge.auto { background: #dcfce7; color: #166534; }
+    .version-badge.manual {
+      background: var(--me-version-badge-manual-bg, #dbeafe);
+      color: var(--me-version-badge-manual-color, #1e40af);
+    }
+    .version-badge.auto {
+      background: var(--me-version-badge-auto-bg, #dcfce7);
+      color: var(--me-version-badge-auto-color, #166534);
+    }
     .actions {
       padding: 8px 14px;
       border-top: 1px solid var(--me-toolbar-border, #d0d7de);
@@ -103,8 +109,14 @@ export class VersionPanel extends LitElement {
       font-size: 12px;
     }
     .btn:hover { background: var(--me-toolbar-hover-bg, #f5f5f5); }
-    .btn-primary { background: #2563eb; color: white; border-color: #2563eb; }
-    .btn-primary:hover { background: #1d4ed8; }
+    .btn-primary {
+      background: var(--me-version-btn-primary-bg, #2563eb);
+      color: var(--me-version-btn-primary-color, #fff);
+      border-color: var(--me-version-btn-primary-bg, #2563eb);
+    }
+    .btn-primary:hover {
+      background: var(--me-version-btn-primary-hover-bg, #1d4ed8);
+    }
     .diff-view {
       max-height: 200px;
       overflow-y: auto;
@@ -114,8 +126,15 @@ export class VersionPanel extends LitElement {
       border-top: 1px solid var(--me-toolbar-border, #d0d7de);
     }
     .diff-line { padding: 1px 4px; white-space: pre-wrap; }
-    .diff-added { background: #dcfce7; color: #166534; }
-    .diff-removed { background: #fce7e7; color: #991b1b; text-decoration: line-through; }
+    .diff-added {
+      background: var(--me-diff-added-bg, #dcfce7);
+      color: var(--me-diff-added-color, #166534);
+    }
+    .diff-removed {
+      background: var(--me-diff-removed-bg, #fce7e7);
+      color: var(--me-diff-removed-color, #991b1b);
+      text-decoration: line-through;
+    }
     .diff-unchanged { color: var(--me-status-text, #666); }
     .empty { padding: 20px; text-align: center; color: var(--me-status-text, #999); font-size: 12px; }
   `;
