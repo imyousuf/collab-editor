@@ -1,6 +1,7 @@
 package storagedemo
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,10 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating base dir: %w", err)
 	}
+	yjsDir := filepath.Join(baseDir, ".yjs")
+	if err := os.MkdirAll(yjsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating yjs dir: %w", err)
+	}
 	return &FileStore{baseDir: baseDir}, nil
 }
 
@@ -39,7 +44,12 @@ func (fs *FileStore) filePath(docID string) string {
 	return filepath.Join(fs.baseDir, docID)
 }
 
-// LoadDocument reads the document file and returns its text content.
+func (fs *FileStore) yjsPath(docID string) string {
+	return filepath.Join(fs.baseDir, ".yjs", docID+".yjs")
+}
+
+// LoadDocument reads the document file and any stored Y.js updates.
+// Returns Content (original text for initial seed) and Updates (persisted Y.js state).
 func (fs *FileStore) LoadDocument(docID string) (*spi.LoadResponse, error) {
 	if err := validateDocID(docID); err != nil {
 		return nil, err
@@ -57,13 +67,35 @@ func (fs *FileStore) LoadDocument(docID string) (*spi.LoadResponse, error) {
 		return nil, fmt.Errorf("reading document: %w", err)
 	}
 
-	return &spi.LoadResponse{
+	resp := &spi.LoadResponse{
 		Content: string(data),
-	}, nil
+	}
+
+	// Load stored Y.js updates if they exist
+	yjsFile := fs.yjsPath(docID)
+	if f, err := os.Open(yjsFile); err == nil {
+		defer f.Close()
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024) // up to 1MB per line
+		var seq uint64
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			seq++
+			resp.Updates = append(resp.Updates, spi.UpdatePayload{
+				Sequence: seq,
+				Data:     line, // base64-encoded Y.js message
+			})
+		}
+	}
+
+	return resp, nil
 }
 
-// StoreUpdates writes the document content back to the file.
-// In this simple provider, each "update" contains the full document text in the Data field.
+// StoreUpdates appends Y.js update data to the document's .yjs journal file.
+// The original document file is NOT modified — it serves as the initial seed.
 func (fs *FileStore) StoreUpdates(docID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
 	if err := validateDocID(docID); err != nil {
 		return nil, err
@@ -72,16 +104,21 @@ func (fs *FileStore) StoreUpdates(docID string, updates []spi.UpdatePayload) (*s
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	// Use the last update's data as the current document content
 	if len(updates) == 0 {
 		return &spi.StoreResponse{Stored: 0}, nil
 	}
 
-	lastUpdate := updates[len(updates)-1]
-	path := fs.filePath(docID)
+	yjsFile := fs.yjsPath(docID)
+	f, err := os.OpenFile(yjsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("opening yjs file: %w", err)
+	}
+	defer f.Close()
 
-	if err := os.WriteFile(path, []byte(lastUpdate.Data), 0o644); err != nil {
-		return nil, fmt.Errorf("writing document: %w", err)
+	for _, u := range updates {
+		if _, err := fmt.Fprintln(f, u.Data); err != nil {
+			return nil, fmt.Errorf("writing yjs update: %w", err)
+		}
 	}
 
 	return &spi.StoreResponse{

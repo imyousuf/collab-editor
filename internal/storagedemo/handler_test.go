@@ -90,12 +90,15 @@ func TestLoad_ExistingDocument(t *testing.T) {
 }
 
 func TestStoreUpdates_Success(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, store := newTestServer(t)
 	ts := time.Now().UTC()
+
+	// Create a seed document first
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Seed"), 0o644)
 
 	req := spi.StoreRequest{
 		Updates: []spi.UpdatePayload{
-			{Sequence: 1, Data: "# Updated Content", ClientID: 100, CreatedAt: ts},
+			{Sequence: 1, Data: "AQID", ClientID: 100, CreatedAt: ts},
 		},
 	}
 
@@ -111,13 +114,19 @@ func TestStoreUpdates_Success(t *testing.T) {
 		t.Errorf("stored: got %d, want 1", storeResp.Stored)
 	}
 
-	// Verify the file was written
+	// Verify updates are returned via load (not in Content, but in Updates)
 	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", spi.LoadRequest{})
 	defer loadResp.Body.Close()
 	var lr spi.LoadResponse
 	json.NewDecoder(loadResp.Body).Decode(&lr)
-	if lr.Content != "# Updated Content" {
-		t.Errorf("expected stored content, got %q", lr.Content)
+	if lr.Content != "# Seed" {
+		t.Errorf("Content should be seed, got %q", lr.Content)
+	}
+	if len(lr.Updates) != 1 {
+		t.Fatalf("Updates: got %d, want 1", len(lr.Updates))
+	}
+	if lr.Updates[0].Data != "AQID" {
+		t.Errorf("Updates[0].Data: got %q, want %q", lr.Updates[0].Data, "AQID")
 	}
 }
 

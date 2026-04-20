@@ -1,7 +1,10 @@
 package relay
 
 import (
+	"context"
+	"log/slog"
 	"sync"
+	"time"
 )
 
 // Room represents a collaborative editing session for a single document.
@@ -13,6 +16,16 @@ type Room struct {
 	metrics    *Metrics
 	closeCh    chan struct{}
 	closeOnce  sync.Once
+
+	// Persistence: buffer raw y-websocket messages for flushing to storage
+	buffer  *UpdateBuffer
+	flusher *Flusher
+	flushCh chan struct{} // signaled when buffer exceeds FlushMaxBytes
+
+	// Stored messages loaded from the provider on room creation.
+	// Replayed to newly connecting peers before their read loop starts.
+	storedMu       sync.RWMutex
+	storedMessages [][]byte
 }
 
 func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metrics) *Room {
@@ -22,6 +35,9 @@ func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metri
 		config:     cfg,
 		metrics:    metrics,
 		closeCh:    make(chan struct{}),
+		buffer:     NewUpdateBuffer(),
+		flusher:    flusher,
+		flushCh:    make(chan struct{}, 1),
 	}
 }
 
@@ -70,7 +86,8 @@ func (r *Room) BroadcastAll(data []byte) {
 }
 
 // handleMessage processes an incoming binary message from a peer.
-// Yjs messages: byte 0 = type (0=sync, 1=awareness)
+// y-websocket messages: byte 0 = type (0=sync, 1=awareness).
+// Only sync messages are buffered for persistence.
 func (r *Room) handleMessage(sender *Peer, data []byte) {
 	if len(data) == 0 {
 		return
@@ -79,6 +96,70 @@ func (r *Room) handleMessage(sender *Peer, data []byte) {
 	// Relay the raw message to all other peers
 	r.Broadcast(sender, data)
 	r.metrics.UpdatesRelayedTotal.WithLabelValues(r.documentID).Inc()
+
+	// Buffer sync messages (type 0) for persistence.
+	// Skip awareness messages (type 1) — they're ephemeral.
+	if data[0] == 0x00 {
+		totalSize := r.buffer.Append(data, 0)
+		if totalSize >= r.config.FlushMaxBytes {
+			select {
+			case r.flushCh <- struct{}{}:
+			default: // already signaled
+			}
+		}
+	}
+}
+
+// StartFlushLoop runs the periodic flush goroutine.
+// Flushes buffered updates to the storage provider on a timer or when
+// the buffer exceeds FlushMaxBytes. Performs a final flush on close.
+func (r *Room) StartFlushLoop(ctx context.Context) {
+	ticker := time.NewTicker(r.config.FlushDebounce)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			r.flushBuffer(ctx)
+			return
+		case <-r.closeCh:
+			r.flushBuffer(ctx)
+			return
+		case <-ticker.C:
+			r.flushBuffer(ctx)
+		case <-r.flushCh:
+			r.flushBuffer(ctx)
+		}
+	}
+}
+
+func (r *Room) flushBuffer(ctx context.Context) {
+	if r.flusher == nil || r.buffer.Len() == 0 {
+		return
+	}
+	requeue := r.flusher.Flush(ctx, r.documentID, r.buffer)
+	if len(requeue) > 0 {
+		r.buffer.Prepend(requeue)
+		slog.Warn("re-queued failed updates", "doc", r.documentID, "count", len(requeue))
+	}
+}
+
+// SetStoredMessages sets the messages loaded from the storage provider
+// that should be replayed to newly connecting peers.
+func (r *Room) SetStoredMessages(msgs [][]byte) {
+	r.storedMu.Lock()
+	defer r.storedMu.Unlock()
+	r.storedMessages = msgs
+}
+
+// SendStoredMessages replays stored messages to a peer.
+// Called after the peer's write loop starts but before the read loop.
+func (r *Room) SendStoredMessages(peer *Peer) {
+	r.storedMu.RLock()
+	defer r.storedMu.RUnlock()
+	for _, msg := range r.storedMessages {
+		peer.Send(msg)
+	}
 }
 
 // Close cleans up the room when it's being removed.

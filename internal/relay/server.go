@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -45,11 +46,33 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 		loadCtx, cancel := context.WithTimeout(ctx, s.config.Storage.LoadTimeout)
 		defer cancel()
 
-		// Verify document exists in the provider (logging only)
-		_, loadErr := s.provider.Load(loadCtx, documentID, "")
+		resp, loadErr := s.provider.Load(loadCtx, documentID, "")
 		if loadErr != nil {
 			slog.Error("failed to load document from provider", "doc", documentID, "err", loadErr)
+			return nil
 		}
+
+		// If the provider returned stored Y.js updates, decode and set them
+		// for replay to newly connecting peers.
+		if resp != nil && len(resp.Updates) > 0 {
+			msgs := make([][]byte, 0, len(resp.Updates))
+			for _, u := range resp.Updates {
+				decoded, err := base64.StdEncoding.DecodeString(u.Data)
+				if err != nil {
+					slog.Warn("skipping corrupted stored update", "doc", documentID, "err", err)
+					continue
+				}
+				msgs = append(msgs, decoded)
+			}
+			if len(msgs) > 0 {
+				room.SetStoredMessages(msgs)
+				slog.Info("loaded stored Y.js state", "doc", documentID, "updates", len(msgs))
+			}
+		}
+
+		// Start the flush goroutine for this room
+		go room.StartFlushLoop(ctx)
+
 		return nil
 	})
 	if err != nil {
@@ -63,6 +86,10 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 	writeCtx, writeCancel := context.WithCancel(ctx)
 	defer writeCancel()
 	go peer.writeLoop(writeCtx)
+
+	// Replay stored messages to the peer before starting the read loop.
+	// This bootstraps the peer's Y.Doc with persisted state.
+	room.SendStoredMessages(peer)
 
 	// Read loop blocks until disconnect
 	peer.readLoop(ctx)

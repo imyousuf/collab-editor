@@ -193,3 +193,161 @@ func TestRoom_Close(t *testing.T) {
 		t.Error("closeCh should be closed after Close()")
 	}
 }
+
+func TestRoom_HandleMessage_BuffersSyncMessages(t *testing.T) {
+	room, _ := newTestRoom(t)
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+
+	// Sync message (type 0x00) should be buffered
+	syncMsg := []byte{0x00, 0x02, 0x01, 0x02, 0x03}
+	room.handleMessage(peer, syncMsg)
+
+	if room.buffer.Len() != 1 {
+		t.Errorf("buffer.Len() = %d, want 1", room.buffer.Len())
+	}
+
+	// Awareness message (type 0x01) should NOT be buffered
+	awarenessMsg := []byte{0x01, 0x01, 0x02}
+	room.handleMessage(peer, awarenessMsg)
+
+	if room.buffer.Len() != 1 {
+		t.Errorf("buffer.Len() = %d, want 1 (awareness should be skipped)", room.buffer.Len())
+	}
+}
+
+func TestRoom_HandleMessage_EmptyMessageNotBuffered(t *testing.T) {
+	room, _ := newTestRoom(t)
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+
+	room.handleMessage(peer, []byte{})
+	if room.buffer.Len() != 0 {
+		t.Errorf("empty message should not be buffered, got buffer.Len() = %d", room.buffer.Len())
+	}
+}
+
+func TestRoom_HandleMessage_SignalsFlushOnSizeThreshold(t *testing.T) {
+	room, _ := newTestRoom(t)
+	room.config.FlushMaxBytes = 10 // very low threshold
+
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+
+	// Send a sync message that exceeds threshold
+	syncMsg := []byte{0x00, 0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a}
+	room.handleMessage(peer, syncMsg)
+
+	// flushCh should be signaled
+	select {
+	case <-room.flushCh:
+		// expected
+	default:
+		t.Error("flushCh should be signaled when buffer exceeds FlushMaxBytes")
+	}
+}
+
+func TestRoom_FlushLoop_FlushesOnTimer(t *testing.T) {
+	room, _ := newTestRoom(t)
+	room.config.FlushDebounce = 50 * time.Millisecond
+
+	// Add a sync message to buffer
+	room.buffer.Append([]byte{0x00, 0x02, 0x01}, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		room.StartFlushLoop(ctx)
+		close(done)
+	}()
+
+	// Wait for flush to drain the buffer
+	time.Sleep(150 * time.Millisecond)
+
+	if room.buffer.Len() != 0 {
+		t.Errorf("buffer should be drained by flush loop, got Len() = %d", room.buffer.Len())
+	}
+
+	cancel()
+	<-done
+}
+
+func TestRoom_FlushLoop_FinalFlushOnClose(t *testing.T) {
+	room, _ := newTestRoom(t)
+	room.config.FlushDebounce = 10 * time.Second // long enough that timer won't fire
+
+	// Add messages to buffer
+	room.buffer.Append([]byte{0x00, 0x02, 0x01}, 0)
+	room.buffer.Append([]byte{0x00, 0x02, 0x02}, 0)
+
+	ctx := context.Background()
+	done := make(chan struct{})
+	go func() {
+		room.StartFlushLoop(ctx)
+		close(done)
+	}()
+
+	// Close the room — should trigger final flush
+	room.Close()
+	<-done
+
+	if room.buffer.Len() != 0 {
+		t.Errorf("buffer should be drained on close, got Len() = %d", room.buffer.Len())
+	}
+}
+
+func TestRoom_StoredMessages_SetAndSend(t *testing.T) {
+	room, _ := newTestRoom(t)
+
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+
+	// Start write loop so Send() works
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer.writeLoop(ctx)
+
+	// Set stored messages
+	msgs := [][]byte{
+		{0x00, 0x02, 0x01},
+		{0x00, 0x02, 0x02},
+	}
+	room.SetStoredMessages(msgs)
+
+	// Send stored messages to peer
+	room.SendStoredMessages(peer)
+
+	// Verify peer received both messages
+	for i, expected := range msgs {
+		select {
+		case got := <-conn.writeCh:
+			if string(got) != string(expected) {
+				t.Errorf("msg %d: got %v, want %v", i, got, expected)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for stored message %d", i)
+		}
+	}
+}
+
+func TestRoom_StoredMessages_EmptyIsNoOp(t *testing.T) {
+	room, _ := newTestRoom(t)
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+
+	// No stored messages set — SendStoredMessages should not panic
+	room.SendStoredMessages(peer)
+
+	select {
+	case <-conn.writeCh:
+		t.Error("should not send anything when no stored messages")
+	default:
+		// expected
+	}
+}
