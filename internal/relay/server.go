@@ -20,6 +20,7 @@ type Server struct {
 	provider *provider.Client
 	breaker  *CircuitBreaker
 	metrics  *Metrics
+	broker   MessageBroker // optional: for cross-instance scaling
 }
 
 func NewServer(cfg *Config, providerClient *provider.Client, breaker *CircuitBreaker, metrics *Metrics) *Server {
@@ -36,6 +37,16 @@ func NewServer(cfg *Config, providerClient *provider.Client, breaker *CircuitBre
 		breaker:  breaker,
 		metrics:  metrics,
 	}
+}
+
+// SetBroker sets the message broker for cross-instance scaling.
+func (s *Server) SetBroker(broker MessageBroker) {
+	s.broker = broker
+}
+
+// Flusher returns the flusher used by room managers.
+func (s *Server) Flusher() *Flusher {
+	return s.rooms.flusher
 }
 
 // HandleConnection processes a single WebSocket connection.
@@ -73,6 +84,21 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 		// Start the flush goroutine for this room — uses its own
 		// background context so it survives individual connection closures.
 		go room.StartFlushLoop(s.config.Storage.StoreTimeout)
+
+		// If a broker is configured, add a broker peer for cross-instance relay.
+		// The broker peer's readLoop feeds Redis messages into the room,
+		// and its writeLoop publishes local broadcasts to Redis.
+		if s.broker != nil {
+			bConn, bErr := newBrokerConn(s.broker, documentID)
+			if bErr != nil {
+				slog.Error("failed to create broker peer", "doc", documentID, "err", bErr)
+			} else {
+				brokerPeer := newPeer(bConn, room)
+				room.AddPeer(brokerPeer)
+				go brokerPeer.writeLoop(context.Background())
+				go brokerPeer.readLoop(context.Background())
+			}
+		}
 
 		return nil
 	})

@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
+import { SocketIOProvider } from './socketio-provider.js';
 import type {
   ICollaborationProvider,
   CollaborationConfig,
@@ -8,12 +9,14 @@ import type {
   RemoteUpdateCallback,
 } from '../interfaces/collaboration.js';
 
+type YjsProvider = WebsocketProvider | SocketIOProvider;
+
 export class CollaborationProvider implements ICollaborationProvider {
   readonly ydoc: Y.Doc;
   readonly sharedText: Y.Text;
   readonly meta: Y.Map<string>;
 
-  private _provider: WebsocketProvider | null = null;
+  private _provider: YjsProvider | null = null;
   private _status: CollabStatus = 'disconnected';
   private _statusCallbacks = new Set<CollabStatusCallback>();
   private _remoteCallbacks = new Set<RemoteUpdateCallback>();
@@ -35,11 +38,20 @@ export class CollaborationProvider implements ICollaborationProvider {
     this.disconnect();
     this._setStatus('connecting');
 
-    this._provider = new WebsocketProvider(
-      config.providerUrl,
-      config.roomName,
-      this.ydoc,
-    );
+    if (config.transport === 'socketio') {
+      this._provider = new SocketIOProvider(
+        config.providerUrl,
+        config.roomName,
+        this.ydoc,
+        { auth: config.socketAuth },
+      );
+    } else {
+      this._provider = new WebsocketProvider(
+        config.providerUrl,
+        config.roomName,
+        this.ydoc,
+      );
+    }
     this._provider.awareness.setLocalStateField('user', config.user);
 
     this._provider.on('status', (event: { status: string }) => {

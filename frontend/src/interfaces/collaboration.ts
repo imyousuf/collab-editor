@@ -6,11 +6,15 @@ export interface CollaborationConfig {
   enabled: boolean;
   roomName: string;
   providerUrl: string;
+  /** Transport protocol. Default: 'websocket' */
+  transport?: 'websocket' | 'socketio';
   user: {
     name: string;
     color: string;
     image?: string;
   };
+  /** Auth payload for Socket.io handshake (only used when transport is 'socketio') */
+  socketAuth?: Record<string, any>;
 }
 
 export type CollabStatusCallback = (status: CollabStatus) => void;

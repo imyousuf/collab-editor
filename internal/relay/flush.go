@@ -16,6 +16,7 @@ type Flusher struct {
 	metrics    *Metrics
 	maxRetries int
 	backoff    time.Duration
+	lock       FlushLock // optional: distributed lock for multi-instance
 }
 
 func NewFlusher(client *provider.Client, breaker *CircuitBreaker, metrics *Metrics, maxRetries int, backoff time.Duration) *Flusher {
@@ -28,9 +29,28 @@ func NewFlusher(client *provider.Client, breaker *CircuitBreaker, metrics *Metri
 	}
 }
 
+// SetFlushLock sets an optional distributed lock for multi-instance coordination.
+// When set, only one instance flushes per document at a time.
+func (f *Flusher) SetFlushLock(lock FlushLock) {
+	f.lock = lock
+}
+
 // Flush drains the buffer and persists updates to the provider.
 // Returns any updates that could not be stored (for re-queuing).
 func (f *Flusher) Flush(ctx context.Context, documentID string, buffer *UpdateBuffer) []BufferedUpdate {
+	// If distributed lock is configured, acquire before draining
+	if f.lock != nil {
+		acquired, err := f.lock.Acquire(ctx, documentID, 10*time.Second)
+		if err != nil {
+			slog.Debug("flush lock acquire error", "doc", documentID, "err", err)
+			return nil
+		}
+		if !acquired {
+			return nil // Another instance will handle this document
+		}
+		defer f.lock.Release(ctx, documentID)
+	}
+
 	updates := buffer.Drain()
 	if len(updates) == 0 {
 		return nil

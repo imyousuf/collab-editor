@@ -10,6 +10,9 @@ export default defineConfig({
     },
     target: 'esnext',
     minify: 'esbuild',
+    rollupOptions: {
+      external: ['socket.io-client'],
+    },
   },
   server: {
     port: 5173,

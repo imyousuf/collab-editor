@@ -1,4 +1,4 @@
-.PHONY: build relay provider test test-fast lint fmt vet docker-up docker-down docker-build clean test-e2e
+.PHONY: build relay provider test test-fast lint fmt vet proto docker-up docker-down docker-build clean test-e2e
 
 GO := go
 BIN_DIR := bin
@@ -25,6 +25,9 @@ vet:
 
 fmt:
 	gofmt -w .
+
+proto:
+	buf generate
 
 docker-build:
 	docker compose build

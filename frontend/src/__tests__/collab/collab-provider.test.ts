@@ -204,4 +204,37 @@ describe('CollaborationProvider unit tests', () => {
 
     provider.destroy();
   });
+
+  test('CollaborationConfig accepts transport field', () => {
+    // Type-level test: transport field exists and accepts both values
+    const wsConfig = {
+      enabled: true,
+      roomName: 'test',
+      providerUrl: 'ws://localhost:8080',
+      transport: 'websocket' as const,
+      user: { name: 'User', color: '#000' },
+    };
+    expect(wsConfig.transport).toBe('websocket');
+
+    const sioConfig = {
+      enabled: true,
+      roomName: 'test',
+      providerUrl: '/collab',
+      transport: 'socketio' as const,
+      socketAuth: { token: 'abc', instance_id: '123' },
+      user: { name: 'User', color: '#000' },
+    };
+    expect(sioConfig.transport).toBe('socketio');
+    expect(sioConfig.socketAuth).toEqual({ token: 'abc', instance_id: '123' });
+  });
+
+  test('CollaborationConfig transport defaults to undefined (websocket)', () => {
+    const config = {
+      enabled: true,
+      roomName: 'test',
+      providerUrl: 'ws://localhost:8080',
+      user: { name: 'User', color: '#000' },
+    };
+    expect(config.transport).toBeUndefined();
+  });
 });

@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/imyousuf/collab-editor/internal/provider"
 	"github.com/imyousuf/collab-editor/internal/relay"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -54,6 +55,29 @@ func main() {
 
 	// Create server
 	srv := relay.NewServer(&cfg, providerClient, breaker, metrics)
+
+	// Set up Redis broker and flush lock if enabled
+	if cfg.Redis.Enabled {
+		opts, err := redis.ParseURL(cfg.Redis.URL)
+		if err != nil {
+			slog.Error("invalid redis URL", "url", cfg.Redis.URL, "err", err)
+			os.Exit(1)
+		}
+		opts.Password = cfg.Redis.Password
+		opts.DB = cfg.Redis.DB
+		opts.PoolSize = cfg.Redis.PoolSize
+
+		rdb := redis.NewClient(opts)
+		if err := rdb.Ping(context.Background()).Err(); err != nil {
+			slog.Error("failed to connect to Redis", "err", err)
+			os.Exit(1)
+		}
+		defer rdb.Close()
+
+		srv.SetBroker(relay.NewRedisBroker(rdb))
+		srv.Flusher().SetFlushLock(relay.NewRedisFlushLock(rdb))
+		slog.Info("redis broker enabled", "url", cfg.Redis.URL)
+	}
 
 	// Set up context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -140,13 +164,25 @@ func main() {
 		},
 	}
 
-	// Start WebSocket transport (blocks until ctx is cancelled)
+	// Start WebSocket transport
 	go func() {
-		slog.Info("relay server starting", "addr", cfg.Server.Addr)
+		slog.Info("websocket transport starting", "addr", cfg.Server.Addr)
 		if err := transport.Serve(ctx, srv.HandleConnection); err != nil {
-			slog.Error("transport failed", "err", err)
+			slog.Error("websocket transport failed", "err", err)
 		}
 	}()
+
+	// Start gRPC transport if enabled
+	var grpcTransport *relay.GRPCTransport
+	if cfg.GRPC.Enabled {
+		grpcTransport = &relay.GRPCTransport{Addr: cfg.GRPC.Addr}
+		go func() {
+			slog.Info("grpc transport starting", "addr", cfg.GRPC.Addr)
+			if err := grpcTransport.Serve(ctx, srv.HandleConnection); err != nil {
+				slog.Error("grpc transport failed", "err", err)
+			}
+		}()
+	}
 
 	// Wait for signal
 	quit := make(chan os.Signal, 1)

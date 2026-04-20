@@ -1,0 +1,38 @@
+name: Proto
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'pkg/relayapi/**'
+      - 'buf.yaml'
+      - 'buf.gen.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  buf:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          version: latest
+
+      - name: Lint
+        run: buf lint
+
+      - name: Breaking change check
+        run: buf breaking --against '.git#branch=main'
+
+      - name: Check generated stubs are up to date
+        run: |
+          buf generate
+          git diff --exit-code pkg/relayapi/v1/
+
+      - name: Push to BSR
+        if: github.ref == 'refs/heads/main'
+        run: buf push
+        env:
+          BUF_TOKEN: ${{ secrets.BUF_TOKEN }}

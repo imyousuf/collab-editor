@@ -12,10 +12,26 @@ import (
 
 type Config struct {
 	Server  ServerConfig  `koanf:"server"`
+	GRPC    GRPCConfig    `koanf:"grpc"`
 	Storage StorageConfig `koanf:"storage"`
 	Room    RoomConfig    `koanf:"room"`
+	Redis   RedisConfig   `koanf:"redis"`
 	Metrics MetricsConfig `koanf:"metrics"`
 	Log     LogConfig     `koanf:"log"`
+}
+
+type GRPCConfig struct {
+	Enabled bool   `koanf:"enabled"`
+	Addr    string `koanf:"addr"`
+}
+
+type RedisConfig struct {
+	Enabled      bool          `koanf:"enabled"`
+	URL          string        `koanf:"url"`
+	Password     string        `koanf:"password"`
+	DB           int           `koanf:"db"`
+	PoolSize     int           `koanf:"pool_size"`
+	FlushLockTTL time.Duration `koanf:"flush_lock_ttl"`
 }
 
 type ServerConfig struct {
@@ -83,6 +99,17 @@ func DefaultConfig() Config {
 				Threshold: 3,
 			},
 		},
+		GRPC: GRPCConfig{
+			Enabled: false,
+			Addr:    ":50051",
+		},
+		Redis: RedisConfig{
+			Enabled:      false,
+			URL:          "redis://localhost:6379",
+			DB:           0,
+			PoolSize:     10,
+			FlushLockTTL: 4 * time.Second,
+		},
 		Room: RoomConfig{
 			FlushDebounce:   2 * time.Second,
 			FlushMaxBytes:   65536,
@@ -117,8 +144,12 @@ func LoadConfig(path string) (Config, error) {
 		"COLLAB_SERVER_ADDR":          "server.addr",
 		"COLLAB_METRICS_ADDR":         "metrics.addr",
 		"COLLAB_LOG_LEVEL":            "log.level",
+		"COLLAB_GRPC_ENABLED":         "grpc.enabled",
+		"COLLAB_GRPC_ADDR":            "grpc.addr",
+		"COLLAB_REDIS_ENABLED":        "redis.enabled",
+		"COLLAB_REDIS_URL":            "redis.url",
 	}
-	if err := k.Load(env.ProviderWithValue("COLLAB_", ".", func(key, value string) (string, interface{}) {
+	if err := k.Load(env.ProviderWithValue("COLLAB_", ".", func(key, value string) (string, any) {
 		if mapped, ok := envMappings[key]; ok {
 			return mapped, value
 		}
