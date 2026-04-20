@@ -152,30 +152,6 @@ func TestStoreUpdates_EmptyBody(t *testing.T) {
 	}
 }
 
-func TestDeleteDocument_Handler(t *testing.T) {
-	srv, store := newTestServer(t)
-	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("content"), 0o644)
-
-	resp := doRequest(t, srv, "DELETE", "/documents?path=doc.md", nil)
-	defer resp.Body.Close()
-	// SDK returns 204 on successful delete
-	if resp.StatusCode != http.StatusNoContent {
-		t.Errorf("expected 204, got %d", resp.StatusCode)
-	}
-
-	// Verify deleted — load returns empty content
-	loadResp := doRequest(t, srv, "POST", "/documents/load?path=doc.md", nil)
-	defer loadResp.Body.Close()
-	if loadResp.StatusCode != http.StatusOK {
-		t.Errorf("expected 200 after delete, got %d", loadResp.StatusCode)
-	}
-	var lr spi.LoadResponse
-	json.NewDecoder(loadResp.Body).Decode(&lr)
-	if lr.Content != "" {
-		t.Errorf("expected empty content after delete, got %q", lr.Content)
-	}
-}
-
 func TestListDocuments(t *testing.T) {
 	srv, store := newTestServer(t)
 

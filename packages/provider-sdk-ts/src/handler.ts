@@ -69,20 +69,6 @@ export function createExpressRouter(
     }
   });
 
-  router.delete('/documents', async (req: Request, res: Response) => {
-    const documentId = req.query.path as string;
-    if (!documentId) {
-      res.status(400).json({ error: "missing 'path' query parameter" });
-      return;
-    }
-    try {
-      await processor.processDelete(documentId);
-      res.status(200).json({ deleted: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   router.get('/documents', async (_req: Request, res: Response) => {
     try {
       const docs = await processor.processList();

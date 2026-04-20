@@ -135,22 +135,6 @@ func (fs *FileStore) StoreUpdates(docID string, updates []spi.UpdatePayload) (*s
 	}, nil
 }
 
-// DeleteDocument removes the document file.
-func (fs *FileStore) DeleteDocument(docID string) error {
-	if err := validateDocID(docID); err != nil {
-		return err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	path := fs.filePath(docID)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("deleting document: %w", err)
-	}
-	return nil
-}
-
 // CompactDocument is a no-op for this simple file-based provider.
 func (fs *FileStore) CompactDocument(docID string, req *spi.CompactRequest) (*spi.CompactResponse, error) {
 	if err := validateDocID(docID); err != nil {
@@ -199,13 +183,6 @@ func (fs *FileStore) Health(_ context.Context) (*spi.HealthResponse, error) {
 		resp.Storage = "disconnected"
 	}
 	return resp, nil
-}
-
-// --- spi.OptionalDelete implementation ---
-
-// Delete implements spi.OptionalDelete.
-func (fs *FileStore) Delete(_ context.Context, documentID string) error {
-	return fs.DeleteDocument(documentID)
 }
 
 // --- spi.OptionalList implementation ---
@@ -481,9 +458,8 @@ func (fs *FileStore) StoreClientMappings(_ context.Context, documentID string, m
 
 // Compile-time interface assertions.
 var (
-	_ spi.Provider             = (*FileStore)(nil)
-	_ spi.OptionalDelete       = (*FileStore)(nil)
-	_ spi.OptionalList         = (*FileStore)(nil)
-	_ spi.OptionalVersions     = (*FileStore)(nil)
+	_ spi.Provider               = (*FileStore)(nil)
+	_ spi.OptionalList           = (*FileStore)(nil)
+	_ spi.OptionalVersions       = (*FileStore)(nil)
 	_ spi.OptionalClientMappings = (*FileStore)(nil)
 )

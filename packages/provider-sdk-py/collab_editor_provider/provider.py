@@ -67,10 +67,6 @@ class Provider(ABC):
         """Load previously stored raw Yjs updates for replay."""
         raise NotImplementedError
 
-    async def delete_content(self, document_id: str) -> None:
-        """Delete a document."""
-        raise NotImplementedError
-
     async def list_documents(self) -> list[DocumentListEntry]:
         """List available documents."""
         raise NotImplementedError
@@ -92,10 +88,6 @@ class Provider(ABC):
     @property
     def supports_load_raw_updates(self) -> bool:
         return type(self).load_raw_updates is not Provider.load_raw_updates
-
-    @property
-    def supports_delete(self) -> bool:
-        return type(self).delete_content is not Provider.delete_content
 
     @property
     def supports_list(self) -> bool:
@@ -212,11 +204,6 @@ class ProviderProcessor:
 
     async def process_health(self) -> HealthResponse:
         return await self._provider.on_health()
-
-    async def process_delete(self, document_id: str) -> None:
-        self._cache.delete(document_id)
-        if self._provider.supports_delete:
-            await self._provider.delete_content(document_id)
 
     async def process_list(self) -> list[DocumentListEntry]:
         if self._provider.supports_list:

@@ -26,7 +26,7 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
   redis_flush_lock.go  — Redis SETNX distributed flush lock
 internal/provider/     — HTTP client for the storage provider SPI
 internal/storagedemo/  — Demo filesystem-based storage provider
-  store.go             — FileStore implementing spi.Provider + OptionalDelete + OptionalList
+  store.go             — FileStore implementing spi.Provider + OptionalList
                          + OptionalVersions + OptionalClientMappings
   server.go            — chi router: spi.NewHTTPHandler() + bearer auth + compact endpoint
   config.go            — koanf config loader
@@ -113,7 +113,7 @@ make test-e2e                               # Run ATR browser tests
 - Multi-instance scaling via Redis pub/sub: broker peer pattern adds a synthetic peer to each room that relays messages cross-instance without changing Room code
 - Distributed flush lock (Redis SETNX + Lua release) ensures only one instance flushes per document
 - Provider SDKs support dual storage: raw updates mode (append-only journal) and/or resolved text mode (SDK applies Yjs diffs, gives you plain text)
-- The demo provider implements `spi.Provider`, `spi.OptionalDelete`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
+- The demo provider implements `spi.Provider`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
 - Version history: SPI is Yjs-agnostic — `VersionEntry` returns plain text content, not CRDT binary. SDKs compute blame from version content chain (LCS-based line diff). Demo provider stores versions as JSON files in `.versions/{docID}/`
 - Blame has two modes: **live blame** (captures Y.Doc update events in localStorage, resets on refresh) and **version blame** (read-only, blame segments from SPI). Developer controls which modes are available via `liveBlameEnabled`/`versionBlameEnabled` config
 - `IBlameCapability` is an optional interface — `DualModeBinding` and `SourceOnlyBinding` implement it. Checked via `isBlameCapable()` type guard

@@ -23,7 +23,6 @@ The relay batches Yjs updates from connected peers and periodically flushes them
 | `/health` | GET | Health check |
 | `/documents/load?path={id}` | POST | Load document content + stored Yjs updates |
 | `/documents/updates?path={id}` | POST | Persist batched incremental Yjs updates |
-| `/documents?path={id}` | DELETE | Delete a document (optional) |
 | `/documents` | GET | List available documents (optional) |
 
 See [HTTP SPI Contract](research/collab-editor-http-spi.md) for the full specification.
@@ -64,9 +63,6 @@ type Provider interface {
 }
 
 // Optional interfaces
-type OptionalDelete interface {
-    Delete(ctx context.Context, documentID string) error
-}
 type OptionalList interface {
     ListDocuments(ctx context.Context) ([]DocumentListEntry, error)
 }
@@ -119,7 +115,7 @@ resp, err := spi.ProcessStoreRequest(ctx, provider, documentID, requestBody)
 
 ### Reference Implementation
 
-The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage. It implements `spi.Provider`, `spi.OptionalDelete`, and `spi.OptionalList`, delegates all SPI routing to `spi.NewHTTPHandler()`, and layers chi middleware for bearer auth on top.
+The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage. It implements `spi.Provider` and `spi.OptionalList`, delegates all SPI routing to `spi.NewHTTPHandler()`, and layers chi middleware for bearer auth on top.
 
 ---
 
@@ -146,7 +142,6 @@ interface Provider {
   writeContent?(documentId: string, content: string, mimeType: string): Promise<void>;
   storeRawUpdates?(documentId: string, updates: UpdatePayload[]): Promise<void>;
   loadRawUpdates?(documentId: string): Promise<UpdatePayload[]>;
-  deleteContent?(documentId: string): Promise<void>;
   listDocuments?(): Promise<DocumentListEntry[]>;
   onHealth?(): Promise<HealthResponse>;
 }
@@ -237,7 +232,6 @@ class Provider(ABC):
     async def write_content(self, document_id: str, content: str, mime_type: str) -> None: ...
     async def store_raw_updates(self, document_id: str, updates: list[UpdatePayload]) -> None: ...
     async def load_raw_updates(self, document_id: str) -> list[UpdatePayload]: ...
-    async def delete_content(self, document_id: str) -> None: ...
     async def list_documents(self) -> list[DocumentListEntry]: ...
     async def on_health(self) -> HealthResponse: ...
 ```

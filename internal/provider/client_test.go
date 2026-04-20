@@ -108,21 +108,6 @@ func TestStore_PartialFailure(t *testing.T) {
 	}
 }
 
-func TestDelete(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "DELETE" || r.URL.Path != "/documents" || r.URL.Query().Get("path") != "doc-1" {
-			t.Errorf("unexpected: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	c := NewClient(ClientConfig{BaseURL: srv.URL, StoreTimeout: 5 * time.Second})
-	if err := c.Delete(context.Background(), "doc-1"); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestHealth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -206,32 +206,6 @@ func TestProcessStoreRequest_InvalidJSON(t *testing.T) {
 
 // Test with optional interfaces
 
-type testProviderWithDelete struct {
-	testProvider
-	deletedDoc string
-}
-
-func (p *testProviderWithDelete) Delete(_ context.Context, documentID string) error {
-	p.deletedDoc = documentID
-	return nil
-}
-
-func TestHTTPHandler_Delete(t *testing.T) {
-	p := &testProviderWithDelete{}
-	handler := NewHTTPHandler(p)
-
-	req := httptest.NewRequest("DELETE", "/documents?path=doc1", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNoContent {
-		t.Errorf("status: got %d, want %d", w.Code, http.StatusNoContent)
-	}
-	if p.deletedDoc != "doc1" {
-		t.Errorf("deleted doc: got %q", p.deletedDoc)
-	}
-}
-
 type testProviderWithList struct {
 	testProvider
 }

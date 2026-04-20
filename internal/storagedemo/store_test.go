@@ -151,32 +151,6 @@ func TestLoadDocument_NoYjsFile(t *testing.T) {
 	}
 }
 
-func TestDeleteDocument(t *testing.T) {
-	store := newTestStore(t)
-
-	// Create seed file
-	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("content"), 0o644)
-
-	if err := store.DeleteDocument("doc.md"); err != nil {
-		t.Fatal(err)
-	}
-
-	resp, err := store.LoadDocument("doc.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp != nil {
-		t.Errorf("expected nil after delete, got %+v", resp)
-	}
-}
-
-func TestDeleteDocument_Nonexistent(t *testing.T) {
-	store := newTestStore(t)
-	if err := store.DeleteDocument("nope.md"); err != nil {
-		t.Errorf("deleting nonexistent doc should not error: %v", err)
-	}
-}
-
 func TestHealthy(t *testing.T) {
 	store := newTestStore(t)
 	if !store.Healthy() {

@@ -168,19 +168,6 @@ Authorization: Bearer {relay-token}
 
 ---
 
-#### `DELETE /documents?path={documentId}`
-
-Delete all document data (optional).
-
-```
-DELETE /documents?path=my-doc.md
-Authorization: Bearer {relay-token}
-```
-
-**Response — 200 OK**
-
----
-
 #### `GET /documents`
 
 List available documents (optional).
@@ -393,7 +380,6 @@ Required Endpoints:
   ✅ POST   /documents/updates?path={id}
 
 Optional Endpoints:
-  ⬜ DELETE  /documents?path={id}
   ⬜ GET    /documents
   ⬜ POST   /documents/compact?path={id}
   ⬜ GET    /documents/versions?path={id}

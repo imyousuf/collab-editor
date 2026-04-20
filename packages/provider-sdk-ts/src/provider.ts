@@ -54,9 +54,6 @@ export interface Provider {
   /** Load previously stored raw Yjs updates for replay to new peers */
   loadRawUpdates?(documentId: string): Promise<UpdatePayload[]>;
 
-  /** Optional: delete a document */
-  deleteContent?(documentId: string): Promise<void>;
-
   /** Optional: list available documents */
   listDocuments?(): Promise<DocumentListEntry[]>;
 
@@ -173,14 +170,6 @@ export class ProviderProcessor {
       return this._provider.onHealth();
     }
     return { status: 'ok' };
-  }
-
-  /** Process a delete request */
-  async processDelete(documentId: string): Promise<void> {
-    this._cache.delete(documentId);
-    if (this._provider.deleteContent) {
-      await this._provider.deleteContent(documentId);
-    }
   }
 
   /** Process a list request */

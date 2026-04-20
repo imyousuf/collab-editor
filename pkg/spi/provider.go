@@ -26,12 +26,6 @@ type Provider interface {
 	Health(ctx context.Context) (*HealthResponse, error)
 }
 
-// OptionalDelete is an optional interface that providers can implement
-// to support document deletion.
-type OptionalDelete interface {
-	Delete(ctx context.Context, documentID string) error
-}
-
 // OptionalList is an optional interface that providers can implement
 // to support listing documents.
 type OptionalList interface {
@@ -82,7 +76,6 @@ func ProcessStoreRequest(ctx context.Context, p Provider, documentID string, bod
 //	GET  /health
 //	POST /documents/load?path={documentId}
 //	POST /documents/updates?path={documentId}
-//	DELETE /documents?path={documentId}                                  (if OptionalDelete)
 //	GET  /documents                                                      (if OptionalList)
 //	GET  /documents/versions?path={documentId}                           (if OptionalVersions)
 //	POST /documents/versions?path={documentId}                           (if OptionalVersions)
@@ -143,22 +136,6 @@ func NewHTTPHandler(p Provider) http.Handler {
 		}
 		writeJSON(w, status, resp)
 	})
-
-	// Optional: DELETE
-	if dp, ok := p.(OptionalDelete); ok {
-		mux.HandleFunc("DELETE /documents", func(w http.ResponseWriter, r *http.Request) {
-			documentID := r.URL.Query().Get("path")
-			if documentID == "" {
-				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
-				return
-			}
-			if err := dp.Delete(r.Context(), documentID); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		})
-	}
 
 	// Optional: LIST
 	if lp, ok := p.(OptionalList); ok {

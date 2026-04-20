@@ -82,13 +82,6 @@ def create_fastapi_router(
             return JSONResponse(content=result, status_code=207)
         return JSONResponse(content=result, status_code=202)
 
-    if provider.supports_delete:
-
-        @router.delete("/documents")
-        async def delete_document(path: str = Query(...)) -> dict[str, bool]:
-            await processor.process_delete(path)
-            return {"deleted": True}
-
     if provider.supports_list:
 
         @router.get("/documents")

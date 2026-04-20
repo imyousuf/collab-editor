@@ -31,9 +31,6 @@ class MockProvider(Provider):
     ) -> None:
         self.store[document_id] = (content, mime_type)
 
-    async def delete_content(self, document_id: str) -> None:
-        self.store.pop(document_id, None)
-
     async def list_documents(self) -> list[DocumentListEntry]:
         return [
             DocumentListEntry(name=k, mime_type=v[1])
@@ -153,15 +150,6 @@ class TestProviderProcessor:
         resp = await processor.process_load("doc1")
         assert resp.content == "hello"
         assert len(resp.updates) == 1
-
-    async def test_process_delete(
-        self, mock_provider: MockProvider, processor: ProviderProcessor
-    ) -> None:
-        mock_provider.store["doc1"] = ("hello", "text/plain")
-        await processor.process_load("doc1")  # populate cache
-
-        await processor.process_delete("doc1")
-        assert "doc1" not in mock_provider.store
 
     async def test_process_list(
         self, mock_provider: MockProvider, processor: ProviderProcessor

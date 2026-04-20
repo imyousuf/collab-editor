@@ -93,21 +93,6 @@ func (c *Client) Store(ctx context.Context, documentID string, updates []spi.Upd
 	}
 }
 
-func (c *Client) Delete(ctx context.Context, documentID string) error {
-	resp, err := c.doJSON(ctx, http.MethodDelete,
-		"/documents?path="+url.QueryEscape(documentID),
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("unexpected status %d from provider", resp.StatusCode)
-	}
-	return nil
-}
-
 func (c *Client) Compact(ctx context.Context, documentID string, req *spi.CompactRequest) (*spi.CompactResponse, error) {
 	resp, err := c.doJSON(ctx, http.MethodPost,
 		"/documents/compact?path="+url.QueryEscape(documentID),

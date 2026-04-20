@@ -31,7 +31,6 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 		// Delegate standard SPI document endpoints to the SDK handler.
 		r.Post("/documents/load", spiHandler.ServeHTTP)
 		r.Post("/documents/updates", spiHandler.ServeHTTP)
-		r.Delete("/documents", spiHandler.ServeHTTP)
 		r.Get("/documents", spiHandler.ServeHTTP)
 
 		// Version history endpoints (SDK-handled).
