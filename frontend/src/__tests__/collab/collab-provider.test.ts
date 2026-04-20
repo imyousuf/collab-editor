@@ -229,7 +229,7 @@ describe('CollaborationProvider unit tests', () => {
   });
 
   test('CollaborationConfig transport defaults to undefined (websocket)', () => {
-    const config = {
+    const config: import('../../interfaces/collaboration.js').CollaborationConfig = {
       enabled: true,
       roomName: 'test',
       providerUrl: 'ws://localhost:8080',

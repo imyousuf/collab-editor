@@ -9,7 +9,15 @@ import type {
   RemoteUpdateCallback,
 } from '../interfaces/collaboration.js';
 
-type YjsProvider = WebsocketProvider | SocketIOProvider;
+// Both WebsocketProvider and SocketIOProvider share: awareness, wsconnected, on('status'), disconnect(), destroy()
+// Using a structural type avoids union incompatibility with generics on .on()
+interface YjsProvider {
+  awareness: any;
+  wsconnected: boolean;
+  on(event: string, handler: (...args: any[]) => void): void;
+  disconnect(): void;
+  destroy(): void;
+}
 
 export class CollaborationProvider implements ICollaborationProvider {
   readonly ydoc: Y.Doc;

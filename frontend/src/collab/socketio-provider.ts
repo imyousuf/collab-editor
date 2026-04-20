@@ -13,7 +13,13 @@ import * as encoding from 'lib0/encoding';
 import * as decoding from 'lib0/decoding';
 import * as syncProtocol from 'y-protocols/sync';
 import * as awarenessProtocol from 'y-protocols/awareness';
-import { ObservableV2 } from 'lib0/observable';
+import { ObservableV2 as Observable } from 'lib0/observable';
+
+interface SocketIOProviderEvents {
+  status: (event: { status: string }) => void;
+  synced: (synced: boolean) => void;
+  [key: string]: (...args: any[]) => void;
+}
 
 export interface SocketIOProviderOptions {
   awareness?: awarenessProtocol.Awareness;
@@ -25,7 +31,7 @@ export interface SocketIOProviderOptions {
 const messageSync = 0;
 const messageAwareness = 1;
 
-export class SocketIOProvider extends ObservableV2<string> {
+export class SocketIOProvider extends Observable<SocketIOProviderEvents> {
   doc: Y.Doc;
   roomname: string;
   awareness: awarenessProtocol.Awareness;
