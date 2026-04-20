@@ -557,7 +557,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     // Set up version manager and blame engine if collaboration is active
     if (this._collabProvider && config.collaboration) {
-      const relayUrl = config.collaboration.providerUrl.replace(/\/ws\/?$/, '');
+      const relayUrl = config.collaboration.providerUrl
+        .replace(/^ws(s?):\/\//, 'http$1://')
+        .replace(/\/ws\/?$/, '');
       const docId = config.collaboration.roomName;
 
       // Version manager

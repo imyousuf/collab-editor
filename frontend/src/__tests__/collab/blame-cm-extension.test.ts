@@ -81,4 +81,23 @@ describe('blame-cm-extension', () => {
     expect(view.state.field(blameSegmentsField)).toEqual([]);
     view.destroy();
   });
+
+  test('handles unsorted segments without crashing', () => {
+    const view = createView('aaa\nbbb\nccc');
+    // Segments intentionally out of order (could come from a provider)
+    const segments: BlameSegment[] = [
+      { start: 8, end: 11, userName: 'charlie' },
+      { start: 0, end: 4, userName: 'alice' },
+      { start: 4, end: 8, userName: 'bob' },
+    ];
+
+    // Should not throw RangeError about unsorted ranges
+    expect(() => {
+      view.dispatch({ effects: setBlameData.of(segments) });
+    }).not.toThrow();
+
+    const decos = view.state.field(blameDecorationField);
+    expect(decos.size).toBeGreaterThan(0);
+    view.destroy();
+  });
 });

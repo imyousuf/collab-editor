@@ -115,7 +115,7 @@ resp, err := spi.ProcessStoreRequest(ctx, provider, documentID, requestBody)
 
 ### Reference Implementation
 
-The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage. It implements `spi.Provider` and `spi.OptionalList`, delegates all SPI routing to `spi.NewHTTPHandler()`, and layers chi middleware for bearer auth on top.
+The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage. It implements `spi.Provider`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, delegates all SPI routing to `spi.NewHTTPHandler()`, and layers chi middleware for bearer auth on top.
 
 ---
 

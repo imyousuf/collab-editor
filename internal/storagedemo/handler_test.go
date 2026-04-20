@@ -240,6 +240,24 @@ func TestAuth_WrongToken(t *testing.T) {
 	}
 }
 
+func TestAuth_EmptyToken_AllowsRequests(t *testing.T) {
+	// When auth token is empty, all requests should be allowed (open dev mode)
+	store := newTestStore(t)
+	handler := NewServer(store, "") // empty token
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	// Request without any auth header should succeed
+	resp, err := http.Get(srv.URL + "/documents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with empty token config, got %d", resp.StatusCode)
+	}
+}
+
 func TestHealth_NoAuth(t *testing.T) {
 	srv, _ := newTestServer(t)
 	resp, err := http.Get(srv.URL + "/health")

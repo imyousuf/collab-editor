@@ -123,16 +123,16 @@ export const blameTheme = EditorView.baseTheme({
     width: '130px',
     borderRight: '1px solid var(--me-source-gutter-border, #d0d7de)',
   },
-  '.cm-blame-line-alice': {
-    backgroundColor: 'rgba(224, 108, 117, 0.08)',
-  },
 });
 
 /** Build line decorations from blame segments. */
 function buildLineDecorations(doc: any, segments: BlameSegment[]): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
 
-  for (const seg of segments) {
+  // RangeSetBuilder requires ranges added in ascending from-position order
+  const sorted = [...segments].sort((a, b) => a.start - b.start);
+
+  for (const seg of sorted) {
     // Find lines that overlap with this segment
     const startLine = doc.lineAt(Math.min(seg.start, doc.length));
     const endPos = Math.min(seg.end, doc.length);

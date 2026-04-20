@@ -52,7 +52,7 @@ frontend/src/          — Lit web component (TypeScript)
   interfaces/          — IEditorBinding, IContentHandler, ICollaborationProvider,
                          IFormattingCapability, IBlameCapability, ToolbarConfig, StatusBarConfig, events
   bindings/            — DualMode, SourceOnly, PreviewSource + shared editor instances
-                         (DualMode + SourceOnly implement IBlameCapability)
+                         (all three implement IBlameCapability)
   handlers/            — Markdown, HTML, PlainText content handlers
   collab/              — CollaborationProvider (y-websocket + SocketIOProvider),
                          TextBinding (Y.Text <-> Tiptap), BlameEngine (dual-mode),

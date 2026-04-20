@@ -71,9 +71,13 @@ export class BlameEngine {
       try {
         localStorage.setItem(key, JSON.stringify(existing));
       } catch {
-        // Storage full — silently drop oldest entries
+        // Storage full — drop oldest entries and retry
         existing.splice(0, Math.floor(existing.length / 2));
-        localStorage.setItem(key, JSON.stringify(existing));
+        try {
+          localStorage.setItem(key, JSON.stringify(existing));
+        } catch {
+          // Still full — give up silently
+        }
       }
     };
 

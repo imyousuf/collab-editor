@@ -166,4 +166,16 @@ describe('VersionManager', () => {
     doc.getText('source').insert(0, 'more');
     expect(true).toBe(true);
   });
+
+  test('fetch URLs use the configured relayUrl base', async () => {
+    mockFetch.mockReturnValueOnce(
+      mockJsonResponse({ versions: [] }),
+    );
+
+    await manager.listVersions();
+
+    const [url] = mockFetch.mock.calls[mockFetch.mock.calls.length - 1];
+    expect(url).toMatch(/^http:\/\/localhost:8080\/api\/documents\/versions/);
+    expect(url).toContain('path=test-doc');
+  });
 });

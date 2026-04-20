@@ -52,10 +52,13 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 func bearerAuth(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
-			if token == "" || !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
-				http.Error(w, `{"error":"unauthorized","message":"invalid or missing bearer token"}`, http.StatusUnauthorized)
-				return
+			// Skip auth when no token is configured (open dev mode)
+			if token != "" {
+				auth := r.Header.Get("Authorization")
+				if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
+					http.Error(w, `{"error":"unauthorized","message":"invalid or missing bearer token"}`, http.StatusUnauthorized)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})
