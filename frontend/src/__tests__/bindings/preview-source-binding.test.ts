@@ -1,5 +1,19 @@
 import { describe, test, expect, vi } from 'vitest';
 import { editorBindingContractTests } from '../interfaces/editor-binding.contract.js';
+
+// Mock PreviewRendererInstance before importing the binding
+vi.mock('../../bindings/_preview-renderer.js', () => ({
+  PreviewRendererInstance: class MockPreviewRenderer {
+    render = vi.fn();
+    whenReady = vi.fn().mockResolvedValue(undefined);
+    destroy = vi.fn();
+    constructor(container: HTMLElement) {
+      const iframe = document.createElement('iframe');
+      container.appendChild(iframe);
+    }
+  },
+}));
+
 import { PreviewSourceBinding } from '../../bindings/preview-source-binding.js';
 
 // Run interface contract tests
@@ -84,6 +98,80 @@ describe('PreviewSourceBinding unit tests', () => {
     binding.unmount();
     expect(binding.mounted).toBe(false);
     expect(binding.activeMode).toBeNull();
+
+    binding.destroy();
+  });
+
+  test('mount in preview mode creates preview renderer eagerly', async () => {
+    const binding = new PreviewSourceBinding('jsx');
+    const container = document.createElement('div');
+    await binding.mount(container, 'preview', { readonly: false, theme: 'light' });
+
+    expect(binding.mounted).toBe(true);
+    expect(binding.activeMode).toBe('preview');
+    // Preview container should have an iframe
+    expect(container.querySelector('iframe')).not.toBeNull();
+
+    binding.destroy();
+  });
+
+  test('source content change re-renders preview when in preview mode', async () => {
+    const binding = new PreviewSourceBinding('jsx') as any;
+    const container = document.createElement('div');
+    await binding.mount(container, 'preview', { readonly: false, theme: 'light' });
+
+    // Spy on the preview renderer's render method
+    const renderSpy = vi.spyOn(binding._previewRenderer, 'render');
+
+    // Simulate source content change (e.g., Y.Text sync arriving after mount)
+    binding._sourceEditor._view.dispatch({
+      changes: { from: 0, to: 0, insert: 'const App = () => <div>Hello</div>;' },
+    });
+
+    expect(renderSpy).toHaveBeenCalledWith(
+      expect.stringContaining('const App'),
+    );
+
+    binding.destroy();
+  });
+
+  test('source content change does NOT render preview when in source mode', async () => {
+    const binding = new PreviewSourceBinding('jsx') as any;
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    // No preview renderer in source mode
+    expect(binding._previewRenderer).toBeNull();
+
+    // Source edit should not throw (no preview to render to)
+    binding._sourceEditor._view.dispatch({
+      changes: { from: 0, to: 0, insert: 'const x = 1;' },
+    });
+
+    // Still no preview renderer created
+    expect(binding._previewRenderer).toBeNull();
+
+    binding.destroy();
+  });
+
+  test('content change after mount in preview mode triggers re-render (simulates Y.Text arrival)', async () => {
+    // This tests the same code path as Y.Text sync: content arrives after mount,
+    // CodeMirror updates, onUpdate fires, preview re-renders.
+    // We simulate via direct CodeMirror dispatch since yCollab's async pipeline
+    // doesn't fire synchronously in jsdom.
+    const binding = new PreviewSourceBinding('jsx') as any;
+    const container = document.createElement('div');
+    await binding.mount(container, 'preview', { readonly: false, theme: 'light' });
+
+    const renderSpy = vi.spyOn(binding._previewRenderer, 'render');
+
+    // Simulate content arriving (same as Y.Text → yCollab → CodeMirror path)
+    binding._sourceEditor._view.dispatch({
+      changes: { from: 0, to: 0, insert: 'export default function App() { return <div>Hi</div>; }' },
+    });
+
+    expect(renderSpy).toHaveBeenCalled();
+    expect(renderSpy.mock.calls[0][0]).toContain('export default function App');
 
     binding.destroy();
   });
