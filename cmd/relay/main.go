@@ -15,8 +15,15 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/imyousuf/collab-editor/internal/provider"
 	"github.com/imyousuf/collab-editor/internal/relay"
+	"github.com/imyousuf/collab-editor/pkg/spi"
 	"github.com/redis/go-redis/v9"
 )
+
+func writeProxyError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
 
 func main() {
 	configPath := flag.String("config", "", "path to config file")
@@ -159,6 +166,104 @@ func main() {
 					}
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(resp)
+				})
+
+				// Version history proxy
+				r.Get("/documents/versions", func(w http.ResponseWriter, r *http.Request) {
+					path := r.URL.Query().Get("path")
+					if path == "" {
+						writeProxyError(w, http.StatusBadRequest, "missing 'path' query parameter")
+						return
+					}
+					versions, err := providerClient.ListVersions(r.Context(), path)
+					if err != nil {
+						writeProxyError(w, http.StatusBadGateway, err.Error())
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"versions": versions})
+				})
+
+				r.Post("/documents/versions", func(w http.ResponseWriter, r *http.Request) {
+					path := r.URL.Query().Get("path")
+					if path == "" {
+						writeProxyError(w, http.StatusBadRequest, "missing 'path' query parameter")
+						return
+					}
+					var req spi.CreateVersionRequest
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						writeProxyError(w, http.StatusBadRequest, "invalid request body")
+						return
+					}
+					entry, err := providerClient.CreateVersion(r.Context(), path, &req)
+					if err != nil {
+						writeProxyError(w, http.StatusBadGateway, err.Error())
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusCreated)
+					json.NewEncoder(w).Encode(entry)
+				})
+
+				r.Get("/documents/versions/detail", func(w http.ResponseWriter, r *http.Request) {
+					path := r.URL.Query().Get("path")
+					versionID := r.URL.Query().Get("version")
+					if path == "" {
+						writeProxyError(w, http.StatusBadRequest, "missing 'path' query parameter")
+						return
+					}
+					if versionID == "" {
+						writeProxyError(w, http.StatusBadRequest, "missing 'version' query parameter")
+						return
+					}
+					entry, err := providerClient.GetVersion(r.Context(), path, versionID)
+					if err != nil {
+						writeProxyError(w, http.StatusBadGateway, err.Error())
+						return
+					}
+					if entry == nil {
+						writeProxyError(w, http.StatusNotFound, "version not found")
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(entry)
+				})
+
+				// Client mappings proxy
+				r.Get("/documents/clients", func(w http.ResponseWriter, r *http.Request) {
+					path := r.URL.Query().Get("path")
+					if path == "" {
+						writeProxyError(w, http.StatusBadRequest, "missing 'path' query parameter")
+						return
+					}
+					mappings, err := providerClient.GetClientMappings(r.Context(), path)
+					if err != nil {
+						writeProxyError(w, http.StatusBadGateway, err.Error())
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"mappings": mappings})
+				})
+
+				r.Post("/documents/clients", func(w http.ResponseWriter, r *http.Request) {
+					path := r.URL.Query().Get("path")
+					if path == "" {
+						writeProxyError(w, http.StatusBadRequest, "missing 'path' query parameter")
+						return
+					}
+					var body struct {
+						Mappings []spi.ClientUserMapping `json:"mappings"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						writeProxyError(w, http.StatusBadRequest, "invalid request body")
+						return
+					}
+					if err := providerClient.StoreClientMappings(r.Context(), path, body.Mappings); err != nil {
+						writeProxyError(w, http.StatusBadGateway, err.Error())
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"stored": len(body.Mappings)})
 				})
 			})
 		},

@@ -156,6 +156,101 @@ func (c *Client) ListDocuments(ctx context.Context) ([]spi.DocumentListEntry, er
 	return result.Documents, nil
 }
 
+// --- Version History ---
+
+// ListVersions fetches version list from the provider.
+func (c *Client) ListVersions(ctx context.Context, documentID string) ([]spi.VersionListEntry, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet,
+		"/documents/versions?path="+url.QueryEscape(documentID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Versions []spi.VersionListEntry `json:"versions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding versions list: %w", err)
+	}
+	return result.Versions, nil
+}
+
+// CreateVersion creates a new version on the provider.
+func (c *Client) CreateVersion(ctx context.Context, documentID string, req *spi.CreateVersionRequest) (*spi.VersionListEntry, error) {
+	resp, err := c.doJSON(ctx, http.MethodPost,
+		"/documents/versions?path="+url.QueryEscape(documentID), req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("unexpected status %d from provider on create version", resp.StatusCode)
+	}
+
+	var result spi.VersionListEntry
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding create version response: %w", err)
+	}
+	return &result, nil
+}
+
+// GetVersion fetches a full version (with content and blame) from the provider.
+func (c *Client) GetVersion(ctx context.Context, documentID string, versionID string) (*spi.VersionEntry, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet,
+		"/documents/versions/detail?path="+url.QueryEscape(documentID)+"&version="+url.QueryEscape(versionID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+
+	var result spi.VersionEntry
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding version detail: %w", err)
+	}
+	return &result, nil
+}
+
+// --- Client Mappings ---
+
+// GetClientMappings fetches client-ID-to-user mappings from the provider.
+func (c *Client) GetClientMappings(ctx context.Context, documentID string) ([]spi.ClientUserMapping, error) {
+	resp, err := c.doJSON(ctx, http.MethodGet,
+		"/documents/clients?path="+url.QueryEscape(documentID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Mappings []spi.ClientUserMapping `json:"mappings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding client mappings: %w", err)
+	}
+	return result.Mappings, nil
+}
+
+// StoreClientMappings stores client-ID-to-user mappings on the provider.
+func (c *Client) StoreClientMappings(ctx context.Context, documentID string, mappings []spi.ClientUserMapping) error {
+	body := struct {
+		Mappings []spi.ClientUserMapping `json:"mappings"`
+	}{Mappings: mappings}
+
+	resp, err := c.doJSON(ctx, http.MethodPost,
+		"/documents/clients?path="+url.QueryEscape(documentID), body)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var buf bytes.Buffer
 	if body != nil {
