@@ -65,6 +65,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _versionPanelOpen = false;
   @state() private _versions: VersionListEntry[] = [];
   @state() private _selectedVersion: VersionEntry | null = null;
+  @state() private _diffResult: import('./collab/diff-engine.js').DiffLine[] | null = null;
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -407,6 +408,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           ?open=${this._versionPanelOpen}
           .versions=${this._versions}
           .selectedVersion=${this._selectedVersion}
+          .diffResult=${this._diffResult}
           @version-save=${this._handleVersionSave}
           @version-select=${this._handleVersionSelect}
           @version-view=${this._handleVersionView}
@@ -482,6 +484,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._versionPanelOpen = false;
     this._versions = [];
     this._selectedVersion = null;
+    this._diffResult = null;
     this._binding?.destroy();
     this._binding = null;
     if (this._collabProvider) {
@@ -568,7 +571,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           ? 0 : (config.collaboration.versionAutoSnapshotMinutes ?? 5),
       });
       // Load initial version list
-      this._versionManager.listVersions().then(v => { this._versions = v; });
+      this._versionManager.listVersions().then(v => { this._versions = v; }).catch(() => {});
 
       // Blame engine
       this._blameEngine = new BlameEngine(this._collabProvider.ydoc, docId);
@@ -752,9 +755,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           this._binding.updateBlame(updated);
         }
       };
-      this._collabProvider?.ydoc.on('update', observer);
+      const ydoc = this._collabProvider?.ydoc;
+      ydoc?.on('update', observer);
       this._blameUpdateUnsub = () => {
-        this._collabProvider?.ydoc.off('update', observer);
+        ydoc?.off('update', observer);
       };
     } else {
       this._blameUpdateUnsub?.();
@@ -769,7 +773,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _handleVersionToggle(): void {
     this._versionPanelOpen = !this._versionPanelOpen;
     if (this._versionPanelOpen) {
-      this._versionManager?.listVersions().then(v => { this._versions = v; });
+      this._versionManager?.listVersions().then(v => { this._versions = v; }).catch(() => {});
     }
   }
 
@@ -827,13 +831,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const toVersion = await this._versionManager.getVersion(e.detail.toId);
     if (!fromVersion || !toVersion) return;
 
-    const diff = this._versionManager.diffVersions(fromVersion, toVersion);
-
-    // Set diffResult on the version-panel component
-    const panel = this.renderRoot.querySelector('version-panel') as any;
-    if (panel) {
-      panel.diffResult = diff;
-    }
+    this._diffResult = this._versionManager.diffVersions(fromVersion, toVersion);
   }
 
   private _exitVersionView(): void {

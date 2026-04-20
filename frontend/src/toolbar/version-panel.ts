@@ -171,7 +171,7 @@ export class VersionPanel extends LitElement {
             <div class="actions">
               <button class="btn" @click=${this._onViewVersion}>View</button>
               <button class="btn" @click=${this._onRevertVersion}>Revert to This</button>
-              ${this._diffFrom ? html`
+              ${this._diffFrom && this._diffTo ? html`
                 <button class="btn" @click=${this._onDiff}>Show Diff</button>
               ` : nothing}
             </div>
@@ -200,11 +200,15 @@ export class VersionPanel extends LitElement {
   }
 
   private _selectVersion(v: VersionListEntry): void {
-    if (this.selectedVersion?.id === v.id) {
-      // Second click = set as diff target
-      this._diffTo = v.id;
+    // Track two selections for diff: first click = from, second click = to
+    if (this._diffFrom === null) {
+      this._diffFrom = v.id;
+    } else if (this._diffFrom === v.id) {
+      // Clicking same version again deselects it
+      this._diffFrom = null;
+      this._diffTo = null;
     } else {
-      this._diffFrom = this.selectedVersion?.id ?? null;
+      this._diffTo = v.id;
     }
 
     this.dispatchEvent(new CustomEvent('version-select', {
@@ -240,9 +244,9 @@ export class VersionPanel extends LitElement {
   }
 
   private _onDiff(): void {
-    if (!this._diffFrom || !this.selectedVersion) return;
+    if (!this._diffFrom || !this._diffTo) return;
     this.dispatchEvent(new CustomEvent('version-diff', {
-      detail: { fromId: this._diffFrom, toId: this.selectedVersion.id },
+      detail: { fromId: this._diffFrom, toId: this._diffTo },
       bubbles: true,
       composed: true,
     }));

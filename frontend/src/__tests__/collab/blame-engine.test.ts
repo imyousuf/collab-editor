@@ -80,6 +80,19 @@ describe('BlameEngine', () => {
       const entries = JSON.parse(stored!);
       expect(entries.length).toBeGreaterThan(0);
       expect(entries[0].userName).toBeDefined();
+      expect(entries[0].clientId).toBeDefined();
+    });
+
+    test('stored entries do not contain Yjs update binary (no dead data)', () => {
+      engine.startLiveBlame();
+      doc.getText('source').insert(0, 'hello');
+
+      const stored = localStorageMock.getItem('collab-blame:test-doc');
+      const entries = JSON.parse(stored!);
+      // LiveBlameEntry should NOT have an 'update' field (dead code removed)
+      expect(entries[0]).not.toHaveProperty('update');
+      // Should only have userName, clientId, timestamp
+      expect(Object.keys(entries[0]).sort()).toEqual(['clientId', 'timestamp', 'userName']);
     });
 
     test('stopLiveBlame clears storage', () => {

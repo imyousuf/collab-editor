@@ -116,7 +116,7 @@ make test-e2e                               # Run ATR browser tests
 - The demo provider implements `spi.Provider`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
 - Version history: SPI is Yjs-agnostic — `VersionEntry` returns plain text content, not CRDT binary. SDKs compute blame from version content chain (LCS-based line diff). Demo provider stores versions as JSON files in `.versions/{docID}/`
 - Blame has two modes: **live blame** (captures Y.Doc update events in localStorage, resets on refresh) and **version blame** (read-only, blame segments from SPI). Developer controls which modes are available via `liveBlameEnabled`/`versionBlameEnabled` config
-- `IBlameCapability` is an optional interface — `DualModeBinding` and `SourceOnlyBinding` implement it. Checked via `isBlameCapable()` type guard
+- `IBlameCapability` is an optional interface — `DualModeBinding`, `SourceOnlyBinding`, and `PreviewSourceBinding` implement it. Checked via `isBlameCapable()` type guard
 - Relay proxies version/client-mapping API calls to the provider via `/api/documents/versions`, `/api/documents/clients` endpoints
 
 ## Conventions

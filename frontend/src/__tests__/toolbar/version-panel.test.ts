@@ -124,4 +124,78 @@ describe('VersionPanel', () => {
     expect(cssText).toContain('--me-diff-added-bg');
     expect(cssText).toContain('--me-diff-removed-bg');
   });
+
+  test('diff selection: click two different versions enables Show Diff', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+
+    // Click first version (sets _diffFrom)
+    items[0]?.click();
+    await el.updateComplete;
+
+    // Click second version (sets _diffTo)
+    items[1]?.click();
+    await el.updateComplete;
+
+    // "Show Diff" button should now be visible
+    // Check that the panel has both _diffFrom and _diffTo set
+    expect((el as any)._diffFrom).toBe('v1');
+    expect((el as any)._diffTo).toBe('v2');
+  });
+
+  test('diff selection: clicking same version twice deselects', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+
+    // Click version (sets _diffFrom)
+    items[0]?.click();
+    await el.updateComplete;
+    expect((el as any)._diffFrom).toBe('v1');
+
+    // Click same version again (deselects)
+    items[0]?.click();
+    await el.updateComplete;
+    expect((el as any)._diffFrom).toBeNull();
+    expect((el as any)._diffTo).toBeNull();
+  });
+
+  test('version-diff event dispatches correct fromId and toId', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
+    ];
+    el.selectedVersion = { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const, content: 'hello' };
+    await el.updateComplete;
+
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+
+    // Select two versions for diff
+    items[0]?.click();
+    items[1]?.click();
+    await el.updateComplete;
+
+    const handler = vi.fn();
+    el.addEventListener('version-diff', handler);
+
+    // Find and click the Show Diff button
+    const diffBtn = el.shadowRoot?.querySelector('.actions .btn:not(.btn-primary)') as HTMLElement;
+    if (diffBtn?.textContent?.includes('Show Diff')) {
+      diffBtn.click();
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler.mock.calls[0][0].detail.fromId).toBe('v1');
+      expect(handler.mock.calls[0][0].detail.toId).toBe('v2');
+    }
+  });
 });

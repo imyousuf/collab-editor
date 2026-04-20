@@ -25,8 +25,6 @@ interface LiveBlameEntry {
   /** The Yjs client ID of the user who made this change. */
   clientId: number;
   timestamp: number;
-  /** Base64-encoded Yjs update for replay. */
-  update: string;
 }
 
 const PALETTE = [
@@ -59,13 +57,12 @@ export class BlameEngine {
   startLiveBlame(): void {
     if (this._observer) return; // already started
 
-    this._observer = (update: Uint8Array, origin: any) => {
+    this._observer = (_update: Uint8Array, origin: any) => {
       const userName = this._resolveUserName(origin);
       const entry: LiveBlameEntry = {
         userName,
         clientId: this._ydoc.clientID,
         timestamp: Date.now(),
-        update: uint8ArrayToBase64(update),
       };
 
       const key = STORAGE_KEY_PREFIX + this._documentId;
@@ -190,19 +187,3 @@ export class BlameEngine {
   }
 }
 
-function uint8ArrayToBase64(data: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < data.length; i++) {
-    binary += String.fromCharCode(data[i]);
-  }
-  return btoa(binary);
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
