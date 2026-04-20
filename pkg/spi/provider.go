@@ -38,6 +38,26 @@ type OptionalList interface {
 	ListDocuments(ctx context.Context) ([]DocumentListEntry, error)
 }
 
+// OptionalVersions is an optional interface that providers can implement
+// to support document version history.
+type OptionalVersions interface {
+	// ListVersions returns lightweight version summaries (no content or blame).
+	ListVersions(ctx context.Context, documentID string) ([]VersionListEntry, error)
+
+	// CreateVersion stores a new version snapshot.
+	CreateVersion(ctx context.Context, documentID string, req *CreateVersionRequest) (*VersionListEntry, error)
+
+	// GetVersion returns a full version with content and blame data.
+	GetVersion(ctx context.Context, documentID string, versionID string) (*VersionEntry, error)
+}
+
+// OptionalClientMappings is an optional interface that providers can implement
+// to persist Yjs client-ID-to-user mappings (for blame attribution across sessions).
+type OptionalClientMappings interface {
+	GetClientMappings(ctx context.Context, documentID string) ([]ClientUserMapping, error)
+	StoreClientMappings(ctx context.Context, documentID string, mappings []ClientUserMapping) error
+}
+
 // --- Manual integration: process request bodies directly ---
 
 // ProcessLoadRequest parses a load request body and delegates to the provider.
@@ -62,8 +82,13 @@ func ProcessStoreRequest(ctx context.Context, p Provider, documentID string, bod
 //	GET  /health
 //	POST /documents/load?path={documentId}
 //	POST /documents/updates?path={documentId}
-//	DELETE /documents?path={documentId}        (if provider implements OptionalDelete)
-//	GET  /documents                            (if provider implements OptionalList)
+//	DELETE /documents?path={documentId}                                  (if OptionalDelete)
+//	GET  /documents                                                      (if OptionalList)
+//	GET  /documents/versions?path={documentId}                           (if OptionalVersions)
+//	POST /documents/versions?path={documentId}                           (if OptionalVersions)
+//	GET  /documents/versions/detail?path={documentId}&version={versionId}(if OptionalVersions)
+//	GET  /documents/clients?path={documentId}                            (if OptionalClientMappings)
+//	POST /documents/clients?path={documentId}                            (if OptionalClientMappings)
 func NewHTTPHandler(p Provider) http.Handler {
 	mux := http.NewServeMux()
 
@@ -144,6 +169,102 @@ func NewHTTPHandler(p Provider) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"documents": docs})
+		})
+	}
+
+	// Optional: VERSIONS
+	if vp, ok := p.(OptionalVersions); ok {
+		mux.HandleFunc("GET /documents/versions", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			versions, err := vp.ListVersions(r.Context(), documentID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+		})
+
+		mux.HandleFunc("POST /documents/versions", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			var req CreateVersionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+				return
+			}
+			entry, err := vp.CreateVersion(r.Context(), documentID, &req)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, entry)
+		})
+
+		mux.HandleFunc("GET /documents/versions/detail", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			versionID := r.URL.Query().Get("version")
+			if versionID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'version' query parameter")
+				return
+			}
+			entry, err := vp.GetVersion(r.Context(), documentID, versionID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if entry == nil {
+				writeError(w, http.StatusNotFound, "version not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, entry)
+		})
+	}
+
+	// Optional: CLIENT MAPPINGS
+	if cmp, ok := p.(OptionalClientMappings); ok {
+		mux.HandleFunc("GET /documents/clients", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			mappings, err := cmp.GetClientMappings(r.Context(), documentID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"mappings": mappings})
+		})
+
+		mux.HandleFunc("POST /documents/clients", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			var body struct {
+				Mappings []ClientUserMapping `json:"mappings"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+				return
+			}
+			if err := cmp.StoreClientMappings(r.Context(), documentID, body.Mappings); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"stored": len(body.Mappings)})
 		})
 	}
 

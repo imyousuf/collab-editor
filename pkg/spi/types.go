@@ -83,3 +83,56 @@ type HealthResponse struct {
 	Status  string `json:"status"`
 	Storage string `json:"storage,omitempty"`
 }
+
+// --- Version History ---
+
+// VersionEntry is the full version record returned by GetVersion.
+// Includes content (plain text) and optionally blame segments.
+type VersionEntry struct {
+	ID        string         `json:"id"`
+	CreatedAt time.Time      `json:"created_at"`
+	Type      string         `json:"type"`             // "auto" | "manual"
+	Label     string         `json:"label,omitempty"`
+	Creator   string         `json:"creator,omitempty"`
+	Content   string         `json:"content"`
+	MimeType  string         `json:"mime_type,omitempty"`
+	Blame     []BlameSegment `json:"blame,omitempty"`
+}
+
+// VersionListEntry is a lightweight version summary for list responses.
+// Does not include content or blame data.
+type VersionListEntry struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	Type      string    `json:"type"`
+	Label     string    `json:"label,omitempty"`
+	Creator   string    `json:"creator,omitempty"`
+	MimeType  string    `json:"mime_type,omitempty"`
+}
+
+// BlameSegment attributes a character range to a user.
+// Color is NOT included — the frontend assigns colors from a palette.
+type BlameSegment struct {
+	Start    int    `json:"start"`     // character offset (inclusive)
+	End      int    `json:"end"`       // character offset (exclusive)
+	UserName string `json:"user_name"`
+}
+
+// CreateVersionRequest is the body sent to create a new version.
+type CreateVersionRequest struct {
+	Content  string         `json:"content"`
+	MimeType string         `json:"mime_type,omitempty"`
+	Label    string         `json:"label,omitempty"`
+	Creator  string         `json:"creator,omitempty"`
+	Type     string         `json:"type,omitempty"` // defaults to "manual"
+	Blame    []BlameSegment `json:"blame,omitempty"`
+}
+
+// --- Client User Mappings ---
+
+// ClientUserMapping maps a Yjs client ID to a user identity.
+// Used for blame attribution across sessions.
+type ClientUserMapping struct {
+	ClientID uint64 `json:"client_id"`
+	UserName string `json:"user_name"`
+}
