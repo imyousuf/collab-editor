@@ -90,6 +90,14 @@ export class TextBinding {
     const text = this._ytext.toString();
     if (!text && this._ytext.length === 0) return;
 
+    // Cancel any pending Tiptap → Y.Text write-back before applying remote content.
+    // Without this, the old debounce could fire after setContent and write Tiptap's
+    // normalized HTML back to Y.Text, overwriting concurrent remote changes.
+    if (this._syncTimer) {
+      clearTimeout(this._syncTimer);
+      this._syncTimer = null;
+    }
+
     this._applyContentToEditor(text);
     // Store what Tiptap WILL serialize (after normalization) as the snapshot.
     // This prevents the echo: Y.Text → Tiptap → (normalized) → back to Y.Text.
