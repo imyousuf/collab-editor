@@ -3,6 +3,7 @@ import { editorBindingContractTests } from '../interfaces/editor-binding.contrac
 import { DualModeBinding } from '../../bindings/dual-mode-binding.js';
 import { HtmlContentHandler } from '../../handlers/html-handler.js';
 import { MarkdownContentHandler } from '../../handlers/markdown-handler.js';
+import { isBlameCapable } from '../../interfaces/blame.js';
 import { isFormattingCapable, emptyFormattingState } from '../../interfaces/formatting.js';
 import type { FormattingState } from '../../interfaces/formatting.js';
 
@@ -250,5 +251,32 @@ describe('DualModeBinding IFormattingCapability', () => {
     expect(source).not.toBeNull();
 
     binding.destroy();
+  });
+
+  test('implements IBlameCapability', () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler);
+    expect(isBlameCapable(binding)).toBe(true);
+  });
+
+  test('blame enable/disable/update do not throw when mounted', async () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler);
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const segments = [{ start: 0, end: 5, userName: 'alice' }];
+    expect(() => binding.enableBlame(segments)).not.toThrow();
+    expect(() => binding.updateBlame(segments)).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('blame enable/disable do not throw when unmounted', () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler);
+    expect(() => binding.enableBlame([])).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
   });
 });

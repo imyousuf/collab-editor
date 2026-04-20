@@ -36,7 +36,7 @@ export const blameDecorationField = StateField.define<DecorationSet>({
         return buildLineDecorations(tr.state.doc, effect.value);
       }
     }
-    return tr.docChanged ? Decoration.none : deco;
+    return tr.docChanged ? deco.map(tr.changes) : deco;
   },
   provide: (field) => EditorView.decorations.from(field),
 });

@@ -1,5 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
 import { editorBindingContractTests } from '../interfaces/editor-binding.contract.js';
+import { isBlameCapable } from '../../interfaces/blame.js';
 
 // Mock PreviewRendererInstance before importing the binding
 vi.mock('../../bindings/_preview-renderer.js', () => ({
@@ -211,5 +212,34 @@ describe('PreviewSourceBinding unit tests', () => {
     expect(renderSpy.mock.calls[0][0]).toContain('export default function App');
 
     binding.destroy();
+  });
+
+  test('implements IBlameCapability', async () => {
+    const binding = new PreviewSourceBinding('jsx');
+    expect(isBlameCapable(binding)).toBe(true);
+    expect(typeof binding.enableBlame).toBe('function');
+    expect(typeof binding.disableBlame).toBe('function');
+    expect(typeof binding.updateBlame).toBe('function');
+  });
+
+  test('enableBlame and disableBlame do not throw when mounted', async () => {
+    const binding = new PreviewSourceBinding('jsx');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const segments = [{ start: 0, end: 5, userName: 'alice' }];
+    expect(() => binding.enableBlame(segments)).not.toThrow();
+    expect(() => binding.updateBlame(segments)).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('enableBlame and disableBlame do not throw when unmounted', () => {
+    const binding = new PreviewSourceBinding('jsx');
+    const segments = [{ start: 0, end: 5, userName: 'alice' }];
+    // Should not throw even without mount
+    expect(() => binding.enableBlame(segments)).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
   });
 });
