@@ -55,6 +55,8 @@ export {
 
 export type {
   ToolbarGroup,
+  DocumentEntry,
   ToolbarConfig,
+  CollaboratorInfo,
   StatusBarConfig,
 } from './toolbar-config.js';

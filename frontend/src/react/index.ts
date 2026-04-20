@@ -12,5 +12,6 @@ export const MultiEditorReact = createComponent({
     onEditorSave: 'editor-save',
     onCollabStatus: 'collab-status',
     onBeforeModeChange: 'before-mode-change',
+    onDocumentChange: 'document-change',
   },
 });

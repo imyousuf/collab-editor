@@ -9,19 +9,6 @@
     * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #fafafa; }
     h1 { margin: 0 0 16px; font-size: 24px; }
-    .doc-bar {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 12px;
-      align-items: center;
-    }
-    .doc-bar label { font-size: 14px; color: #555; }
-    .doc-bar select {
-      padding: 6px 10px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      font-size: 14px;
-    }
     multi-editor {
       display: block;
       border: 1px solid #ddd;
@@ -32,10 +19,6 @@
 </head>
 <body>
   <h1>Collaborative Editor</h1>
-  <div class="doc-bar">
-    <label for="doc-select">Document:</label>
-    <select id="doc-select" autocomplete="off"></select>
-  </div>
 
   <multi-editor
     id="editor"
@@ -46,7 +29,6 @@
 
   <script type="module">
     const editor = document.getElementById('editor');
-    const docSelect = document.getElementById('doc-select');
 
     const userName = 'User-' + Math.floor(Math.random() * 1000);
     const userColor = '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
@@ -58,6 +40,7 @@
     async function connectToRoom(roomName) {
       if (currentRoom === roomName) return;
       currentRoom = roomName;
+      editor.currentDocumentId = roomName;
 
       // Fetch content
       let content = '';
@@ -77,7 +60,6 @@
         console.warn('Failed to load document:', e);
       }
 
-      // Configure all at once — prevents multiple reinitialize cycles
       await editor.configure({
         mimeType,
         collaboration: {
@@ -95,30 +77,21 @@
         const resp = await fetch('/api/documents');
         if (!resp.ok) throw new Error(`${resp.status}`);
         const data = await resp.json();
-        docSelect.innerHTML = '';
         if (data.documents && data.documents.length > 0) {
+          // Set documents on the editor — renders the built-in document switcher
+          editor.documents = data.documents.map(doc => ({
+            id: doc.name,
+            name: doc.name,
+          }));
           for (const doc of data.documents) {
             docMimeTypes[doc.name] = doc.mime_type;
-            const opt = document.createElement('option');
-            opt.value = doc.name;
-            opt.textContent = doc.name;
-            docSelect.appendChild(opt);
           }
-          await connectToRoom(docSelect.value);
-          documentListLoaded = true;
+          await connectToRoom(data.documents[0].name);
         } else {
-          const opt = document.createElement('option');
-          opt.value = 'untitled';
-          opt.textContent = 'untitled';
-          docSelect.appendChild(opt);
           connectToRoom('untitled');
         }
       } catch (e) {
         console.warn('Failed to load document list, using default:', e);
-        const opt = document.createElement('option');
-        opt.value = 'untitled';
-        opt.textContent = 'untitled';
-        docSelect.appendChild(opt);
         connectToRoom('untitled');
       }
     }
@@ -126,11 +99,10 @@
     // Load document list once the custom element is defined
     customElements.whenDefined('multi-editor').then(() => loadDocumentList());
 
-    let documentListLoaded = false;
-    docSelect.addEventListener('change', () => {
-      if (!documentListLoaded) return; // Ignore browser form restoration
-      currentRoom = null; // Reset so connectToRoom re-runs
-      connectToRoom(docSelect.value);
+    // Listen for document switch from the built-in toolbar
+    editor.addEventListener('document-change', (e) => {
+      currentRoom = null;
+      connectToRoom(e.detail.documentId);
     });
 
     editor.addEventListener('editor-save', (e) => {

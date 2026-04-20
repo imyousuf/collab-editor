@@ -4,7 +4,15 @@
 import type { FormattingCommand } from './formatting.js';
 
 /** Groups of buttons that can be shown/hidden independently */
-export type ToolbarGroup = 'mode-switcher' | 'formatting';
+export type ToolbarGroup = 'mode-switcher' | 'formatting' | 'document-switcher';
+
+/** A document entry for the built-in document switcher */
+export interface DocumentEntry {
+  /** Unique identifier (used as the option value) */
+  id: string;
+  /** Display name shown in the dropdown */
+  name: string;
+}
 
 export interface ToolbarConfig {
   /** Show/hide the entire toolbar. Default: true */
@@ -22,6 +30,16 @@ export interface ToolbarConfig {
 
   /** Whether to show the mode switcher buttons. Default: true */
   showModeSwitcher?: boolean;
+
+  /** Whether to show the document switcher. Default: true when documents are provided */
+  showDocumentSwitcher?: boolean;
+}
+
+/** Collaborator info from Yjs awareness */
+export interface CollaboratorInfo {
+  name: string;
+  color: string;
+  image?: string;
 }
 
 export interface StatusBarConfig {
@@ -33,4 +51,7 @@ export interface StatusBarConfig {
 
   /** Show user identity. Default: true */
   showUserIdentity?: boolean;
+
+  /** Show collaborator presence indicators. Default: true */
+  showPresence?: boolean;
 }

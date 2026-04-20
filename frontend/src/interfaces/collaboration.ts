@@ -9,6 +9,7 @@ export interface CollaborationConfig {
   user: {
     name: string;
     color: string;
+    image?: string;
   };
 }
 

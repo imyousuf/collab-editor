@@ -220,4 +220,68 @@ describe('EditorToolbar', () => {
 
     el.remove();
   });
+
+  test('renders document switcher when documents provided', async () => {
+    const el = createElement();
+    el.documents = [
+      { id: 'welcome.md', name: 'welcome.md' },
+      { id: 'app.jsx', name: 'app.jsx' },
+    ];
+    el.currentDocumentId = 'welcome.md';
+    await waitUpdate(el);
+
+    const switcher = el.shadowRoot!.querySelector('.doc-switcher');
+    expect(switcher).not.toBeNull();
+
+    const select = el.shadowRoot!.querySelector('.doc-select-hidden') as HTMLSelectElement;
+    expect(select).not.toBeNull();
+    expect(select.options.length).toBe(2);
+
+    el.remove();
+  });
+
+  test('no document switcher when documents empty', async () => {
+    const el = createElement();
+    el.documents = [];
+    await waitUpdate(el);
+
+    const switcher = el.shadowRoot!.querySelector('.doc-switcher');
+    expect(switcher).toBeNull();
+
+    el.remove();
+  });
+
+  test('config.showDocumentSwitcher false hides it', async () => {
+    const el = createElement();
+    el.documents = [{ id: 'test.md', name: 'test.md' }];
+    el.config = { showDocumentSwitcher: false };
+    await waitUpdate(el);
+
+    const switcher = el.shadowRoot!.querySelector('.doc-switcher');
+    expect(switcher).toBeNull();
+
+    el.remove();
+  });
+
+  test('dispatches toolbar-document-switch on select change', async () => {
+    const el = createElement();
+    el.documents = [
+      { id: 'welcome.md', name: 'welcome.md' },
+      { id: 'app.jsx', name: 'app.jsx' },
+    ];
+    el.currentDocumentId = 'welcome.md';
+    await waitUpdate(el);
+
+    const handler = vi.fn();
+    el.addEventListener('toolbar-document-switch', handler);
+
+    const select = el.shadowRoot!.querySelector('.doc-select-hidden') as HTMLSelectElement;
+    select.value = 'app.jsx';
+    select.dispatchEvent(new Event('change'));
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0].detail.documentId).toBe('app.jsx');
+
+    el.remove();
+  });
 });

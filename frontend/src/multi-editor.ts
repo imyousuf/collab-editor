@@ -23,6 +23,8 @@ import type {
   StatusBarConfig,
   FormattingState,
   FormattingCommand,
+  DocumentEntry,
+  CollaboratorInfo,
 } from './interfaces/index.js';
 import { isFormattingCapable, emptyFormattingState } from './interfaces/index.js';
 import {
@@ -49,10 +51,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @property({ attribute: false }) initialContent: string = '';
   @property({ attribute: false }) toolbarConfig: ToolbarConfig | null = null;
   @property({ attribute: false }) statusBarConfig: StatusBarConfig | null = null;
+  @property({ attribute: false }) documents: DocumentEntry[] = [];
+  @property({ attribute: false }) currentDocumentId: string = '';
 
   @state() private _collabStatus: CollabStatus = 'disconnected';
   @state() private _formattingState: FormattingState = emptyFormattingState();
   @state() private _availableCommands: FormattingCommand[] = [];
+  @state() private _collaborators: CollaboratorInfo[] = [];
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -73,6 +78,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _remoteChangeCallbacks = new Set<(detail: RemoteChangeDetail) => void>();
   private _beforeModeChangeCallbacks = new Set<(detail: BeforeModeChangeDetail) => boolean>();
   private _formattingUnsub: (() => void) | null = null;
+  private _awarenessHandler: (() => void) | null = null;
 
   constructor() {
     super();
@@ -344,9 +350,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .formattingState=${this._formattingState}
           .availableCommands=${this._availableCommands}
           .config=${this.toolbarConfig}
+          .documents=${this.documents}
+          .currentDocumentId=${this.currentDocumentId}
           .readonly=${this.readonly}
           @toolbar-command=${this._handleToolbarCommand}
           @toolbar-mode-switch=${this._handleToolbarModeSwitch}
+          @toolbar-document-switch=${this._handleToolbarDocumentSwitch}
         ></editor-toolbar>
       </slot>
     `;
@@ -359,6 +368,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           part="status-bar"
           .status=${this._collabStatus}
           .userName=${this.collaboration?.user?.name ?? ''}
+          .userImage=${this.collaboration?.user?.image ?? ''}
+          .userColor=${this.collaboration?.user?.color ?? ''}
+          .documentName=${this._currentDocumentName}
+          .collaborators=${this._collaborators}
           .config=${this.statusBarConfig}
         ></editor-status-bar>
       </slot>
@@ -444,6 +457,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       } catch {
         // Connection may fail but y-websocket auto-reconnects
       }
+
+      // Track collaborator presence via awareness
+      this._wireAwareness();
     }
 
     // Check staleness — if properties changed during setup, another init is queued
@@ -621,6 +637,22 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   // --- Private helpers ---
 
+  private get _currentDocumentName(): string {
+    if (this.currentDocumentId && this.documents.length > 0) {
+      const doc = this.documents.find(d => d.id === this.currentDocumentId);
+      return doc?.name ?? this.currentDocumentId;
+    }
+    return this.currentDocumentId;
+  }
+
+  private _handleToolbarDocumentSwitch(e: CustomEvent): void {
+    this.dispatchEvent(new CustomEvent('document-change', {
+      detail: { documentId: e.detail.documentId },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
   private _handleToolbarCommand(e: CustomEvent): void {
     if (!this._binding || !isFormattingCapable(this._binding)) return;
     this._binding.executeCommand(e.detail.command, e.detail.params);
@@ -644,6 +676,38 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       this._availableCommands = [];
       this._formattingState = emptyFormattingState();
     }
+  }
+
+  private _wireAwareness(): void {
+    // Unsubscribe previous
+    if (this._awarenessHandler && this._collabProvider?.awareness) {
+      this._collabProvider.awareness.off('change', this._awarenessHandler);
+    }
+    this._awarenessHandler = null;
+    this._collaborators = [];
+
+    const awareness = this._collabProvider?.awareness;
+    if (!awareness) return;
+
+    this._awarenessHandler = () => {
+      const states = awareness.getStates() as Map<number, any>;
+      const localId = awareness.clientID;
+      const collabs: CollaboratorInfo[] = [];
+      states.forEach((state: any, clientId: number) => {
+        if (clientId !== localId && state.user) {
+          collabs.push({
+            name: state.user.name ?? 'Anonymous',
+            color: state.user.color ?? '#888',
+            image: state.user.image,
+          });
+        }
+      });
+      this._collaborators = collabs;
+    };
+
+    awareness.on('change', this._awarenessHandler);
+    // Initial read
+    this._awarenessHandler();
   }
 
   private _emitContentChange(content: string): void {
@@ -673,6 +737,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     super.disconnectedCallback();
     if (this._changeDebounce) clearTimeout(this._changeDebounce);
     this._formattingUnsub?.();
+    if (this._awarenessHandler && this._collabProvider?.awareness) {
+      this._collabProvider.awareness.off('change', this._awarenessHandler);
+    }
     this._binding?.destroy();
     this._collabProvider?.destroy();
   }

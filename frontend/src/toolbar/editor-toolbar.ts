@@ -10,7 +10,7 @@ import { customElement, property } from 'lit/decorators.js';
 import type { EditorMode } from '../interfaces/editor-binding.js';
 import type { FormattingCommand, FormattingState } from '../interfaces/formatting.js';
 import { emptyFormattingState } from '../interfaces/formatting.js';
-import type { ToolbarConfig, ToolbarGroup } from '../interfaces/toolbar-config.js';
+import type { ToolbarConfig, ToolbarGroup, DocumentEntry } from '../interfaces/toolbar-config.js';
 
 /** Label mappings for mode buttons */
 const MODE_LABELS: Record<EditorMode, string> = {
@@ -50,6 +50,8 @@ export class EditorToolbar extends LitElement {
   @property({ attribute: false }) formattingState: FormattingState = emptyFormattingState();
   @property({ attribute: false }) availableCommands: FormattingCommand[] = [];
   @property({ attribute: false }) config: ToolbarConfig | null = null;
+  @property({ attribute: false }) documents: DocumentEntry[] = [];
+  @property({ attribute: false }) currentDocumentId: string = '';
   @property({ type: Boolean }) readonly: boolean = false;
 
   static styles = css`
@@ -125,6 +127,27 @@ export class EditorToolbar extends LitElement {
       stroke-linecap: round;
       stroke-linejoin: round;
     }
+
+    .doc-switcher {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    .doc-switcher .fmt-btn {
+      pointer-events: none;
+    }
+    .doc-select-hidden {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      font-size: 13px;
+    }
+
+    .spacer {
+      flex: 1;
+    }
   `;
 
   private _shouldShowGroup(group: ToolbarGroup): boolean {
@@ -142,11 +165,18 @@ export class EditorToolbar extends LitElement {
     const showFormatting = this.mode === 'wysiwyg' &&
       this.availableCommands.length > 0 &&
       this._shouldShowGroup('formatting');
+    const showDocSwitcher = this.documents.length > 0 &&
+      this.config?.showDocumentSwitcher !== false &&
+      this._shouldShowGroup('document-switcher');
+
+    const hasLeftContent = showModeSwitcher || showFormatting;
 
     return html`
       ${showModeSwitcher ? this._renderModeSwitcher() : nothing}
       ${showModeSwitcher && showFormatting ? html`<div class="separator" part="separator"></div>` : nothing}
       ${showFormatting ? this._renderFormattingButtons() : nothing}
+      ${showDocSwitcher ? html`<div class="spacer"></div>` : nothing}
+      ${showDocSwitcher ? this._renderDocumentSwitcher() : nothing}
     `;
   }
 
@@ -185,6 +215,33 @@ export class EditorToolbar extends LitElement {
         `)}
       </div>
     `;
+  }
+
+  private _renderDocumentSwitcher() {
+    return html`
+      <div class="doc-switcher" part="document-switcher">
+        <button class="fmt-btn" title="Switch document">
+          <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+        </button>
+        <select
+          class="doc-select-hidden"
+          .value=${this.currentDocumentId}
+          @change=${(e: Event) => this._dispatchDocumentSwitch((e.target as HTMLSelectElement).value)}
+        >
+          ${this.documents.map(d => html`
+            <option value=${d.id} ?selected=${d.id === this.currentDocumentId}>${d.name}</option>
+          `)}
+        </select>
+      </div>
+    `;
+  }
+
+  private _dispatchDocumentSwitch(documentId: string): void {
+    this.dispatchEvent(new CustomEvent('toolbar-document-switch', {
+      detail: { documentId },
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _dispatchModeSwitch(mode: EditorMode): void {
