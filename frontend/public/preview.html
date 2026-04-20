@@ -58,8 +58,8 @@
             return {};
           }
 
-          var fn = new Function('require', 'module', 'exports', 'React', 'ReactDOM', transformed);
-          fn(require, module, moduleExports, React, ReactDOM);
+          var fn = new Function('require', 'module', 'exports', transformed);
+          fn(require, module, moduleExports);
 
           var Component = module.exports.default || module.exports;
           if (typeof Component === 'function') {

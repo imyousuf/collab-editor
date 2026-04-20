@@ -66,6 +66,13 @@ export class PreviewSourceBinding implements IEditorBinding {
       observeRemoteChanges(this._collab, this._remoteCallbacks);
     }
 
+    // Create preview renderer eagerly if mounting in preview mode
+    if (mode === 'preview' && this._previewContainer) {
+      this._previewRenderer = new PreviewRendererInstance(this._previewContainer);
+      await this._previewRenderer.whenReady();
+      this._previewRenderer.render(this._sourceEditor?.getContent() ?? '');
+    }
+
     this._showMode(mode);
     this._mounted = true;
     this._activeMode = mode;
