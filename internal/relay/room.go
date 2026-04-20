@@ -22,10 +22,11 @@ type Room struct {
 	flusher *Flusher
 	flushCh chan struct{} // signaled when buffer exceeds FlushMaxBytes
 
-	// Stored messages loaded from the provider on room creation.
-	// Replayed to newly connecting peers before their read loop starts.
-	storedMu       sync.RWMutex
-	storedMessages [][]byte
+	// Complete history of sync update messages — both loaded from storage
+	// and received during this room's lifetime. Replayed to newly
+	// connecting peers before their read loop starts.
+	historyMu sync.RWMutex
+	history   [][]byte
 }
 
 func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metrics) *Room {
@@ -97,9 +98,17 @@ func (r *Room) handleMessage(sender *Peer, data []byte) {
 	r.Broadcast(sender, data)
 	r.metrics.UpdatesRelayedTotal.WithLabelValues(r.documentID).Inc()
 
-	// Buffer sync messages (type 0) for persistence.
-	// Skip awareness messages (type 1) — they're ephemeral.
-	if data[0] == 0x00 {
+	// Buffer only sync UPDATE messages (type=0x00, subtype=0x02) for persistence.
+	// Skip sync step1/step2 (subtypes 0x00/0x01) — they're session-specific handshakes.
+	// Skip awareness messages (type=0x01) — they're ephemeral.
+	if len(data) >= 2 && data[0] == 0x00 && data[1] == 0x02 {
+		// Append to in-memory history for replay to new peers
+		cp := make([]byte, len(data))
+		copy(cp, data)
+		r.historyMu.Lock()
+		r.history = append(r.history, cp)
+		r.historyMu.Unlock()
+
 		totalSize := r.buffer.Append(data, 0)
 		if totalSize >= r.config.FlushMaxBytes {
 			select {
@@ -144,20 +153,20 @@ func (r *Room) flushBuffer(ctx context.Context) {
 	}
 }
 
-// SetStoredMessages sets the messages loaded from the storage provider
-// that should be replayed to newly connecting peers.
+// SetStoredMessages sets the initial messages loaded from the storage provider.
+// These become the base of the room's history, which grows as new messages arrive.
 func (r *Room) SetStoredMessages(msgs [][]byte) {
-	r.storedMu.Lock()
-	defer r.storedMu.Unlock()
-	r.storedMessages = msgs
+	r.historyMu.Lock()
+	defer r.historyMu.Unlock()
+	r.history = msgs
 }
 
-// SendStoredMessages replays stored messages to a peer.
-// Called after the peer's write loop starts but before the read loop.
-func (r *Room) SendStoredMessages(peer *Peer) {
-	r.storedMu.RLock()
-	defer r.storedMu.RUnlock()
-	for _, msg := range r.storedMessages {
+// SendHistory replays the complete message history to a peer.
+// Includes both stored messages from provider and messages received during this session.
+func (r *Room) SendHistory(peer *Peer) {
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
+	for _, msg := range r.history {
 		peer.Send(msg)
 	}
 }

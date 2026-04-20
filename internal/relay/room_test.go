@@ -194,26 +194,45 @@ func TestRoom_Close(t *testing.T) {
 	}
 }
 
-func TestRoom_HandleMessage_BuffersSyncMessages(t *testing.T) {
+func TestRoom_HandleMessage_BuffersSyncUpdateMessages(t *testing.T) {
 	room, _ := newTestRoom(t)
 	conn := newMockConn()
 	peer := newPeer(conn, room)
 	room.AddPeer(peer)
 
-	// Sync message (type 0x00) should be buffered
-	syncMsg := []byte{0x00, 0x02, 0x01, 0x02, 0x03}
-	room.handleMessage(peer, syncMsg)
+	// Sync UPDATE message (type=0x00, subtype=0x02) should be buffered
+	syncUpdate := []byte{0x00, 0x02, 0x01, 0x02, 0x03}
+	room.handleMessage(peer, syncUpdate)
 
 	if room.buffer.Len() != 1 {
 		t.Errorf("buffer.Len() = %d, want 1", room.buffer.Len())
 	}
 
-	// Awareness message (type 0x01) should NOT be buffered
+	// Sync step1 (type=0x00, subtype=0x00) should NOT be buffered
+	syncStep1 := []byte{0x00, 0x00, 0x01, 0x02}
+	room.handleMessage(peer, syncStep1)
+	if room.buffer.Len() != 1 {
+		t.Errorf("buffer.Len() = %d, want 1 (step1 should be skipped)", room.buffer.Len())
+	}
+
+	// Sync step2 (type=0x00, subtype=0x01) should NOT be buffered
+	syncStep2 := []byte{0x00, 0x01, 0x01, 0x02}
+	room.handleMessage(peer, syncStep2)
+	if room.buffer.Len() != 1 {
+		t.Errorf("buffer.Len() = %d, want 1 (step2 should be skipped)", room.buffer.Len())
+	}
+
+	// Awareness message (type=0x01) should NOT be buffered
 	awarenessMsg := []byte{0x01, 0x01, 0x02}
 	room.handleMessage(peer, awarenessMsg)
-
 	if room.buffer.Len() != 1 {
 		t.Errorf("buffer.Len() = %d, want 1 (awareness should be skipped)", room.buffer.Len())
+	}
+
+	// Another sync UPDATE should be buffered
+	room.handleMessage(peer, []byte{0x00, 0x02, 0x04, 0x05})
+	if room.buffer.Len() != 2 {
+		t.Errorf("buffer.Len() = %d, want 2", room.buffer.Len())
 	}
 }
 
@@ -237,7 +256,7 @@ func TestRoom_HandleMessage_SignalsFlushOnSizeThreshold(t *testing.T) {
 	peer := newPeer(conn, room)
 	room.AddPeer(peer)
 
-	// Send a sync message that exceeds threshold
+	// Send a sync UPDATE message that exceeds threshold (type=0x00, subtype=0x02)
 	syncMsg := []byte{0x00, 0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a}
 	room.handleMessage(peer, syncMsg)
 
@@ -321,7 +340,7 @@ func TestRoom_StoredMessages_SetAndSend(t *testing.T) {
 	room.SetStoredMessages(msgs)
 
 	// Send stored messages to peer
-	room.SendStoredMessages(peer)
+	room.SendHistory(peer)
 
 	// Verify peer received both messages
 	for i, expected := range msgs {
@@ -336,13 +355,79 @@ func TestRoom_StoredMessages_SetAndSend(t *testing.T) {
 	}
 }
 
+func TestRoom_HistoryAccumulatesNewMessages(t *testing.T) {
+	room, _ := newTestRoom(t)
+
+	// Set initial stored messages (from provider bootstrap)
+	room.SetStoredMessages([][]byte{
+		{0x00, 0x02, 0x01},
+	})
+
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+
+	// New sync update arrives via handleMessage — should be added to history
+	newMsg := []byte{0x00, 0x02, 0x04, 0x05}
+	room.handleMessage(peer, newMsg)
+
+	// History should have both stored + new
+	room.historyMu.RLock()
+	defer room.historyMu.RUnlock()
+	if len(room.history) != 2 {
+		t.Fatalf("history length: got %d, want 2", len(room.history))
+	}
+	if string(room.history[0]) != string([]byte{0x00, 0x02, 0x01}) {
+		t.Errorf("history[0]: got %v", room.history[0])
+	}
+	if string(room.history[1]) != string(newMsg) {
+		t.Errorf("history[1]: got %v", room.history[1])
+	}
+}
+
+func TestRoom_NewPeerReceivesFullHistory(t *testing.T) {
+	room, _ := newTestRoom(t)
+
+	// Set stored messages
+	room.SetStoredMessages([][]byte{
+		{0x00, 0x02, 0x01},
+	})
+
+	// First peer connects and sends a new message
+	conn1 := newMockConn()
+	peer1 := newPeer(conn1, room)
+	room.AddPeer(peer1)
+	room.handleMessage(peer1, []byte{0x00, 0x02, 0x09})
+
+	// Second peer connects and should receive full history (stored + new)
+	conn2 := newMockConn()
+	peer2 := newPeer(conn2, room)
+	room.AddPeer(peer2)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer2.writeLoop(ctx)
+
+	room.SendHistory(peer2)
+
+	// Should receive 2 messages
+	for i := 0; i < 2; i++ {
+		select {
+		case <-conn2.writeCh:
+			// ok
+		case <-time.After(time.Second):
+			t.Fatalf("timeout waiting for history message %d", i)
+		}
+	}
+}
+
 func TestRoom_StoredMessages_EmptyIsNoOp(t *testing.T) {
 	room, _ := newTestRoom(t)
 	conn := newMockConn()
 	peer := newPeer(conn, room)
 
-	// No stored messages set — SendStoredMessages should not panic
-	room.SendStoredMessages(peer)
+	// No stored messages set — SendHistory should not panic
+	room.SendHistory(peer)
 
 	select {
 	case <-conn.writeCh:

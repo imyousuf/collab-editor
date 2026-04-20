@@ -192,6 +192,15 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // Mount binding (async — Tiptap's whenReady)
     await this._mountBinding(mode);
 
+    // Brief delay to allow stored Y.js state (replayed by the relay after
+    // connect) to arrive and be processed by y-websocket before we check
+    // whether to seed. Without this, the seed check runs before stored
+    // messages populate Y.Text, causing the original content to overwrite
+    // persisted edits.
+    if (this._collabProvider) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+
     // Seed Y.Text AFTER mounting binding so yCollab's observer catches the insert.
     // y-codemirror.next only observes CHANGES to Y.Text — it does NOT read
     // pre-existing content. Seeding after mount ensures the yCollab observer

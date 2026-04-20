@@ -87,9 +87,9 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 	defer writeCancel()
 	go peer.writeLoop(writeCtx)
 
-	// Replay stored messages to the peer before starting the read loop.
-	// This bootstraps the peer's Y.Doc with persisted state.
-	room.SendStoredMessages(peer)
+	// Replay full history to the peer before starting the read loop.
+	// This bootstraps the peer's Y.Doc with persisted + in-session state.
+	room.SendHistory(peer)
 
 	// Read loop blocks until disconnect
 	peer.readLoop(ctx)
