@@ -53,6 +53,8 @@ export class EditorToolbar extends LitElement {
   @property({ attribute: false }) documents: DocumentEntry[] = [];
   @property({ attribute: false }) currentDocumentId: string = '';
   @property({ type: Boolean }) readonly: boolean = false;
+  @property({ type: Boolean }) blameActive: boolean = false;
+  @property({ type: Boolean }) blameAvailable: boolean = false;
 
   static styles = css`
     :host {
@@ -175,7 +177,8 @@ export class EditorToolbar extends LitElement {
       ${showModeSwitcher ? this._renderModeSwitcher() : nothing}
       ${showModeSwitcher && showFormatting ? html`<div class="separator" part="separator"></div>` : nothing}
       ${showFormatting ? this._renderFormattingButtons() : nothing}
-      ${showDocSwitcher ? html`<div class="spacer"></div>` : nothing}
+      ${showDocSwitcher || this.blameAvailable ? html`<div class="spacer"></div>` : nothing}
+      ${this.blameAvailable ? this._renderBlameToggle() : nothing}
       ${showDocSwitcher ? this._renderDocumentSwitcher() : nothing}
     `;
   }
@@ -255,6 +258,27 @@ export class EditorToolbar extends LitElement {
   private _dispatchCommand(command: FormattingCommand): void {
     this.dispatchEvent(new CustomEvent('toolbar-command', {
       detail: { command },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _renderBlameToggle() {
+    return html`
+      <button
+        class="fmt-btn ${this.blameActive ? 'active' : ''}"
+        part="blame-button"
+        title="${this.blameActive ? 'Disable Blame View' : 'Enable Blame View'}"
+        @click=${this._dispatchBlameToggle}
+      >
+        <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"></path></svg>
+      </button>
+    `;
+  }
+
+  private _dispatchBlameToggle(): void {
+    this.dispatchEvent(new CustomEvent('toolbar-blame-toggle', {
+      detail: { active: !this.blameActive },
       bubbles: true,
       composed: true,
     }));

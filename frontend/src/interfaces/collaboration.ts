@@ -15,6 +15,22 @@ export interface CollaborationConfig {
   };
   /** Auth payload for Socket.io handshake (only used when transport is 'socketio') */
   socketAuth?: Record<string, any>;
+
+  // --- Version history ---
+
+  /** Enable auto-snapshots. Default: true when collaboration is active */
+  versionAutoSnapshot?: boolean;
+  /** Create auto-snapshot every N updates. Default: 50 */
+  versionAutoSnapshotUpdates?: number;
+  /** Create auto-snapshot every N minutes. Default: 5 */
+  versionAutoSnapshotMinutes?: number;
+
+  // --- Blame modes (developer controls availability) ---
+
+  /** Enable live blame toggle for end users. Default: true */
+  liveBlameEnabled?: boolean;
+  /** Enable version blame view for end users. Default: true */
+  versionBlameEnabled?: boolean;
 }
 
 export type CollabStatusCallback = (status: CollabStatus) => void;

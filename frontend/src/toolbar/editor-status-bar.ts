@@ -37,6 +37,8 @@ export class EditorStatusBar extends LitElement {
   @property({ attribute: false }) documentName: string = '';
   @property({ attribute: false }) collaborators: CollaboratorInfo[] = [];
   @property({ attribute: false }) config: StatusBarConfig | null = null;
+  @property({ type: Number }) versionCount = 0;
+  @property({ type: Boolean }) versionPanelOpen = false;
 
   static styles = css`
     :host {
@@ -132,18 +134,39 @@ export class EditorStatusBar extends LitElement {
     .user-label {
       font-weight: 500;
     }
+
+    .version-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .version-indicator:hover {
+      background: var(--me-toolbar-hover-bg, rgba(0,0,0,0.06));
+    }
+    .version-indicator.active {
+      background: var(--me-toolbar-button-active-bg, rgba(0,0,0,0.1));
+    }
+    .version-icon {
+      font-size: 14px;
+    }
   `;
 
   render() {
     const showStatus = this.config?.showConnectionStatus !== false;
     const showUser = this.config?.showUserIdentity !== false;
     const showPresence = this.config?.showPresence !== false;
+    const showVersions = this.config?.showVersionHistory !== false && this.versionCount > 0;
 
     return html`
       <div class="left">
         ${showStatus ? this._renderStatus() : nothing}
         ${showStatus && this.documentName ? html`<span class="separator-dot">&middot;</span>` : nothing}
         ${this.documentName ? this._renderDocName() : nothing}
+        ${showVersions ? html`<span class="separator-dot">&middot;</span>` : nothing}
+        ${showVersions ? this._renderVersionIndicator() : nothing}
       </div>
       <div class="right">
         ${showPresence && this.collaborators.length > 0 ? this._renderCollaborators() : nothing}
@@ -182,6 +205,27 @@ export class EditorStatusBar extends LitElement {
         <span class="user-label">${this.userName}</span>
       </span>
     `;
+  }
+
+  private _renderVersionIndicator() {
+    return html`
+      <span
+        class="version-indicator ${this.versionPanelOpen ? 'active' : ''}"
+        part="version-indicator"
+        @click=${this._onVersionClick}
+        title="Version History"
+      >
+        <span class="version-icon">&#x1f554;</span>
+        <span>${this.versionCount} version${this.versionCount !== 1 ? 's' : ''}</span>
+      </span>
+    `;
+  }
+
+  private _onVersionClick() {
+    this.dispatchEvent(new CustomEvent('version-toggle', {
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _renderAvatar(name: string, color: string, image?: string) {
