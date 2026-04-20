@@ -141,8 +141,8 @@
             opt.textContent = doc.name;
             docSelect.appendChild(opt);
           }
+          await connectToRoom(docSelect.value);
           documentListLoaded = true;
-          connectToRoom(docSelect.value);
         } else {
           // No documents — create empty editor
           const opt = document.createElement('option');

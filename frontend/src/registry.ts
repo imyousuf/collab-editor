@@ -72,8 +72,8 @@ export function registerDefaults(factory: EditorBindingFactory): void {
   const htmlHandler = new HtmlContentHandler();
   const plain = new PlainTextContentHandler();
 
-  // WYSIWYG + Source (temporarily using SourceOnly for debugging)
-  factory.register('text/markdown', () => new SourceOnlyBinding('markdown'), md);
+  // WYSIWYG + Source
+  factory.register('text/markdown', () => new DualModeBinding(md, 'markdown'), md);
   factory.register('text/html', () => new DualModeBinding(htmlHandler, 'html'), htmlHandler);
 
   // Preview + Source

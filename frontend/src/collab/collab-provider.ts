@@ -42,16 +42,6 @@ export class CollaborationProvider implements ICollaborationProvider {
     );
     this._provider.awareness.setLocalStateField('user', config.user);
 
-    // DEBUG: trace all Y.Text changes
-    this.sharedText.observe((event) => {
-      let added = 0, deleted = 0;
-      for (const d of event.delta) {
-        if ('insert' in d) added += (d.insert as string).length;
-        if ('delete' in d) deleted += d.delete!;
-      }
-      console.log(`Y.Text change: +${added} -${deleted}, local=${event.transaction.local}, total=${this.sharedText.length}`);
-    });
-
     this._provider.on('status', (event: { status: string }) => {
       const newStatus = event.status as CollabStatus;
       this._setStatus(newStatus);

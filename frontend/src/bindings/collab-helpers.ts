@@ -9,9 +9,7 @@ import type { RemoteChangeCallback } from '../interfaces/editor-binding.js';
  * Returns true if content was written, false if Y.Text already had content.
  */
 export function setCollabContent(collab: CollaborationContext, text: string): boolean {
-  console.log('setCollabContent: Y.Text length =', collab.sharedText.length, 'text length =', text.length);
   if (collab.sharedText.length > 0) {
-    console.log('setCollabContent: SKIPPED (Y.Text not empty)');
     return false;
   }
   collab.ydoc.transact(() => {
