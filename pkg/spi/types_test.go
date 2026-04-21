@@ -1,6 +1,7 @@
 package spi
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -139,6 +140,39 @@ func TestStoreResponseJSON(t *testing.T) {
 		}
 		if got.Failed[0].Sequence != 1043 || got.Failed[0].Error != "storage_full" {
 			t.Errorf("failed: %+v", got.Failed[0])
+		}
+	})
+
+	t.Run("with version_created", func(t *testing.T) {
+		ts := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
+		resp := StoreResponse{
+			Stored: 2,
+			VersionCreated: &VersionListEntry{
+				ID:        "v-auto-1",
+				CreatedAt: ts,
+				Type:      "auto",
+				Creator:   "system",
+			},
+		}
+		data, _ := json.Marshal(resp)
+		var got StoreResponse
+		json.Unmarshal(data, &got)
+		if got.VersionCreated == nil {
+			t.Fatal("expected version_created")
+		}
+		if got.VersionCreated.ID != "v-auto-1" {
+			t.Errorf("version id: got %q", got.VersionCreated.ID)
+		}
+		if got.VersionCreated.Type != "auto" {
+			t.Errorf("version type: got %q", got.VersionCreated.Type)
+		}
+	})
+
+	t.Run("without version_created omits field", func(t *testing.T) {
+		resp := StoreResponse{Stored: 1}
+		data, _ := json.Marshal(resp)
+		if bytes.Contains(data, []byte("version_created")) {
+			t.Error("version_created should be omitted when nil")
 		}
 	})
 }

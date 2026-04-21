@@ -49,6 +49,7 @@ class StoreResponse:
     stored: int = 0
     duplicates_ignored: Optional[int] = None
     failed: Optional[list[FailedUpdate]] = None
+    version_created: Optional[VersionListEntry] = None
 
 
 @dataclass

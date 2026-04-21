@@ -37,6 +37,7 @@ export interface StoreResponse {
   stored: number;
   duplicates_ignored?: number;
   failed?: FailedUpdate[];
+  version_created?: VersionListEntry;
 }
 
 export interface FailedUpdate {

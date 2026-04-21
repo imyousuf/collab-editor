@@ -47,9 +47,10 @@ type StoreRequest struct {
 
 // StoreResponse is returned after persisting updates.
 type StoreResponse struct {
-	Stored            int            `json:"stored"`
-	DuplicatesIgnored int            `json:"duplicates_ignored"`
-	Failed            []FailedUpdate `json:"failed,omitempty"`
+	Stored            int              `json:"stored"`
+	DuplicatesIgnored int              `json:"duplicates_ignored"`
+	Failed            []FailedUpdate   `json:"failed,omitempty"`
+	VersionCreated    *VersionListEntry `json:"version_created,omitempty"`
 }
 
 // FailedUpdate describes a single update that failed to persist.
