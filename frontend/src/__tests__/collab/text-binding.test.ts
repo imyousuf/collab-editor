@@ -11,12 +11,17 @@ function createMockEditor(initialContent = '') {
   let html = initialContent;
   const listeners: Record<string, Set<(...args: any[]) => void>> = {};
 
+  function fireUpdate(docChanged: boolean) {
+    const payload = { editor, transaction: { docChanged } };
+    (listeners['update'] ?? new Set()).forEach(fn => fn(payload));
+  }
+
   const editor = {
     commands: {
       setContent(content: string, _opts?: any) {
         html = content;
-        // Tiptap fires 'update' synchronously on setContent
-        (listeners['update'] ?? new Set()).forEach(fn => fn());
+        // Tiptap fires 'update' synchronously on setContent (docChanged = true)
+        fireUpdate(true);
       },
     },
     getHTML() {
@@ -33,7 +38,11 @@ function createMockEditor(initialContent = '') {
     /** Simulate a user edit inside Tiptap (changes content + fires 'update') */
     _simulateUserEdit(newContent: string) {
       html = newContent;
-      (listeners['update'] ?? new Set()).forEach(fn => fn());
+      fireUpdate(true);
+    },
+    /** Simulate a metadata-only transaction (e.g., blame decorations — docChanged = false) */
+    _simulateMetaOnlyTransaction() {
+      fireUpdate(false);
     },
   };
 
@@ -192,7 +201,7 @@ describe('TextBinding', () => {
     binding.destroy();
   });
 
-  test('remote Y.Text change is applied to editor', () => {
+  test('remote Y.Text change is applied to editor', async () => {
     const editor = createMockEditor();
     const binding = new TextBinding(editor as any, ytext, htmlHandler);
 
@@ -201,6 +210,8 @@ describe('TextBinding', () => {
       ytext.insert(0, '<p>remote content</p>');
     });
 
+    // Flush microtask (Y.Text→Tiptap sync is deferred)
+    await Promise.resolve();
     expect(editor.getHTML()).toBe('<p>remote content</p>');
     binding.destroy();
   });
@@ -223,7 +234,7 @@ describe('TextBinding', () => {
     binding.destroy();
   });
 
-  test('echo prevention: remote Y.Text change does not write back', () => {
+  test('echo prevention: remote Y.Text change does not write back', async () => {
     const editor = createMockEditor();
     const binding = new TextBinding(editor as any, ytext, htmlHandler);
 
@@ -235,6 +246,9 @@ describe('TextBinding', () => {
       ytext.insert(0, '<p>remote</p>');
     });
 
+    // Flush microtask (deferred Y.Text→Tiptap sync)
+    await Promise.resolve();
+
     // Let debounce fire
     vi.advanceTimersByTime(150);
 
@@ -245,7 +259,7 @@ describe('TextBinding', () => {
     binding.destroy();
   });
 
-  test('echo prevention: normalized HTML does not overwrite Y.Text', () => {
+  test('echo prevention: normalized HTML does not overwrite Y.Text', async () => {
     const editor = createMockEditor();
     // Override getHTML to return slightly different normalization
     const origGetHTML = editor.getHTML.bind(editor);
@@ -262,7 +276,8 @@ describe('TextBinding', () => {
       ytext.insert(0, '<h1>Title</h1><p>Body</p>');
     });
 
-    // Debounce fires — getHTML returns normalized version
+    // Flush microtask then let debounce fire
+    await Promise.resolve();
     vi.advanceTimersByTime(150);
 
     // Y.Text should NOT be overwritten with normalized version
@@ -272,7 +287,7 @@ describe('TextBinding', () => {
     binding.destroy();
   });
 
-  test('debounce is canceled when remote change arrives', () => {
+  test('debounce is canceled when remote change arrives', async () => {
     ytext.insert(0, '<p>original</p>');
     const editor = createMockEditor();
     const binding = new TextBinding(editor as any, ytext, htmlHandler);
@@ -287,6 +302,8 @@ describe('TextBinding', () => {
       ytext.insert(0, '<p>remote wins</p>');
     });
 
+    // Flush microtask
+    await Promise.resolve();
     // Editor should show remote content
     expect(editor.getHTML()).toBe('<p>remote wins</p>');
 
@@ -299,7 +316,7 @@ describe('TextBinding', () => {
     binding.destroy();
   });
 
-  test('rapid remote changes: only final state applies', () => {
+  test('rapid remote changes: only final state applies', async () => {
     const editor = createMockEditor();
     const binding = new TextBinding(editor as any, ytext, htmlHandler);
 
@@ -314,6 +331,8 @@ describe('TextBinding', () => {
       ytext.insert(0, '<p>third</p>');
     });
 
+    // Flush microtask (coalesced into one update)
+    await Promise.resolve();
     // Editor should show the last applied content
     expect(editor.getHTML()).toBe('<p>third</p>');
 
@@ -394,7 +413,7 @@ describe('TextBinding', () => {
     expect(ytext.toString()).toBe('<p>after destroy</p>');
   });
 
-  test('concurrent edit and remote change: user edit survives', () => {
+  test('concurrent edit and remote change: user edit survives', async () => {
     ytext.insert(0, '<p>original</p>');
     const editor = createMockEditor();
     const binding = new TextBinding(editor as any, ytext, htmlHandler);
@@ -409,6 +428,8 @@ describe('TextBinding', () => {
       ytext.insert(0, '<p>remote update</p>');
     });
 
+    // Flush microtask
+    await Promise.resolve();
     expect(editor.getHTML()).toBe('<p>remote update</p>');
 
     // User edits again after remote was applied
@@ -421,7 +442,260 @@ describe('TextBinding', () => {
     binding.destroy();
   });
 
-  test('HTML with em/strong tags round-trips correctly', () => {
+  test('metadata-only transactions (blame) do not trigger Y.Text sync', () => {
+    ytext.insert(0, '<p>original content</p>');
+    const editor = createMockEditor();
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    // Track writes to Y.Text
+    let ytextWriteCount = 0;
+    ytext.observe((event) => {
+      if (event.transaction.origin !== undefined) {
+        ytextWriteCount++;
+      }
+    });
+
+    // Fire a metadata-only transaction (like blame decoration update)
+    editor._simulateMetaOnlyTransaction();
+
+    // Let debounce window pass
+    vi.advanceTimersByTime(150);
+
+    // No writes should have happened to Y.Text
+    expect(ytextWriteCount).toBe(0);
+    expect(ytext.toString()).toBe('<p>original content</p>');
+
+    binding.destroy();
+  });
+
+  test('metadata-only transactions do not corrupt Y.Text with normalized content', () => {
+    const editor = createMockEditor();
+    // Override getHTML to return normalized version (simulates Tiptap normalization)
+    const origGetHTML = editor.getHTML.bind(editor);
+    editor.getHTML = () => {
+      const html = origGetHTML();
+      // Simulate Tiptap adding whitespace during normalization
+      return html.replace(/<\/p><p>/g, '</p>\n<p>') || html;
+    };
+
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    // Remote sets Y.Text
+    ydoc.transact(() => {
+      ytext.insert(0, '<p>line1</p><p>line2</p>');
+    });
+
+    // Now fire multiple metadata-only transactions (blame updates)
+    editor._simulateMetaOnlyTransaction();
+    editor._simulateMetaOnlyTransaction();
+    editor._simulateMetaOnlyTransaction();
+
+    // Let debounce window pass
+    vi.advanceTimersByTime(150);
+
+    // Y.Text should still have original content, NOT normalized
+    expect(ytext.toString()).toBe('<p>line1</p><p>line2</p>');
+
+    binding.destroy();
+  });
+
+  test('setPaused prevents Tiptap→Y.Text sync entirely', () => {
+    ytext.insert(0, '<p>original</p>');
+    const editor = createMockEditor();
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    // Pause the binding (simulates source mode active)
+    binding.setPaused(true);
+
+    // Simulate user edit in Tiptap (shouldn't happen in source mode, but test the guard)
+    editor._simulateUserEdit('<p>modified in wysiwyg</p>');
+
+    // Let debounce fire
+    vi.advanceTimersByTime(150);
+
+    // Y.Text should NOT be modified
+    expect(ytext.toString()).toBe('<p>original</p>');
+
+    binding.destroy();
+  });
+
+  test('setPaused skips Y.Text→Tiptap sync, catches up on unpause', async () => {
+    const editor = createMockEditor();
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    binding.setPaused(true);
+
+    // Remote Y.Text change — should NOT apply to Tiptap while paused
+    ydoc.transact(() => {
+      ytext.insert(0, '<p>remote change</p>');
+    });
+
+    await Promise.resolve();
+    // Tiptap should NOT have received the change yet
+    expect(editor.getHTML()).toBe('');
+
+    // Unpause — Tiptap should catch up with current Y.Text
+    binding.setPaused(false);
+    expect(editor.getHTML()).toBe('<p>remote change</p>');
+
+    // And no write-back even after debounce
+    vi.advanceTimersByTime(150);
+    expect(ytext.toString()).toBe('<p>remote change</p>');
+
+    binding.destroy();
+  });
+
+  test('rapid Y.Text changes while paused do not corrupt content', async () => {
+    ytext.insert(0, '<p>original</p>');
+    const editor = createMockEditor();
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    binding.setPaused(true);
+
+    // Simulate rapid keystrokes updating Y.Text (like typing in CodeMirror)
+    for (let i = 0; i < 10; i++) {
+      ydoc.transact(() => {
+        ytext.insert(0, String(i));
+      });
+    }
+
+    // Flush microtasks — should be no-op since paused
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Y.Text should have all characters
+    expect(ytext.toString()).toBe('9876543210<p>original</p>');
+
+    // Unpause — Tiptap catches up with final state
+    binding.setPaused(false);
+    expect(editor.getHTML()).toBe('9876543210<p>original</p>');
+
+    // No write-back
+    vi.advanceTimersByTime(150);
+    expect(ytext.toString()).toBe('9876543210<p>original</p>');
+
+    binding.destroy();
+  });
+
+  test('microtask coalesces multiple Y.Text changes into one Tiptap update', async () => {
+    const editor = createMockEditor();
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    // Track setContent calls
+    let setContentCount = 0;
+    const origSetContent = editor.commands.setContent.bind(editor.commands);
+    editor.commands.setContent = (content: string, opts?: any) => {
+      setContentCount++;
+      origSetContent(content, opts);
+    };
+
+    // Rapid Y.Text changes within same macrotask
+    ydoc.transact(() => { ytext.insert(0, 'a'); });
+    ydoc.transact(() => { ytext.insert(1, 'b'); });
+    ydoc.transact(() => { ytext.insert(2, 'c'); });
+
+    // Before microtask: no setContent calls yet (deferred)
+    expect(setContentCount).toBe(0);
+
+    // Flush microtask — should result in exactly ONE setContent call
+    await Promise.resolve();
+    expect(setContentCount).toBe(1);
+    expect(editor.getHTML()).toBe('abc');
+
+    binding.destroy();
+  });
+
+  test('unpausing re-enables Tiptap→Y.Text sync', () => {
+    ytext.insert(0, '<p>start</p>');
+    const editor = createMockEditor();
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    // Pause, then unpause
+    binding.setPaused(true);
+    binding.setPaused(false);
+
+    // User edit should now sync
+    editor._simulateUserEdit('<p>edited</p>');
+    vi.advanceTimersByTime(150);
+    expect(ytext.toString()).toBe('<p>edited</p>');
+
+    binding.destroy();
+  });
+
+  test('guard flag prevents Y.Text corruption from lossy markdown round-trip', () => {
+    // Simulate a markdown editor where setContent→getMarkdown round-trip is lossy:
+    // Input markdown has no trailing newline, but getMarkdown() adds one.
+    const editor = createMockEditor();
+    // Override getHTML to simulate Tiptap normalizing content differently
+    editor.getHTML = () => {
+      // After markdown→HTML→serialize, output has a trailing newline
+      return editor.getMarkdown?.() ?? '';
+    };
+    // getMarkdown always adds trailing newlines (simulates real Tiptap behavior)
+    editor.getMarkdown = () => {
+      // Read internal state and normalize — adds trailing \n
+      const raw = (editor as any)._rawContent ?? '';
+      return raw ? raw + '\n' : '';
+    };
+    // Track what setContent stores internally
+    const origSetContent = editor.commands.setContent.bind(editor.commands);
+    editor.commands.setContent = (content: string, opts?: any) => {
+      (editor as any)._rawContent = content;
+      origSetContent(content, opts);
+    };
+
+    const binding = new TextBinding(editor as any, ytext, mdHandler);
+
+    // Remote Y.Text change: raw markdown without trailing newline
+    ydoc.transact(() => {
+      ytext.insert(0, '# Hello World');
+    });
+
+    // After applying, getMarkdown() returns "# Hello World\n" (normalized)
+    // Without the guard, the debounce would fire and write "# Hello World\n" to Y.Text
+
+    // Let debounce window pass
+    vi.advanceTimersByTime(150);
+
+    // Y.Text must still be the original raw markdown, NOT the normalized version
+    expect(ytext.toString()).toBe('# Hello World');
+
+    binding.destroy();
+  });
+
+  test('rapid remote changes with lossy serialization do not corrupt Y.Text', () => {
+    const editor = createMockEditor();
+    // Make getHTML return slightly different output each time
+    // (simulates Tiptap normalizing whitespace)
+    let callCount = 0;
+    const origGetHTML = editor.getHTML.bind(editor);
+    editor.getHTML = () => {
+      callCount++;
+      const base = origGetHTML();
+      // First call after setContent returns one thing, later calls return another
+      return base;
+    };
+
+    const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+    // Rapid remote changes
+    for (let i = 0; i < 10; i++) {
+      ydoc.transact(() => {
+        ytext.delete(0, ytext.length);
+        ytext.insert(0, `<p>version ${i}</p>`);
+      });
+    }
+
+    // Let debounce fire
+    vi.advanceTimersByTime(150);
+
+    // Y.Text should have the last remote version, unchanged
+    expect(ytext.toString()).toBe('<p>version 9</p>');
+
+    binding.destroy();
+  });
+
+  test('HTML with em/strong tags round-trips correctly', async () => {
     const html = '<p>This is <strong>bold</strong> and <em>italic</em> text.</p>';
     const editor = createMockEditor();
     const binding = new TextBinding(editor as any, ytext, htmlHandler);
@@ -429,6 +703,8 @@ describe('TextBinding', () => {
     // Remote sets HTML with inline formatting
     ydoc.transact(() => { ytext.insert(0, html); });
 
+    // Flush microtask
+    await Promise.resolve();
     expect(editor.getHTML()).toBe(html);
 
     // Debounce should not corrupt

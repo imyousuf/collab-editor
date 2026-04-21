@@ -755,6 +755,8 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this.switchMode(e.detail.mode);
   }
 
+  private _blameUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+
   private _handleBlameToggle(e: CustomEvent): void {
     if (this.collaboration?.liveBlameEnabled === false) return;
 
@@ -765,18 +767,27 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       const segments = this._blameEngine.getLiveBlame();
       this._binding.enableBlame(segments);
 
-      // Re-compute blame on doc updates
+      // Re-compute blame on doc updates — DEBOUNCED to avoid dispatching
+      // CodeMirror effects on every keystroke, which disrupts typing.
       this._blameUpdateUnsub?.();
       const observer = () => {
-        if (this._blameActive && this._blameEngine && this._binding && isBlameCapable(this._binding)) {
-          const updated = this._blameEngine.getLiveBlame();
-          this._binding.updateBlame(updated);
-        }
+        if (this._blameUpdateTimer) clearTimeout(this._blameUpdateTimer);
+        this._blameUpdateTimer = setTimeout(() => {
+          this._blameUpdateTimer = null;
+          if (this._blameActive && this._blameEngine && this._binding && isBlameCapable(this._binding)) {
+            const updated = this._blameEngine.getLiveBlame();
+            this._binding.updateBlame(updated);
+          }
+        }, 300);
       };
       const ydoc = this._collabProvider?.ydoc;
       ydoc?.on('update', observer);
       this._blameUpdateUnsub = () => {
         ydoc?.off('update', observer);
+        if (this._blameUpdateTimer) {
+          clearTimeout(this._blameUpdateTimer);
+          this._blameUpdateTimer = null;
+        }
       };
     } else {
       this._blameUpdateUnsub?.();

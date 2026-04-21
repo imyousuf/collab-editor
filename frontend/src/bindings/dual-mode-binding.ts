@@ -101,6 +101,10 @@ export class DualModeBinding implements IEditorBinding, IFormattingCapability, I
         this._collab.sharedText,
         this._contentHandler,
       );
+      // If mounting in source mode, pause Tiptap→Y.Text immediately
+      if (mode === 'source') {
+        this._textBinding.setPaused(true);
+      }
       observeRemoteChanges(this._collab, this._remoteCallbacks);
     }
 
@@ -164,6 +168,14 @@ export class DualModeBinding implements IEditorBinding, IFormattingCapability, I
       } else if (this._activeMode === 'source' && mode === 'wysiwyg') {
         this._wysiwygEditor?.setContent(this._sourceEditor?.getContent() ?? '');
       }
+    }
+
+    // In collab mode, pause/resume TextBinding's Tiptap→Y.Text sync.
+    // In source mode, yCollab handles CodeMirror→Y.Text sync, so TextBinding
+    // should only sync Y.Text→Tiptap (one-directional). Without pausing,
+    // the hidden Tiptap's normalized markdown would corrupt Y.Text.
+    if (this._textBinding) {
+      this._textBinding.setPaused(mode === 'source');
     }
 
     this._showMode(mode);
