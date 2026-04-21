@@ -518,6 +518,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
       // Track collaborator presence via awareness
       this._wireAwareness();
+
+      // Listen for application events (version-created from relay)
+      this._collabProvider.onAppMessage((data: any) => {
+        if (data?.type === 'version-created' && data.version) {
+          this._versions = [data.version, ...this._versions];
+        }
+      });
     }
 
     // Check staleness — if properties changed during setup, another init is queued
