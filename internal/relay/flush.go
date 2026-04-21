@@ -35,47 +35,57 @@ func (f *Flusher) SetFlushLock(lock FlushLock) {
 	f.lock = lock
 }
 
+// FlushResult contains the outcome of a flush operation.
+type FlushResult struct {
+	Requeue        []BufferedUpdate   // updates that need re-queuing
+	VersionCreated *spi.VersionListEntry // version created during this flush (if any)
+}
+
 // Flush drains the buffer and persists updates to the provider.
-// Returns any updates that could not be stored (for re-queuing).
-func (f *Flusher) Flush(ctx context.Context, documentID string, buffer *UpdateBuffer) []BufferedUpdate {
+func (f *Flusher) Flush(ctx context.Context, documentID string, buffer *UpdateBuffer) FlushResult {
 	// If distributed lock is configured, acquire before draining
 	if f.lock != nil {
 		acquired, err := f.lock.Acquire(ctx, documentID, 10*time.Second)
 		if err != nil {
 			slog.Debug("flush lock acquire error", "doc", documentID, "err", err)
-			return nil
+			return FlushResult{}
 		}
 		if !acquired {
-			return nil // Another instance will handle this document
+			return FlushResult{} // Another instance will handle this document
 		}
 		defer f.lock.Release(ctx, documentID)
 	}
 
 	updates := buffer.Drain()
 	if len(updates) == 0 {
-		return nil
+		return FlushResult{}
 	}
 
 	if !f.breaker.Allow() {
 		slog.Debug("circuit breaker open, re-queuing updates", "doc", documentID, "count", len(updates))
-		return updates
+		return FlushResult{Requeue: updates}
 	}
 
 	payloads := ToPayloads(updates)
 
 	start := time.Now()
-	failed := f.storeWithRetry(ctx, documentID, payloads)
+	resp := f.storeWithRetry(ctx, documentID, payloads)
 	elapsed := time.Since(start).Milliseconds()
 	f.metrics.FlushDurationMs.Observe(float64(elapsed))
 
-	if failed == nil {
+	if resp == nil {
 		f.breaker.RecordSuccess()
-		return nil
+		return FlushResult{}
+	}
+
+	if len(resp.Failed) == 0 {
+		f.breaker.RecordSuccess()
+		return FlushResult{VersionCreated: resp.VersionCreated}
 	}
 
 	// Map failed sequences back to buffered updates for re-queuing
 	failedSeqs := make(map[uint64]bool)
-	for _, fu := range failed {
+	for _, fu := range resp.Failed {
 		failedSeqs[fu.Sequence] = true
 	}
 
@@ -85,10 +95,12 @@ func (f *Flusher) Flush(ctx context.Context, documentID string, buffer *UpdateBu
 			requeue = append(requeue, u)
 		}
 	}
-	return requeue
+	return FlushResult{Requeue: requeue, VersionCreated: resp.VersionCreated}
 }
 
-func (f *Flusher) storeWithRetry(ctx context.Context, documentID string, payloads []spi.UpdatePayload) []spi.FailedUpdate {
+// storeWithRetry returns the final StoreResponse on success (possibly with Failed entries),
+// or nil if all attempts failed with errors.
+func (f *Flusher) storeWithRetry(ctx context.Context, documentID string, payloads []spi.UpdatePayload) *spi.StoreResponse {
 	backoff := f.backoff
 
 	for attempt := 0; attempt < f.maxRetries; attempt++ {
@@ -104,7 +116,7 @@ func (f *Flusher) storeWithRetry(ctx context.Context, documentID string, payload
 			if attempt < f.maxRetries-1 {
 				select {
 				case <-ctx.Done():
-					return allFailed(payloads)
+					return nil
 				case <-time.After(backoff):
 				}
 				backoff *= 2
@@ -112,9 +124,9 @@ func (f *Flusher) storeWithRetry(ctx context.Context, documentID string, payload
 			continue
 		}
 
-		// Full success
+		// Full success or partial — return the response
 		if len(resp.Failed) == 0 {
-			return nil
+			return resp
 		}
 
 		// Partial failure (207) — retry only the failed ones
@@ -137,25 +149,14 @@ func (f *Flusher) storeWithRetry(ctx context.Context, documentID string, payload
 		if attempt < f.maxRetries-1 {
 			select {
 			case <-ctx.Done():
-				return resp.Failed
+				return resp
 			case <-time.After(backoff):
 			}
 			backoff *= 2
 		} else {
-			return resp.Failed
+			return resp
 		}
 	}
 
-	return allFailed(payloads)
-}
-
-func allFailed(payloads []spi.UpdatePayload) []spi.FailedUpdate {
-	failed := make([]spi.FailedUpdate, len(payloads))
-	for i, p := range payloads {
-		failed[i] = spi.FailedUpdate{
-			Sequence: p.Sequence,
-			Error:    "max retries exceeded",
-		}
-	}
-	return failed
+	return nil
 }

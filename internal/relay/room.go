@@ -2,9 +2,12 @@ package relay
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/imyousuf/collab-editor/pkg/spi"
 )
 
 // Room represents a collaborative editing session for a single document.
@@ -149,11 +152,36 @@ func (r *Room) flushBuffer(storeTimeout time.Duration) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
 	defer cancel()
-	requeue := r.flusher.Flush(ctx, r.documentID, r.buffer)
-	if len(requeue) > 0 {
-		r.buffer.Prepend(requeue)
-		slog.Warn("re-queued failed updates", "doc", r.documentID, "count", len(requeue))
+	result := r.flusher.Flush(ctx, r.documentID, r.buffer)
+	if len(result.Requeue) > 0 {
+		r.buffer.Prepend(result.Requeue)
+		slog.Warn("re-queued failed updates", "doc", r.documentID, "count", len(result.Requeue))
 	}
+
+	// Broadcast version-created event to all peers
+	if result.VersionCreated != nil {
+		msg := encodeVersionCreatedMessage(result.VersionCreated)
+		if msg != nil {
+			r.BroadcastAll(msg)
+		}
+	}
+}
+
+// encodeVersionCreatedMessage encodes a version-created event as a custom
+// binary message: [0x03, JSON payload].
+// Message type 0x03 = application event (distinct from 0x00=sync, 0x01=awareness).
+func encodeVersionCreatedMessage(entry *spi.VersionListEntry) []byte {
+	payload, err := json.Marshal(map[string]any{
+		"type":    "version-created",
+		"version": entry,
+	})
+	if err != nil {
+		return nil
+	}
+	msg := make([]byte, 1+len(payload))
+	msg[0] = 0x03 // application event message type
+	copy(msg[1:], payload)
+	return msg
 }
 
 // SetStoredMessages sets the initial messages loaded from the storage provider.
