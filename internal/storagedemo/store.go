@@ -33,8 +33,9 @@ func validateDocID(docID string) error {
 // FileStore implements document storage backed by the local filesystem.
 // Each document is stored as a single file in the base directory.
 type FileStore struct {
-	baseDir string
-	mu      sync.RWMutex
+	baseDir     string
+	mu          sync.RWMutex
+	autoVersion bool // demo-only: create a version on every Store call
 }
 
 func NewFileStore(baseDir string) (*FileStore, error) {
@@ -46,6 +47,21 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 		return nil, fmt.Errorf("creating yjs dir: %w", err)
 	}
 	return &FileStore{baseDir: baseDir}, nil
+}
+
+// SetAutoVersion enables/disables auto-version creation on every Store call.
+// This is a demo-only feature, not part of the SPI contract.
+func (fs *FileStore) SetAutoVersion(enabled bool) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.autoVersion = enabled
+}
+
+// AutoVersion returns whether auto-versioning is enabled.
+func (fs *FileStore) AutoVersion() bool {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	return fs.autoVersion
 }
 
 func (fs *FileStore) filePath(docID string) string {
@@ -171,8 +187,29 @@ func (fs *FileStore) Load(_ context.Context, documentID string) (*spi.LoadRespon
 }
 
 // Store implements spi.Provider.
-func (fs *FileStore) Store(_ context.Context, documentID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
-	return fs.StoreUpdates(documentID, updates)
+func (fs *FileStore) Store(ctx context.Context, documentID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
+	resp, err := fs.StoreUpdates(documentID, updates)
+	if err != nil {
+		return nil, err
+	}
+
+	// Auto-version: create a version from current document state after storing updates
+	if fs.AutoVersion() && resp.Stored > 0 {
+		loadResp, loadErr := fs.Load(ctx, documentID)
+		if loadErr == nil && loadResp != nil && loadResp.Content != "" {
+			versionEntry, vErr := fs.CreateVersion(ctx, documentID, &spi.CreateVersionRequest{
+				Content:  loadResp.Content,
+				MimeType: loadResp.MimeType,
+				Type:     "auto",
+				Creator:  "system",
+			})
+			if vErr == nil && versionEntry != nil {
+				resp.VersionCreated = versionEntry
+			}
+		}
+	}
+
+	return resp, nil
 }
 
 // Health implements spi.Provider.

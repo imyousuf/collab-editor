@@ -1,6 +1,7 @@
 package storagedemo
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -44,6 +45,27 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 
 		// Extra endpoint not in the SDK.
 		r.Post("/documents/compact", compactHandler(store))
+	})
+
+	// Demo-only config endpoint — NOT part of the SPI contract.
+	// Allows the demo app to toggle auto-version creation.
+	r.Get("/config/auto-version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"enabled": store.AutoVersion()})
+	})
+	r.Post("/config/auto-version", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+			return
+		}
+		store.SetAutoVersion(body.Enabled)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"enabled": body.Enabled})
 	})
 
 	return r

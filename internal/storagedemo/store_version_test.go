@@ -2,6 +2,10 @@ package storagedemo
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/imyousuf/collab-editor/pkg/spi"
@@ -275,5 +279,110 @@ func TestHTTPHandler_GetClientMappings(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+// Auto-version tests
+
+func TestAutoVersion_DefaultOff(t *testing.T) {
+	store := newTestStore(t)
+	if store.AutoVersion() {
+		t.Error("auto-version should be off by default")
+	}
+}
+
+func TestAutoVersion_Toggle(t *testing.T) {
+	store := newTestStore(t)
+	store.SetAutoVersion(true)
+	if !store.AutoVersion() {
+		t.Error("expected auto-version on")
+	}
+	store.SetAutoVersion(false)
+	if store.AutoVersion() {
+		t.Error("expected auto-version off")
+	}
+}
+
+func TestAutoVersion_StoreCreatesVersion(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Create a seed document
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Hello"), 0o644)
+
+	// Enable auto-version
+	store.SetAutoVersion(true)
+
+	// Store some updates
+	resp, err := store.Store(ctx, "doc.md", []spi.UpdatePayload{
+		{Sequence: 1, Data: "AQID", ClientID: 100},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.VersionCreated == nil {
+		t.Fatal("expected version_created in response")
+	}
+	if resp.VersionCreated.Type != "auto" {
+		t.Errorf("version type: got %q, want auto", resp.VersionCreated.Type)
+	}
+	if resp.VersionCreated.Creator != "system" {
+		t.Errorf("version creator: got %q, want system", resp.VersionCreated.Creator)
+	}
+
+	// Verify the version was actually persisted
+	versions, _ := store.ListVersions(ctx, "doc.md")
+	if len(versions) != 1 {
+		t.Errorf("expected 1 version, got %d", len(versions))
+	}
+}
+
+func TestAutoVersion_DisabledNoVersion(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Hello"), 0o644)
+
+	// Auto-version is off by default
+	resp, err := store.Store(ctx, "doc.md", []spi.UpdatePayload{
+		{Sequence: 1, Data: "AQID", ClientID: 100},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.VersionCreated != nil {
+		t.Error("expected no version_created when auto-version is disabled")
+	}
+}
+
+func TestHTTPHandler_AutoVersionConfig(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// GET — should be off by default
+	resp, _ := http.Get(srv.URL + "/config/auto-version")
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var result map[string]bool
+	json.NewDecoder(resp.Body).Decode(&result)
+	if result["enabled"] {
+		t.Error("expected disabled by default")
+	}
+
+	// POST — enable
+	enableResp := doRequest(t, srv, "POST", "/config/auto-version", map[string]bool{"enabled": true})
+	defer enableResp.Body.Close()
+	if enableResp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", enableResp.StatusCode)
+	}
+
+	// GET — should now be on
+	resp2, _ := http.Get(srv.URL + "/config/auto-version")
+	defer resp2.Body.Close()
+	var result2 map[string]bool
+	json.NewDecoder(resp2.Body).Decode(&result2)
+	if !result2["enabled"] {
+		t.Error("expected enabled after toggle")
 	}
 }
