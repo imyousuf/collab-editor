@@ -19,11 +19,9 @@ export interface BlameSegment {
   userName: string;
 }
 
-/** Stored in localStorage for live blame attribution. */
+/** Stored in localStorage for live blame event logging. */
 interface LiveBlameEntry {
   userName: string;
-  /** The Yjs client ID of the user who made this change. */
-  clientId: number;
   timestamp: number;
 }
 
@@ -61,7 +59,6 @@ export class BlameEngine {
       const userName = this._resolveUserName(origin);
       const entry: LiveBlameEntry = {
         userName,
-        clientId: this._ydoc.clientID,
         timestamp: Date.now(),
       };
 
@@ -95,12 +92,8 @@ export class BlameEngine {
 
   /** Build blame segments from the live Y.Doc's current state. */
   getLiveBlame(): BlameSegment[] {
-    // Build client-ID-to-user map from stored entries + awareness
+    // Build client-ID-to-user map from awareness (live connected users)
     const clientToUser = new Map<number, string>();
-    for (const entry of this._loadEntries()) {
-      clientToUser.set(entry.clientId, entry.userName);
-    }
-    // Also read from awareness for live connected users
     if (this._awareness) {
       const states = this._awareness.getStates?.() as Map<number, any> | undefined;
       if (states) {
