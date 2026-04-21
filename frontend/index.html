@@ -20,6 +20,14 @@
 <body>
   <h1>Collaborative Editor</h1>
 
+  <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 12px; font-size: 13px;">
+    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+      <input type="checkbox" id="auto-version-toggle" />
+      Auto-version (creates a version on every save to storage)
+    </label>
+    <span id="auto-version-status" style="color: #666;"></span>
+  </div>
+
   <multi-editor
     id="editor"
     mode="wysiwyg"
@@ -107,6 +115,36 @@
 
     editor.addEventListener('editor-save', (e) => {
       console.log('Save triggered:', e.detail.value.substring(0, 100) + '...');
+    });
+
+    // Auto-version toggle — calls the demo provider's config endpoint
+    const autoVersionToggle = document.getElementById('auto-version-toggle');
+    const autoVersionStatus = document.getElementById('auto-version-status');
+
+    // Load current auto-version state
+    fetch('/config/auto-version')
+      .then(r => r.json())
+      .then(data => {
+        autoVersionToggle.checked = data.enabled;
+        autoVersionStatus.textContent = data.enabled ? 'Enabled' : '';
+      })
+      .catch(() => {});
+
+    autoVersionToggle.addEventListener('change', async () => {
+      const enabled = autoVersionToggle.checked;
+      try {
+        const resp = await fetch('/config/auto-version', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (resp.ok) {
+          autoVersionStatus.textContent = enabled ? 'Enabled' : '';
+        }
+      } catch (e) {
+        console.warn('Failed to toggle auto-version:', e);
+        autoVersionToggle.checked = !enabled;
+      }
     });
   </script>
 </body>
