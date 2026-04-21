@@ -251,11 +251,15 @@ export class VersionPanel extends LitElement {
         <span>${fromLabel} vs ${toLabel}</span>
         <button class="btn" @click=${this._backToList}>Back</button>
       </div>
-      <div class="diff-view">
-        ${this.diffResult!.map(line => html`
-          <div class="diff-line ${line.type === 'added' ? 'diff-added' : line.type === 'removed' ? 'diff-removed' : 'diff-unchanged'}">${line.type === 'added' ? '+ ' : line.type === 'removed' ? '- ' : '  '}${line.content}</div>
-        `)}
-      </div>
+      ${this.diffResult!.length === 0 || this.diffResult!.every(l => l.type === 'unchanged')
+        ? html`<div class="empty">No differences between these versions.</div>`
+        : html`
+          <div class="diff-view">
+            ${this.diffResult!.map(line => html`
+              <div class="diff-line ${line.type === 'added' ? 'diff-added' : line.type === 'removed' ? 'diff-removed' : 'diff-unchanged'}">${line.type === 'added' ? '+ ' : line.type === 'removed' ? '- ' : '  '}${line.content}</div>
+            `)}
+          </div>
+        `}
     `;
   }
 

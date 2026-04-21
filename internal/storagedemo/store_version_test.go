@@ -365,6 +365,36 @@ func TestAutoVersion_StoreResolvesCreatorFromMappings(t *testing.T) {
 	}
 }
 
+func TestAutoVersion_SkipsWhenContentUnchanged(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Hello"), 0o644)
+	store.SetAutoVersion(true)
+
+	// First store — should create a version
+	resp1, _ := store.Store(ctx, "doc.md", []spi.UpdatePayload{
+		{Sequence: 1, Data: "AQID", ClientID: 100},
+	})
+	if resp1.VersionCreated == nil {
+		t.Fatal("first store should create a version")
+	}
+
+	// Second store with same content — should NOT create a version
+	resp2, _ := store.Store(ctx, "doc.md", []spi.UpdatePayload{
+		{Sequence: 2, Data: "BAUB", ClientID: 100},
+	})
+	if resp2.VersionCreated != nil {
+		t.Error("second store with same content should skip version creation")
+	}
+
+	// Verify only 1 version exists
+	versions, _ := store.ListVersions(ctx, "doc.md")
+	if len(versions) != 1 {
+		t.Errorf("expected 1 version, got %d", len(versions))
+	}
+}
+
 func TestAutoVersion_DisabledNoVersion(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

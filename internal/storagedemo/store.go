@@ -64,6 +64,20 @@ func (fs *FileStore) AutoVersion() bool {
 	return fs.autoVersion
 }
 
+// contentMatchesLatestVersion checks if content is identical to the most recent version.
+func (fs *FileStore) contentMatchesLatestVersion(ctx context.Context, documentID string, content string) bool {
+	versions, err := fs.ListVersions(ctx, documentID)
+	if err != nil || len(versions) == 0 {
+		return false
+	}
+	// versions are sorted newest first
+	latest, err := fs.GetVersion(ctx, documentID, versions[0].ID)
+	if err != nil || latest == nil {
+		return false
+	}
+	return latest.Content == content
+}
+
 // resolveTopContributor finds the user who contributed the most updates in a batch
 // by counting ClientIDs and resolving via client mappings.
 func (fs *FileStore) resolveTopContributor(ctx context.Context, documentID string, updates []spi.UpdatePayload) string {
@@ -229,19 +243,22 @@ func (fs *FileStore) Store(ctx context.Context, documentID string, updates []spi
 		return nil, err
 	}
 
-	// Auto-version: create a version from current document state after storing updates
+	// Auto-version: create a version from current document state after storing updates.
+	// Skip if content hasn't changed since the latest version.
 	if fs.AutoVersion() && resp.Stored > 0 {
 		loadResp, loadErr := fs.Load(ctx, documentID)
 		if loadErr == nil && loadResp != nil && loadResp.Content != "" {
-			creator := fs.resolveTopContributor(ctx, documentID, updates)
-			versionEntry, vErr := fs.CreateVersion(ctx, documentID, &spi.CreateVersionRequest{
-				Content:  loadResp.Content,
-				MimeType: loadResp.MimeType,
-				Type:     "auto",
-				Creator:  creator,
-			})
-			if vErr == nil && versionEntry != nil {
-				resp.VersionCreated = versionEntry
+			if !fs.contentMatchesLatestVersion(ctx, documentID, loadResp.Content) {
+				creator := fs.resolveTopContributor(ctx, documentID, updates)
+				versionEntry, vErr := fs.CreateVersion(ctx, documentID, &spi.CreateVersionRequest{
+					Content:  loadResp.Content,
+					MimeType: loadResp.MimeType,
+					Type:     "auto",
+					Creator:  creator,
+				})
+				if vErr == nil && versionEntry != nil {
+					resp.VersionCreated = versionEntry
+				}
 			}
 		}
 	}
