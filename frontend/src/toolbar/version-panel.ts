@@ -8,6 +8,8 @@ import { LitElement, html, css, nothing, type TemplateResult } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { VersionListEntry, VersionEntry, DiffLine } from '../collab/version-manager.js';
 
+type PanelView = 'list' | 'diff';
+
 @customElement('version-panel')
 export class VersionPanel extends LitElement {
   @property({ type: Boolean }) open = false;
@@ -17,6 +19,7 @@ export class VersionPanel extends LitElement {
 
   @state() private _diffFrom: string | null = null;
   @state() private _diffTo: string | null = null;
+  @state() private _view: PanelView = 'list';
 
   static override styles = css`
     :host {
@@ -34,8 +37,8 @@ export class VersionPanel extends LitElement {
       border: 1px solid var(--me-toolbar-border, #d0d7de);
       border-radius: 8px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-      max-height: 400px;
-      width: 380px;
+      max-height: 420px;
+      width: 400px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
@@ -48,6 +51,12 @@ export class VersionPanel extends LitElement {
       align-items: center;
       font-weight: 600;
       font-size: 13px;
+    }
+    .hint {
+      padding: 6px 14px;
+      font-size: 11px;
+      color: var(--me-status-color, #666);
+      border-bottom: 1px solid var(--me-toolbar-border, #eee);
     }
     .version-list {
       overflow-y: auto;
@@ -62,12 +71,18 @@ export class VersionPanel extends LitElement {
       align-items: center;
       font-size: 12px;
       border-bottom: 1px solid var(--me-toolbar-border, #eee);
+      border-left: 3px solid transparent;
     }
     .version-item:hover {
-      background: var(--me-toolbar-hover-bg, #f5f5f5);
+      background: var(--me-toolbar-button-hover-bg, #f5f5f5);
     }
-    .version-item.selected {
-      background: var(--me-toolbar-button-active-bg, #e8e8e8);
+    .version-item.diff-from {
+      border-left-color: var(--me-version-btn-primary-bg, #2563eb);
+      background: rgba(37, 99, 235, 0.06);
+    }
+    .version-item.diff-to {
+      border-left-color: var(--me-version-badge-auto-color, #166534);
+      background: rgba(22, 101, 52, 0.06);
     }
     .version-meta {
       flex: 1;
@@ -76,7 +91,7 @@ export class VersionPanel extends LitElement {
       font-weight: 500;
     }
     .version-date {
-      color: var(--me-status-text, #666);
+      color: var(--me-status-color, #666);
       font-size: 11px;
     }
     .version-badge {
@@ -94,11 +109,27 @@ export class VersionPanel extends LitElement {
       background: var(--me-version-badge-auto-bg, #dcfce7);
       color: var(--me-version-badge-auto-color, #166534);
     }
+    .diff-tag {
+      font-size: 9px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-weight: 600;
+      margin-left: 6px;
+    }
+    .diff-tag.from {
+      background: var(--me-version-btn-primary-bg, #2563eb);
+      color: #fff;
+    }
+    .diff-tag.to {
+      background: var(--me-version-badge-auto-color, #166534);
+      color: #fff;
+    }
     .actions {
       padding: 8px 14px;
       border-top: 1px solid var(--me-toolbar-border, #d0d7de);
       display: flex;
-      gap: 8px;
+      gap: 6px;
+      flex-wrap: wrap;
     }
     .btn {
       padding: 4px 10px;
@@ -108,7 +139,8 @@ export class VersionPanel extends LitElement {
       cursor: pointer;
       font-size: 12px;
     }
-    .btn:hover { background: var(--me-toolbar-hover-bg, #f5f5f5); }
+    .btn:hover { background: var(--me-toolbar-button-hover-bg, #f5f5f5); }
+    .btn:disabled { opacity: 0.4; cursor: default; }
     .btn-primary {
       background: var(--me-version-btn-primary-bg, #2563eb);
       color: var(--me-version-btn-primary-color, #fff);
@@ -117,13 +149,21 @@ export class VersionPanel extends LitElement {
     .btn-primary:hover {
       background: var(--me-version-btn-primary-hover-bg, #1d4ed8);
     }
+    .diff-header {
+      padding: 8px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 500;
+      border-bottom: 1px solid var(--me-toolbar-border, #d0d7de);
+    }
     .diff-view {
-      max-height: 200px;
       overflow-y: auto;
+      max-height: 280px;
       font-family: var(--me-source-font-family, monospace);
       font-size: 12px;
       padding: 8px;
-      border-top: 1px solid var(--me-toolbar-border, #d0d7de);
     }
     .diff-line { padding: 1px 4px; white-space: pre-wrap; }
     .diff-added {
@@ -135,8 +175,8 @@ export class VersionPanel extends LitElement {
       color: var(--me-diff-removed-color, #991b1b);
       text-decoration: line-through;
     }
-    .diff-unchanged { color: var(--me-status-text, #666); }
-    .empty { padding: 20px; text-align: center; color: var(--me-status-text, #999); font-size: 12px; }
+    .diff-unchanged { color: var(--me-status-color, #666); }
+    .empty { padding: 20px; text-align: center; color: var(--me-status-color, #999); font-size: 12px; }
   `;
 
   override render(): TemplateResult {
@@ -144,54 +184,81 @@ export class VersionPanel extends LitElement {
 
     return html`
       <div class="panel">
-        <div class="header">
-          <span>Version History</span>
-          <button class="btn btn-primary" @click=${this._onSaveVersion}>Save Version</button>
+        ${this._view === 'diff' && this.diffResult
+          ? this._renderDiffView()
+          : this._renderListView()}
+      </div>
+    `;
+  }
+
+  private _renderListView(): TemplateResult {
+    return html`
+      <div class="header">
+        <span>Version History</span>
+        <button class="btn btn-primary" @click=${this._onSaveVersion}>Save Version</button>
+      </div>
+
+      ${this.versions.length === 0
+        ? html`<div class="empty">No versions yet. Click "Save Version" to create one.</div>`
+        : html`
+          <div class="hint">Click two versions to compare, or click one to view/revert.</div>
+          <div class="version-list">
+            ${this.versions.map(v => this._renderVersionItem(v))}
+          </div>
+        `}
+
+      ${this._diffFrom || this.selectedVersion ? html`
+        <div class="actions">
+          ${this.selectedVersion && !this._diffTo ? html`
+            <button class="btn" @click=${this._onViewVersion}>View</button>
+            <button class="btn" @click=${this._onRevertVersion}>Revert</button>
+          ` : nothing}
+          ${this._diffFrom && this._diffTo ? html`
+            <button class="btn btn-primary" @click=${this._onDiff}>Compare</button>
+          ` : nothing}
+          <button class="btn" @click=${this._clearSelection}>Clear</button>
         </div>
+      ` : nothing}
+    `;
+  }
 
-        ${this.versions.length === 0
-          ? html`<div class="empty">No versions yet</div>`
-          : html`
-            <div class="version-list">
-              ${this.versions.map(v => this._renderVersionItem(v))}
-            </div>
-          `}
+  private _renderDiffView(): TemplateResult {
+    const fromVersion = this.versions.find(v => v.id === this._diffFrom);
+    const toVersion = this.versions.find(v => v.id === this._diffTo);
+    const fromLabel = fromVersion?.label || fromVersion?.id?.substring(0, 8) || '?';
+    const toLabel = toVersion?.label || toVersion?.id?.substring(0, 8) || '?';
 
-        ${this.diffResult
-          ? html`
-            <div class="diff-view">
-              ${this.diffResult.map(line => html`
-                <div class="diff-line ${line.type === 'added' ? 'diff-added' : line.type === 'removed' ? 'diff-removed' : 'diff-unchanged'}">${line.type === 'added' ? '+ ' : line.type === 'removed' ? '- ' : '  '}${line.content}</div>
-              `)}
-            </div>
-          ` : nothing}
-
-        ${this.selectedVersion
-          ? html`
-            <div class="actions">
-              <button class="btn" @click=${this._onViewVersion}>View</button>
-              <button class="btn" @click=${this._onRevertVersion}>Revert to This</button>
-              ${this._diffFrom && this._diffTo ? html`
-                <button class="btn" @click=${this._onDiff}>Show Diff</button>
-              ` : nothing}
-            </div>
-          ` : nothing}
+    return html`
+      <div class="diff-header">
+        <span>${fromLabel} vs ${toLabel}</span>
+        <button class="btn" @click=${this._backToList}>Back</button>
+      </div>
+      <div class="diff-view">
+        ${this.diffResult!.map(line => html`
+          <div class="diff-line ${line.type === 'added' ? 'diff-added' : line.type === 'removed' ? 'diff-removed' : 'diff-unchanged'}">${line.type === 'added' ? '+ ' : line.type === 'removed' ? '- ' : '  '}${line.content}</div>
+        `)}
       </div>
     `;
   }
 
   private _renderVersionItem(v: VersionListEntry): TemplateResult {
-    const isSelected = this.selectedVersion?.id === v.id;
+    const isDiffFrom = this._diffFrom === v.id;
+    const isDiffTo = this._diffTo === v.id;
     const date = new Date(v.created_at);
     const timeStr = date.toLocaleString();
 
+    let itemClass = 'version-item';
+    if (isDiffFrom) itemClass += ' diff-from';
+    if (isDiffTo) itemClass += ' diff-to';
+
     return html`
-      <div
-        class="version-item ${isSelected ? 'selected' : ''}"
-        @click=${() => this._selectVersion(v)}
-      >
+      <div class="${itemClass}" @click=${() => this._selectVersion(v)}>
         <div class="version-meta">
-          <div class="version-label">${v.label || v.id.substring(0, 8)}</div>
+          <div class="version-label">
+            ${v.label || v.id.substring(0, 8)}
+            ${isDiffFrom ? html`<span class="diff-tag from">FROM</span>` : nothing}
+            ${isDiffTo ? html`<span class="diff-tag to">TO</span>` : nothing}
+          </div>
           <div class="version-date">${timeStr} ${v.creator ? `by ${v.creator}` : ''}</div>
         </div>
         <span class="version-badge ${v.type}">${v.type}</span>
@@ -200,14 +267,21 @@ export class VersionPanel extends LitElement {
   }
 
   private _selectVersion(v: VersionListEntry): void {
-    // Track two selections for diff: first click = from, second click = to
     if (this._diffFrom === null) {
+      // First click — set as "from"
       this._diffFrom = v.id;
     } else if (this._diffFrom === v.id) {
-      // Clicking same version again deselects it
-      this._diffFrom = null;
+      // Clicking same "from" again — deselect
+      this._diffFrom = this._diffTo;
       this._diffTo = null;
+    } else if (this._diffTo === v.id) {
+      // Clicking same "to" again — deselect it
+      this._diffTo = null;
+    } else if (this._diffTo === null) {
+      // Second click on different version — set as "to"
+      this._diffTo = v.id;
     } else {
+      // Already have from+to, clicking a third — replace "to"
       this._diffTo = v.id;
     }
 
@@ -218,6 +292,21 @@ export class VersionPanel extends LitElement {
     }));
   }
 
+  private _clearSelection(): void {
+    this._diffFrom = null;
+    this._diffTo = null;
+    this._view = 'list';
+    // Clear diffResult via event so parent resets its state
+    this.dispatchEvent(new CustomEvent('version-diff-clear', {
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _backToList(): void {
+    this._view = 'list';
+  }
+
   private _onSaveVersion(): void {
     this.dispatchEvent(new CustomEvent('version-save', {
       bubbles: true,
@@ -226,18 +315,20 @@ export class VersionPanel extends LitElement {
   }
 
   private _onViewVersion(): void {
-    if (!this.selectedVersion) return;
+    const id = this._diffFrom; // single selection = diffFrom only
+    if (!id) return;
     this.dispatchEvent(new CustomEvent('version-view', {
-      detail: { versionId: this.selectedVersion.id },
+      detail: { versionId: id },
       bubbles: true,
       composed: true,
     }));
   }
 
   private _onRevertVersion(): void {
-    if (!this.selectedVersion) return;
+    const id = this._diffFrom;
+    if (!id) return;
     this.dispatchEvent(new CustomEvent('version-revert', {
-      detail: { versionId: this.selectedVersion.id },
+      detail: { versionId: id },
       bubbles: true,
       composed: true,
     }));
@@ -245,6 +336,7 @@ export class VersionPanel extends LitElement {
 
   private _onDiff(): void {
     if (!this._diffFrom || !this._diffTo) return;
+    this._view = 'diff';
     this.dispatchEvent(new CustomEvent('version-diff', {
       detail: { fromId: this._diffFrom, toId: this._diffTo },
       bubbles: true,

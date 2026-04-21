@@ -33,7 +33,18 @@ describe('VersionPanel', () => {
     expect(empty?.textContent).toContain('No versions yet');
   });
 
-  test('renders version list items', async () => {
+  test('shows hint text when versions exist', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+    const hint = el.shadowRoot?.querySelector('.hint');
+    expect(hint).not.toBeNull();
+    expect(hint?.textContent).toContain('Click two versions');
+  });
+
+  test('renders version list items with badges', async () => {
     const el = await createPanel();
     el.versions = [
       { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const, label: 'First' },
@@ -49,30 +60,145 @@ describe('VersionPanel', () => {
     expect(badges?.[1]?.textContent).toBe('auto');
   });
 
-  test('renders diff view when diffResult is set', async () => {
+  test('first click highlights version as FROM with tag', async () => {
     const el = await createPanel();
-    el.diffResult = [
-      { type: 'unchanged' as const, content: 'line1', oldLineNumber: 1, newLineNumber: 1 },
-      { type: 'removed' as const, content: 'old line', oldLineNumber: 2 },
-      { type: 'added' as const, content: 'new line', newLineNumber: 2 },
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
     ];
     await el.updateComplete;
 
-    const diffView = el.shadowRoot?.querySelector('.diff-view');
-    expect(diffView).not.toBeNull();
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+    items[0]?.click();
+    await el.updateComplete;
 
-    const lines = el.shadowRoot?.querySelectorAll('.diff-line');
-    expect(lines?.length).toBe(3);
-    expect(lines?.[0]?.classList.contains('diff-unchanged')).toBe(true);
-    expect(lines?.[1]?.classList.contains('diff-removed')).toBe(true);
-    expect(lines?.[2]?.classList.contains('diff-added')).toBe(true);
+    expect((el as any)._diffFrom).toBe('v1');
+    expect((el as any)._diffTo).toBeNull();
+
+    // Should show FROM tag
+    const fromTag = el.shadowRoot?.querySelector('.diff-tag.from');
+    expect(fromTag).not.toBeNull();
+    expect(fromTag?.textContent).toBe('FROM');
+
+    // First item should have diff-from class
+    const updatedItems = el.shadowRoot?.querySelectorAll('.version-item');
+    expect(updatedItems?.[0]?.classList.contains('diff-from')).toBe(true);
   });
 
-  test('does not render diff view when diffResult is null', async () => {
+  test('second click on different version sets TO', async () => {
     const el = await createPanel();
-    el.diffResult = null;
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
+    ];
     await el.updateComplete;
-    expect(el.shadowRoot?.querySelector('.diff-view')).toBeNull();
+
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+    items[0]?.click();
+    items[1]?.click();
+    await el.updateComplete;
+
+    expect((el as any)._diffFrom).toBe('v1');
+    expect((el as any)._diffTo).toBe('v2');
+
+    // Should show both tags
+    expect(el.shadowRoot?.querySelector('.diff-tag.from')).not.toBeNull();
+    expect(el.shadowRoot?.querySelector('.diff-tag.to')).not.toBeNull();
+
+    // Compare button should be visible in the actions bar
+    const compareBtn = el.shadowRoot?.querySelector('.actions .btn-primary');
+    expect(compareBtn?.textContent).toContain('Compare');
+  });
+
+  test('clicking same FROM version deselects it', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+    items[0]?.click();
+    await el.updateComplete;
+    expect((el as any)._diffFrom).toBe('v1');
+
+    items[0]?.click();
+    await el.updateComplete;
+    expect((el as any)._diffFrom).toBeNull();
+    expect((el as any)._diffTo).toBeNull();
+  });
+
+  test('Clear button resets selection and dispatches event', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+    items[0]?.click();
+    await el.updateComplete;
+
+    const handler = vi.fn();
+    el.addEventListener('version-diff-clear', handler);
+
+    const clearBtn = Array.from(el.shadowRoot?.querySelectorAll('.btn') ?? [])
+      .find(b => b.textContent?.includes('Clear')) as HTMLElement;
+    clearBtn?.click();
+    await el.updateComplete;
+
+    expect((el as any)._diffFrom).toBeNull();
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  test('diff view shows with Back button', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const, label: 'V1' },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const, label: 'V2' },
+    ];
+    el.diffResult = [
+      { type: 'unchanged' as const, content: 'same', oldLineNumber: 1, newLineNumber: 1 },
+      { type: 'removed' as const, content: 'old', oldLineNumber: 2 },
+      { type: 'added' as const, content: 'new', newLineNumber: 2 },
+    ];
+    (el as any)._diffFrom = 'v1';
+    (el as any)._diffTo = 'v2';
+    (el as any)._view = 'diff';
+    await el.updateComplete;
+
+    // Should show diff header with labels
+    const diffHeader = el.shadowRoot?.querySelector('.diff-header');
+    expect(diffHeader?.textContent).toContain('V1');
+    expect(diffHeader?.textContent).toContain('V2');
+
+    // Should show diff lines
+    const lines = el.shadowRoot?.querySelectorAll('.diff-line');
+    expect(lines?.length).toBe(3);
+
+    // Should have Back button
+    const backBtn = diffHeader?.querySelector('.btn');
+    expect(backBtn?.textContent).toContain('Back');
+  });
+
+  test('Back button returns to list view', async () => {
+    const el = await createPanel();
+    (el as any)._view = 'diff';
+    el.diffResult = [{ type: 'unchanged' as const, content: 'x', oldLineNumber: 1, newLineNumber: 1 }];
+    (el as any)._diffFrom = 'v1';
+    (el as any)._diffTo = 'v2';
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+
+    const backBtn = el.shadowRoot?.querySelector('.diff-header .btn') as HTMLElement;
+    backBtn?.click();
+    await el.updateComplete;
+
+    expect((el as any)._view).toBe('list');
+    expect(el.shadowRoot?.querySelector('.version-list')).not.toBeNull();
   });
 
   test('dispatches version-save event', async () => {
@@ -86,46 +212,7 @@ describe('VersionPanel', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  test('dispatches version-select event on item click', async () => {
-    const el = await createPanel();
-    el.versions = [
-      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
-    ];
-    await el.updateComplete;
-
-    const handler = vi.fn();
-    el.addEventListener('version-select', handler);
-
-    const item = el.shadowRoot?.querySelector('.version-item') as HTMLElement;
-    item?.click();
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(handler.mock.calls[0][0].detail.versionId).toBe('v1');
-  });
-
-  test('CSS uses --me-* custom properties for theming (no hardcoded colors)', async () => {
-    const el = await createPanel();
-    // Get the adopted stylesheet or style element content
-    const styleSheets = el.shadowRoot?.adoptedStyleSheets ?? [];
-    let cssText = '';
-    for (const sheet of styleSheets) {
-      for (const rule of sheet.cssRules) {
-        cssText += rule.cssText + '\n';
-      }
-    }
-    // Fallback: check style element
-    if (!cssText) {
-      cssText = el.shadowRoot?.querySelector('style')?.textContent ?? '';
-    }
-
-    expect(cssText).toContain('--me-version-badge-manual-bg');
-    expect(cssText).toContain('--me-version-badge-auto-bg');
-    expect(cssText).toContain('--me-version-btn-primary-bg');
-    expect(cssText).toContain('--me-diff-added-bg');
-    expect(cssText).toContain('--me-diff-removed-bg');
-  });
-
-  test('diff selection: click two different versions enables Show Diff', async () => {
+  test('version-diff event fires with correct fromId and toId', async () => {
     const el = await createPanel();
     el.versions = [
       { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
@@ -133,55 +220,8 @@ describe('VersionPanel', () => {
     ];
     await el.updateComplete;
 
+    // Select two versions
     const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
-
-    // Click first version (sets _diffFrom)
-    items[0]?.click();
-    await el.updateComplete;
-
-    // Click second version (sets _diffTo)
-    items[1]?.click();
-    await el.updateComplete;
-
-    // "Show Diff" button should now be visible
-    // Check that the panel has both _diffFrom and _diffTo set
-    expect((el as any)._diffFrom).toBe('v1');
-    expect((el as any)._diffTo).toBe('v2');
-  });
-
-  test('diff selection: clicking same version twice deselects', async () => {
-    const el = await createPanel();
-    el.versions = [
-      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
-    ];
-    await el.updateComplete;
-
-    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
-
-    // Click version (sets _diffFrom)
-    items[0]?.click();
-    await el.updateComplete;
-    expect((el as any)._diffFrom).toBe('v1');
-
-    // Click same version again (deselects)
-    items[0]?.click();
-    await el.updateComplete;
-    expect((el as any)._diffFrom).toBeNull();
-    expect((el as any)._diffTo).toBeNull();
-  });
-
-  test('version-diff event dispatches correct fromId and toId', async () => {
-    const el = await createPanel();
-    el.versions = [
-      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
-      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
-    ];
-    el.selectedVersion = { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const, content: 'hello' };
-    await el.updateComplete;
-
-    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
-
-    // Select two versions for diff
     items[0]?.click();
     items[1]?.click();
     await el.updateComplete;
@@ -189,13 +229,32 @@ describe('VersionPanel', () => {
     const handler = vi.fn();
     el.addEventListener('version-diff', handler);
 
-    // Find and click the Show Diff button
-    const diffBtn = el.shadowRoot?.querySelector('.actions .btn:not(.btn-primary)') as HTMLElement;
-    if (diffBtn?.textContent?.includes('Show Diff')) {
-      diffBtn.click();
-      expect(handler).toHaveBeenCalledOnce();
-      expect(handler.mock.calls[0][0].detail.fromId).toBe('v1');
-      expect(handler.mock.calls[0][0].detail.toId).toBe('v2');
+    // Click Compare
+    const compareBtn = Array.from(el.shadowRoot?.querySelectorAll('.btn-primary') ?? [])
+      .find(b => b.textContent?.includes('Compare')) as HTMLElement;
+    compareBtn?.click();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler.mock.calls[0][0].detail.fromId).toBe('v1');
+    expect(handler.mock.calls[0][0].detail.toId).toBe('v2');
+  });
+
+  test('CSS uses --me-* custom properties for theming', async () => {
+    const el = await createPanel();
+    const styleSheets = el.shadowRoot?.adoptedStyleSheets ?? [];
+    let cssText = '';
+    for (const sheet of styleSheets) {
+      for (const rule of sheet.cssRules) {
+        cssText += rule.cssText + '\n';
+      }
     }
+    if (!cssText) {
+      cssText = el.shadowRoot?.querySelector('style')?.textContent ?? '';
+    }
+
+    expect(cssText).toContain('--me-version-badge-manual-bg');
+    expect(cssText).toContain('--me-version-btn-primary-bg');
+    expect(cssText).toContain('--me-diff-added-bg');
+    expect(cssText).toContain('--me-diff-removed-bg');
   });
 });

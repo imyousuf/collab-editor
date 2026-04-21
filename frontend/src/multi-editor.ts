@@ -414,6 +414,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @version-view=${this._handleVersionView}
           @version-revert=${this._handleVersionRevert}
           @version-diff=${this._handleVersionDiff}
+          @version-diff-clear=${this._handleVersionDiffClear}
         ></version-panel>
       </slot>
     `;
@@ -834,6 +835,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!fromVersion || !toVersion) return;
 
     this._diffResult = this._versionManager.diffVersions(fromVersion, toVersion);
+  }
+
+  private _handleVersionDiffClear(): void {
+    this._diffResult = null;
   }
 
   private _exitVersionView(): void {
