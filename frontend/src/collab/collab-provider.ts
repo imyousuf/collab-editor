@@ -63,25 +63,14 @@ export class CollaborationProvider implements ICollaborationProvider {
     }
     this._provider.awareness.setLocalStateField('user', config.user);
 
-    // Intercept application event messages (type 0x03)
-    this._provider.on('message', (data: ArrayBuffer) => {
-      const bytes = new Uint8Array(data);
-      if (bytes.length > 1 && bytes[0] === 0x03) {
-        try {
-          const jsonStr = new TextDecoder().decode(bytes.slice(1));
-          const parsed = JSON.parse(jsonStr);
-          this._appMessageCallbacks.forEach(cb => cb(parsed));
-        } catch {
-          // Malformed app message — ignore
-        }
-      }
-    });
-
     this._provider.on('status', (event: { status: string }) => {
       const newStatus = event.status as CollabStatus;
       this._setStatus(newStatus);
 
       if (newStatus === 'connected') {
+        // Intercept WebSocket messages for application events (type 0x03)
+        this._hookWebSocket();
+
         for (const { resolve, timer } of this._connectedResolvers) {
           clearTimeout(timer);
           resolve();
@@ -159,6 +148,38 @@ export class CollaborationProvider implements ICollaborationProvider {
   onAppMessage(callback: (data: any) => void): () => void {
     this._appMessageCallbacks.add(callback);
     return () => this._appMessageCallbacks.delete(callback);
+  }
+
+  /**
+   * Hook into the WebSocket's onmessage to intercept application event
+   * messages (type 0x03) before y-websocket processes them.
+   * Called on each (re)connection.
+   */
+  private _hookWebSocket(): void {
+    const ws = (this._provider as any)?.ws as WebSocket | null;
+    if (!ws) return;
+
+    const originalOnMessage = ws.onmessage;
+    ws.onmessage = (event: MessageEvent) => {
+      // Check for application event (0x03) before passing to y-websocket
+      if (event.data instanceof ArrayBuffer) {
+        const bytes = new Uint8Array(event.data);
+        if (bytes.length > 1 && bytes[0] === 0x03) {
+          try {
+            const jsonStr = new TextDecoder().decode(bytes.slice(1));
+            const parsed = JSON.parse(jsonStr);
+            this._appMessageCallbacks.forEach(cb => cb(parsed));
+          } catch {
+            // Malformed — ignore
+          }
+          return; // Don't pass 0x03 to y-websocket
+        }
+      }
+      // Pass through to y-websocket's handler
+      if (originalOnMessage) {
+        originalOnMessage.call(ws, event);
+      }
+    };
   }
 
   private _setStatus(status: CollabStatus): void {

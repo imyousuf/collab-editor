@@ -64,6 +64,42 @@ func (fs *FileStore) AutoVersion() bool {
 	return fs.autoVersion
 }
 
+// resolveTopContributor finds the user who contributed the most updates in a batch
+// by counting ClientIDs and resolving via client mappings.
+func (fs *FileStore) resolveTopContributor(ctx context.Context, documentID string, updates []spi.UpdatePayload) string {
+	// Count updates per client ID
+	counts := make(map[uint64]int)
+	for _, u := range updates {
+		counts[u.ClientID]++
+	}
+
+	// Find the client with the most updates
+	var topClient uint64
+	var topCount int
+	for clientID, count := range counts {
+		if count > topCount {
+			topClient = clientID
+			topCount = count
+		}
+	}
+
+	// Look up the user name from client mappings
+	mappings, err := fs.GetClientMappings(ctx, documentID)
+	if err == nil {
+		for _, m := range mappings {
+			if m.ClientID == topClient {
+				return m.UserName
+			}
+		}
+	}
+
+	// Fallback: use "system" if no mapping found
+	if topClient != 0 {
+		return fmt.Sprintf("client-%d", topClient)
+	}
+	return "system"
+}
+
 func (fs *FileStore) filePath(docID string) string {
 	return filepath.Join(fs.baseDir, docID)
 }
@@ -197,11 +233,12 @@ func (fs *FileStore) Store(ctx context.Context, documentID string, updates []spi
 	if fs.AutoVersion() && resp.Stored > 0 {
 		loadResp, loadErr := fs.Load(ctx, documentID)
 		if loadErr == nil && loadResp != nil && loadResp.Content != "" {
+			creator := fs.resolveTopContributor(ctx, documentID, updates)
 			versionEntry, vErr := fs.CreateVersion(ctx, documentID, &spi.CreateVersionRequest{
 				Content:  loadResp.Content,
 				MimeType: loadResp.MimeType,
 				Type:     "auto",
-				Creator:  "system",
+				Creator:  creator,
 			})
 			if vErr == nil && versionEntry != nil {
 				resp.VersionCreated = versionEntry

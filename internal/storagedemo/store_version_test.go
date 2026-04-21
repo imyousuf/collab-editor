@@ -326,14 +326,42 @@ func TestAutoVersion_StoreCreatesVersion(t *testing.T) {
 	if resp.VersionCreated.Type != "auto" {
 		t.Errorf("version type: got %q, want auto", resp.VersionCreated.Type)
 	}
-	if resp.VersionCreated.Creator != "system" {
-		t.Errorf("version creator: got %q, want system", resp.VersionCreated.Creator)
+	// Creator is resolved from client mappings; with no mappings, falls back to "client-{id}"
+	if resp.VersionCreated.Creator != "client-100" {
+		t.Errorf("version creator: got %q, want client-100", resp.VersionCreated.Creator)
 	}
 
 	// Verify the version was actually persisted
 	versions, _ := store.ListVersions(ctx, "doc.md")
 	if len(versions) != 1 {
 		t.Errorf("expected 1 version, got %d", len(versions))
+	}
+}
+
+func TestAutoVersion_StoreResolvesCreatorFromMappings(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Hello"), 0o644)
+
+	// Store client mappings so the creator name resolves
+	store.StoreClientMappings(ctx, "doc.md", []spi.ClientUserMapping{
+		{ClientID: 100, UserName: "alice"},
+	})
+
+	store.SetAutoVersion(true)
+
+	resp, err := store.Store(ctx, "doc.md", []spi.UpdatePayload{
+		{Sequence: 1, Data: "AQID", ClientID: 100},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.VersionCreated == nil {
+		t.Fatal("expected version_created")
+	}
+	if resp.VersionCreated.Creator != "alice" {
+		t.Errorf("version creator: got %q, want alice", resp.VersionCreated.Creator)
 	}
 }
 
