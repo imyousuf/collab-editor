@@ -210,7 +210,10 @@ export class VersionPanel extends LitElement {
     return html`
       <div class="header">
         <span>Version History</span>
-        <button class="btn btn-primary" @click=${this._onSaveVersion}>Save Version</button>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-primary" @click=${this._onSaveVersion}>Save Version</button>
+          <button class="btn" @click=${this._onClose} title="Close">&times;</button>
+        </div>
       </div>
 
       ${this.versions.length === 0
@@ -320,6 +323,13 @@ export class VersionPanel extends LitElement {
 
   private _backToList(): void {
     this._view = 'list';
+  }
+
+  private _onClose(): void {
+    this.dispatchEvent(new CustomEvent('version-close', {
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _onSaveVersion(): void {

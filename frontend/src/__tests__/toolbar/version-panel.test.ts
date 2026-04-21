@@ -265,6 +265,20 @@ describe('VersionPanel', () => {
     expect(cssText).toContain('--me-diff-removed-bg');
   });
 
+  test('has a close button in the header that dispatches version-close', async () => {
+    const el = await createPanel();
+    const handler = vi.fn();
+    el.addEventListener('version-close', handler);
+
+    // Find the X button in the header
+    const closeBtn = Array.from(el.shadowRoot?.querySelectorAll('.header .btn') ?? [])
+      .find(b => b.textContent?.includes('\u00d7')) as HTMLElement;
+    expect(closeBtn).not.toBeUndefined();
+    closeBtn?.click();
+
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
   test('resets internal state when versions property changes (document switch)', async () => {
     const el = await createPanel();
     el.versions = [

@@ -39,6 +39,7 @@ export class EditorStatusBar extends LitElement {
   @property({ attribute: false }) config: StatusBarConfig | null = null;
   @property({ type: Number }) versionCount = 0;
   @property({ type: Boolean }) versionPanelOpen = false;
+  @property({ type: Boolean }) versionsAvailable = false;
 
   static styles = css`
     :host {
@@ -152,13 +153,25 @@ export class EditorStatusBar extends LitElement {
     .version-icon {
       font-size: 14px;
     }
+    .version-save-btn {
+      background: none;
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 3px;
+      cursor: pointer;
+      padding: 1px 5px;
+      font-size: 11px;
+      color: var(--me-status-color, #666);
+    }
+    .version-save-btn:hover {
+      background: var(--me-toolbar-button-hover-bg, rgba(0,0,0,0.06));
+    }
   `;
 
   render() {
     const showStatus = this.config?.showConnectionStatus !== false;
     const showUser = this.config?.showUserIdentity !== false;
     const showPresence = this.config?.showPresence !== false;
-    const showVersions = this.config?.showVersionHistory !== false && this.versionCount > 0;
+    const showVersions = this.config?.showVersionHistory !== false && this.versionsAvailable;
 
     return html`
       <div class="left">
@@ -216,13 +229,27 @@ export class EditorStatusBar extends LitElement {
         title="Version History"
       >
         <span class="version-icon">&#x1f554;</span>
-        <span>${this.versionCount} version${this.versionCount !== 1 ? 's' : ''}</span>
+        <span>${this.versionCount > 0 ? `${this.versionCount} version${this.versionCount !== 1 ? 's' : ''}` : 'Versions'}</span>
       </span>
+      <button
+        class="version-save-btn"
+        part="version-save-button"
+        title="Save Version"
+        @click=${this._onQuickSave}
+      >Save</button>
     `;
   }
 
   private _onVersionClick() {
     this.dispatchEvent(new CustomEvent('version-toggle', {
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _onQuickSave(e: Event) {
+    e.stopPropagation(); // don't trigger version-toggle
+    this.dispatchEvent(new CustomEvent('version-quick-save', {
       bubbles: true,
       composed: true,
     }));

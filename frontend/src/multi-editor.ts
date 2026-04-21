@@ -403,7 +403,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .config=${this.statusBarConfig}
           .versionCount=${this._versions.length}
           .versionPanelOpen=${this._versionPanelOpen}
+          .versionsAvailable=${!!this._versionManager}
           @version-toggle=${this._handleVersionToggle}
+          @version-quick-save=${this._handleVersionSave}
         ></editor-status-bar>
         <version-panel
           ?open=${this._versionPanelOpen}
@@ -416,6 +418,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @version-revert=${this._handleVersionRevert}
           @version-diff=${this._handleVersionDiff}
           @version-diff-clear=${this._handleVersionDiffClear}
+          @version-close=${this._handleVersionClose}
         ></version-panel>
       </slot>
     `;
@@ -775,6 +778,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       if (this._binding && isBlameCapable(this._binding)) {
         this._binding.disableBlame();
       }
+    }
+  }
+
+  private _handleVersionClose(): void {
+    this._versionPanelOpen = false;
+    if (this._viewingVersion) {
+      this._exitVersionView();
     }
   }
 
