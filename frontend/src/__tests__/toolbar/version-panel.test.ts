@@ -153,10 +153,13 @@ describe('VersionPanel', () => {
 
   test('diff view shows with Back button', async () => {
     const el = await createPanel();
+    // Set versions first and wait for willUpdate to process
     el.versions = [
       { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const, label: 'V1' },
       { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const, label: 'V2' },
     ];
+    await el.updateComplete;
+    // Then set diff state (after willUpdate has cleared from the initial version set)
     el.diffResult = [
       { type: 'unchanged' as const, content: 'same', oldLineNumber: 1, newLineNumber: 1 },
       { type: 'removed' as const, content: 'old', oldLineNumber: 2 },
@@ -183,7 +186,11 @@ describe('VersionPanel', () => {
 
   test('Back button returns to list view', async () => {
     const el = await createPanel();
-    (el as any)._view = 'diff';
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
     el.diffResult = [{ type: 'unchanged' as const, content: 'x', oldLineNumber: 1, newLineNumber: 1 }];
     (el as any)._diffFrom = 'v1';
     (el as any)._diffTo = 'v2';
@@ -256,5 +263,52 @@ describe('VersionPanel', () => {
     expect(cssText).toContain('--me-version-btn-primary-bg');
     expect(cssText).toContain('--me-diff-added-bg');
     expect(cssText).toContain('--me-diff-removed-bg');
+  });
+
+  test('resets internal state when versions property changes (document switch)', async () => {
+    const el = await createPanel();
+    el.versions = [
+      { id: 'v1', created_at: '2026-01-01T00:00:00Z', type: 'manual' as const },
+      { id: 'v2', created_at: '2026-01-02T00:00:00Z', type: 'manual' as const },
+    ];
+    await el.updateComplete;
+
+    // Select two versions
+    const items = el.shadowRoot?.querySelectorAll('.version-item') as NodeListOf<HTMLElement>;
+    items[0]?.click();
+    items[1]?.click();
+    await el.updateComplete;
+    expect((el as any)._diffFrom).toBe('v1');
+    expect((el as any)._diffTo).toBe('v2');
+
+    // Simulate document switch — set new versions
+    el.versions = [
+      { id: 'v3', created_at: '2026-02-01T00:00:00Z', type: 'auto' as const },
+    ];
+    await el.updateComplete;
+
+    // Internal state should be reset
+    expect((el as any)._diffFrom).toBeNull();
+    expect((el as any)._diffTo).toBeNull();
+    expect((el as any)._view).toBe('list');
+  });
+
+  test('closing panel dispatches version-diff-clear when in diff view', async () => {
+    const el = await createPanel();
+    (el as any)._diffFrom = 'v1';
+    (el as any)._diffTo = 'v2';
+    await el.updateComplete;
+
+    const handler = vi.fn();
+    el.addEventListener('version-diff-clear', handler);
+
+    // Click Clear
+    const clearBtn = Array.from(el.shadowRoot?.querySelectorAll('.btn') ?? [])
+      .find(b => b.textContent?.includes('Clear')) as HTMLElement;
+    clearBtn?.click();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect((el as any)._diffFrom).toBeNull();
+    expect((el as any)._diffTo).toBeNull();
   });
 });

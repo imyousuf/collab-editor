@@ -21,6 +21,21 @@ export class VersionPanel extends LitElement {
   @state() private _diffTo: string | null = null;
   @state() private _view: PanelView = 'list';
 
+  override willUpdate(changed: Map<string, unknown>): void {
+    // Reset internal selection state when versions list changes (document switch)
+    if (changed.has('versions')) {
+      const oldVersions = changed.get('versions') as VersionListEntry[] | undefined;
+      const newIds = this.versions.map(v => v.id).join(',');
+      const oldIds = oldVersions?.map(v => v.id).join(',') ?? '';
+      // Only reset if the version IDs actually changed (not just a re-render)
+      if (newIds !== oldIds) {
+        this._diffFrom = null;
+        this._diffTo = null;
+        this._view = 'list';
+      }
+    }
+  }
+
   static override styles = css`
     :host {
       position: absolute;

@@ -38,6 +38,8 @@ export interface VersionManagerConfig {
   autoSnapshotMinutes?: number;
   /** User name for the creator field. */
   userName?: string;
+  /** Callback fired when an auto-snapshot is created. */
+  onAutoSnapshot?: (entry: VersionListEntry) => void;
 }
 
 export class VersionManager {
@@ -158,12 +160,16 @@ export class VersionManager {
     this._snapshotInFlight = true;
     try {
       const content = this._ydoc.getText('source').toString();
-      await this._fetch('POST', '/documents/versions', {
+      const resp = await this._fetch('POST', '/documents/versions', {
         content,
         type: 'auto',
         creator: this._config.userName ?? 'system',
       });
       this._lastSnapshotTime = Date.now();
+      if (resp.ok && this._config.onAutoSnapshot) {
+        const entry = await resp.json();
+        this._config.onAutoSnapshot(entry);
+      }
     } catch {
       // Auto-snapshot failures are non-fatal
     } finally {

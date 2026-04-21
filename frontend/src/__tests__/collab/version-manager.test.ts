@@ -178,4 +178,38 @@ describe('VersionManager', () => {
     expect(url).toMatch(/^http:\/\/localhost:8080\/api\/documents\/versions/);
     expect(url).toContain('path=test-doc');
   });
+
+  test('onAutoSnapshot callback fires after auto-snapshot', async () => {
+    const callback = vi.fn();
+    const autoManager = new VersionManager(doc, {
+      relayUrl: 'http://localhost:8080',
+      documentId: 'test-doc',
+      userName: 'alice',
+      autoSnapshotUpdates: 2, // trigger after 2 updates
+      autoSnapshotMinutes: 0,
+      onAutoSnapshot: callback,
+    });
+
+    // Mock the POST response for auto-snapshot
+    mockFetch.mockReturnValue(
+      mockJsonResponse({
+        id: 'auto-v1',
+        created_at: '2026-01-01T00:00:00Z',
+        type: 'auto',
+        creator: 'alice',
+      }, 201),
+    );
+
+    // Trigger 2 updates to hit the threshold
+    doc.getText('source').insert(0, 'a');
+    doc.getText('source').insert(1, 'b');
+
+    // Wait for the async auto-snapshot to complete
+    await new Promise(r => setTimeout(r, 100));
+
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback.mock.calls[0][0].id).toBe('auto-v1');
+
+    autoManager.destroy();
+  });
 });

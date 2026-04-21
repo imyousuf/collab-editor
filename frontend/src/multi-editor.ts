@@ -66,6 +66,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _versions: VersionListEntry[] = [];
   @state() private _selectedVersion: VersionEntry | null = null;
   @state() private _diffResult: import('./collab/diff-engine.js').DiffLine[] | null = null;
+  @state() private _viewingVersion = false;
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -483,6 +484,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._blameEngine = null;
     this._blameActive = false;
     this._versionPanelOpen = false;
+    this._viewingVersion = false;
     this._versions = [];
     this._selectedVersion = null;
     this._diffResult = null;
@@ -572,6 +574,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           ? 0 : (config.collaboration.versionAutoSnapshotUpdates ?? 50),
         autoSnapshotMinutes: config.collaboration.versionAutoSnapshot === false
           ? 0 : (config.collaboration.versionAutoSnapshotMinutes ?? 5),
+        onAutoSnapshot: (entry) => {
+          this._versions = [entry, ...this._versions];
+        },
       });
       // Load initial version list
       this._versionManager.listVersions().then(v => { this._versions = v; }).catch(() => {});
@@ -777,6 +782,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._versionPanelOpen = !this._versionPanelOpen;
     if (this._versionPanelOpen) {
       this._versionManager?.listVersions().then(v => { this._versions = v; }).catch(() => {});
+    } else {
+      // Closing the panel exits version view mode
+      if (this._viewingVersion) {
+        this._exitVersionView();
+      }
     }
   }
 
@@ -800,6 +810,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._selectedVersion = version;
 
     // Switch to read-only version view mode
+    this._viewingVersion = true;
     if (this._binding) {
       this._binding.setReadonly(true);
       this._binding.setContent(version.content ?? '');
@@ -842,10 +853,17 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _exitVersionView(): void {
+    if (!this._viewingVersion) return;
+    this._viewingVersion = false;
+
     if (this._binding) {
       this._binding.setReadonly(this.readonly);
       if (isBlameCapable(this._binding)) {
         this._binding.disableBlame();
+      }
+      // Restore live content from Y.Text
+      if (this._collabProvider) {
+        this._binding.setContent(this._collabProvider.sharedText.toString());
       }
     }
     this._selectedVersion = null;
