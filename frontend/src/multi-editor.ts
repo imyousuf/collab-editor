@@ -3,6 +3,10 @@
  *
  * Thin orchestrator that delegates to IEditorBinding instances
  * created by the EditorBindingFactory.
+ *
+ * Domain-specific concerns are managed by coordinators:
+ * - BlameCoordinator — blame view lifecycle, debounced updates, mode switch
+ * - VersionCoordinator — version history, version view mode, panel events
  */
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
@@ -26,7 +30,7 @@ import type {
   DocumentEntry,
   CollaboratorInfo,
 } from './interfaces/index.js';
-import { isFormattingCapable, emptyFormattingState, isBlameCapable } from './interfaces/index.js';
+import { isFormattingCapable, emptyFormattingState } from './interfaces/index.js';
 import {
   EditorChangeEvent,
   ModeChangeEvent,
@@ -35,8 +39,9 @@ import {
 } from './interfaces/events.js';
 import { EditorBindingFactory, registerDefaults } from './registry.js';
 import { CollaborationProvider } from './collab/collab-provider.js';
-import { VersionManager, type VersionListEntry, type VersionEntry } from './collab/version-manager.js';
-import { BlameEngine, type BlameSegment } from './collab/blame-engine.js';
+import { BlameCoordinator } from './collab/blame-coordinator.js';
+import { VersionCoordinator } from './collab/version-coordinator.js';
+import type { VersionListEntry, VersionEntry, DiffLine } from './collab/version-manager.js';
 
 // Register internal toolbar components
 import './toolbar/editor-toolbar.js';
@@ -65,7 +70,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _versionPanelOpen = false;
   @state() private _versions: VersionListEntry[] = [];
   @state() private _selectedVersion: VersionEntry | null = null;
-  @state() private _diffResult: import('./collab/diff-engine.js').DiffLine[] | null = null;
+  @state() private _diffResult: DiffLine[] | null = null;
   @state() private _viewingVersion = false;
 
   private _factory: EditorBindingFactory;
@@ -88,9 +93,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _beforeModeChangeCallbacks = new Set<(detail: BeforeModeChangeDetail) => boolean>();
   private _formattingUnsub: (() => void) | null = null;
   private _awarenessHandler: (() => void) | null = null;
-  private _versionManager: VersionManager | null = null;
-  private _blameEngine: BlameEngine | null = null;
-  private _blameUpdateUnsub: (() => void) | null = null;
+
+  // Domain coordinators
+  private _blameCoordinator = new BlameCoordinator();
+  private _versionCoordinator = new VersionCoordinator();
 
   constructor() {
     super();
@@ -379,7 +385,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .currentDocumentId=${this.currentDocumentId}
           .readonly=${this.readonly}
           .blameActive=${this._blameActive}
-          .blameAvailable=${this.collaboration?.liveBlameEnabled !== false && !!this._collabProvider}
+          .blameAvailable=${this._blameCoordinator.available}
           @toolbar-command=${this._handleToolbarCommand}
           @toolbar-mode-switch=${this._handleToolbarModeSwitch}
           @toolbar-document-switch=${this._handleToolbarDocumentSwitch}
@@ -403,7 +409,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .config=${this.statusBarConfig}
           .versionCount=${this._versions.length}
           .versionPanelOpen=${this._versionPanelOpen}
-          .versionsAvailable=${!!this._versionManager}
+          .versionsAvailable=${this._versionCoordinator.available}
           @version-toggle=${this._handleVersionToggle}
           @version-quick-save=${this._handleVersionSave}
         ></editor-status-bar>
@@ -479,13 +485,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._lastMimeType = config.mimeType;
 
     // Tear down previous state
-    this._blameUpdateUnsub?.();
-    this._blameUpdateUnsub = null;
-    this._versionManager?.destroy();
-    this._versionManager = null;
-    this._blameEngine?.stopLiveBlame();
-    this._blameEngine = null;
+    this._blameCoordinator.detach();
     this._blameActive = false;
+    this._versionCoordinator.detach();
     this._versionPanelOpen = false;
     this._viewingVersion = false;
     this._versions = [];
@@ -518,13 +520,6 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
       // Track collaborator presence via awareness
       this._wireAwareness();
-
-      // Listen for application events (version-created from relay)
-      this._collabProvider.onAppMessage((data: any) => {
-        if (data?.type === 'version-created' && data.version) {
-          this._versions = [data.version, ...this._versions];
-        }
-      });
     }
 
     // Check staleness — if properties changed during setup, another init is queued
@@ -568,32 +563,54 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       return;
     }
 
-    // Set up version manager and blame engine if collaboration is active
-    if (this._collabProvider && config.collaboration) {
+    // Attach domain coordinators
+    if (this._collabProvider && this._binding && config.collaboration) {
       const relayUrl = config.collaboration.providerUrl
         .replace(/^ws(s?):\/\//, 'http$1://')
         .replace(/\/ws\/?$/, '');
       const docId = config.collaboration.roomName;
 
-      // Version manager
-      this._versionManager = new VersionManager(this._collabProvider.ydoc, {
-        relayUrl,
-        documentId: docId,
-        userName: config.collaboration.user.name,
-        autoSnapshotUpdates: config.collaboration.versionAutoSnapshot === false
-          ? 0 : (config.collaboration.versionAutoSnapshotUpdates ?? 50),
-        autoSnapshotMinutes: config.collaboration.versionAutoSnapshot === false
-          ? 0 : (config.collaboration.versionAutoSnapshotMinutes ?? 5),
-        onAutoSnapshot: (entry) => {
-          this._versions = [entry, ...this._versions];
+      // Blame coordinator
+      this._blameCoordinator.onActiveChange((active) => { this._blameActive = active; });
+      this._blameCoordinator.attach(
+        this._binding,
+        this._collabProvider.ydoc,
+        this._collabProvider.awareness,
+        docId,
+        {
+          liveBlameEnabled: config.collaboration.liveBlameEnabled,
+          versionBlameEnabled: config.collaboration.versionBlameEnabled,
         },
-      });
-      // Load initial version list
-      this._versionManager.listVersions().then(v => { this._versions = v; }).catch(() => {});
+      );
 
-      // Blame engine
-      this._blameEngine = new BlameEngine(this._collabProvider.ydoc, docId);
-      this._blameEngine.setAwareness(this._collabProvider.awareness);
+      // Version coordinator
+      this._versionCoordinator.attach(
+        this._binding,
+        this._collabProvider.ydoc,
+        this._collabProvider,
+        {
+          relayUrl,
+          documentId: docId,
+          userName: config.collaboration.user.name,
+          autoSnapshot: config.collaboration.versionAutoSnapshot,
+          autoSnapshotUpdates: config.collaboration.versionAutoSnapshotUpdates,
+          autoSnapshotMinutes: config.collaboration.versionAutoSnapshotMinutes,
+          versionBlameEnabled: config.collaboration.versionBlameEnabled,
+        },
+        {
+          onVersionsChange: (v) => { this._versions = v; },
+          onSelectedVersionChange: (v) => { this._selectedVersion = v; },
+          onDiffResultChange: (d) => { this._diffResult = d; },
+          onViewingVersionChange: (viewing) => { this._viewingVersion = viewing; },
+        },
+        this._blameCoordinator,
+        this.readonly,
+      );
+
+      // Listen for application events (version-created from relay)
+      this._collabProvider.onAppMessage((data: any) => {
+        this._versionCoordinator.handleAppMessage(data);
+      });
     }
 
     this._readyResolve?.();
@@ -661,13 +678,8 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       return;
     }
 
-    // Re-push blame segments after mode switch so the newly-visible editor
-    // shows highlights immediately. Without this, switching to WYSIWYG after
-    // editing in source shows no blame highlights until the next debounced update.
-    if (this._blameActive && this._blameEngine && this._binding && isBlameCapable(this._binding)) {
-      const segments = this._blameEngine.getLiveBlame();
-      this._binding.updateBlame(segments);
-    }
+    // Let coordinators react to mode switch
+    this._blameCoordinator.onModeSwitch();
 
     // Update formatting state — available commands change with mode
     this._wireFormattingState();
@@ -763,146 +775,42 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this.switchMode(e.detail.mode);
   }
 
-  private _blameUpdateTimer: ReturnType<typeof setTimeout> | null = null;
-
   private _handleBlameToggle(e: CustomEvent): void {
-    if (this.collaboration?.liveBlameEnabled === false) return;
-
-    this._blameActive = e.detail.active;
-
-    if (this._blameActive && this._blameEngine && this._binding && isBlameCapable(this._binding)) {
-      this._blameEngine.startLiveBlame();
-      const segments = this._blameEngine.getLiveBlame();
-      this._binding.enableBlame(segments);
-
-      // Re-compute blame on doc updates — DEBOUNCED to avoid dispatching
-      // CodeMirror effects on every keystroke, which disrupts typing.
-      this._blameUpdateUnsub?.();
-      const observer = () => {
-        if (this._blameUpdateTimer) clearTimeout(this._blameUpdateTimer);
-        this._blameUpdateTimer = setTimeout(() => {
-          this._blameUpdateTimer = null;
-          if (this._blameActive && this._blameEngine && this._binding && isBlameCapable(this._binding)) {
-            const updated = this._blameEngine.getLiveBlame();
-            this._binding.updateBlame(updated);
-          }
-        }, 300);
-      };
-      const ydoc = this._collabProvider?.ydoc;
-      ydoc?.on('update', observer);
-      this._blameUpdateUnsub = () => {
-        ydoc?.off('update', observer);
-        if (this._blameUpdateTimer) {
-          clearTimeout(this._blameUpdateTimer);
-          this._blameUpdateTimer = null;
-        }
-      };
-    } else {
-      this._blameUpdateUnsub?.();
-      this._blameUpdateUnsub = null;
-      this._blameEngine?.stopLiveBlame();
-      if (this._binding && isBlameCapable(this._binding)) {
-        this._binding.disableBlame();
-      }
-    }
+    this._blameCoordinator.toggle(e.detail.active);
   }
 
   private _handleVersionClose(): void {
+    this._versionCoordinator.closePanel();
     this._versionPanelOpen = false;
-    if (this._viewingVersion) {
-      this._exitVersionView();
-    }
   }
 
   private _handleVersionToggle(): void {
-    this._versionPanelOpen = !this._versionPanelOpen;
-    if (this._versionPanelOpen) {
-      this._versionManager?.listVersions().then(v => { this._versions = v; }).catch(() => {});
-    } else {
-      // Closing the panel exits version view mode
-      if (this._viewingVersion) {
-        this._exitVersionView();
-      }
-    }
+    this._versionCoordinator.togglePanel();
+    this._versionPanelOpen = this._versionCoordinator.panelOpen;
   }
 
   private async _handleVersionSave(): Promise<void> {
-    const entry = await this._versionManager?.createVersion();
-    if (entry) {
-      this._versions = [entry, ...this._versions];
-    }
+    await this._versionCoordinator.save();
   }
 
   private async _handleVersionSelect(e: CustomEvent): Promise<void> {
-    const version = await this._versionManager?.getVersion(e.detail.versionId);
-    if (version) {
-      this._selectedVersion = version;
-    }
+    await this._versionCoordinator.select(e.detail.versionId);
   }
 
   private async _handleVersionView(e: CustomEvent): Promise<void> {
-    const version = await this._versionManager?.getVersion(e.detail.versionId);
-    if (!version) return;
-    this._selectedVersion = version;
-
-    // Switch to read-only version view mode
-    this._viewingVersion = true;
-    if (this._binding) {
-      this._binding.setReadonly(true);
-      this._binding.setContent(version.content ?? '');
-
-      // Apply version blame if enabled and available
-      if (this.collaboration?.versionBlameEnabled !== false &&
-          version.blame && version.blame.length > 0 && isBlameCapable(this._binding)) {
-        const segments: BlameSegment[] = version.blame.map(b => ({
-          start: b.start,
-          end: b.end,
-          userName: b.user_name,
-        }));
-        this._binding.enableBlame(segments);
-      }
-    }
+    await this._versionCoordinator.view(e.detail.versionId);
   }
 
   private async _handleVersionRevert(e: CustomEvent): Promise<void> {
-    const version = await this._versionManager?.getVersion(e.detail.versionId);
-    if (!version) return;
-
-    // Exit version view mode if active
-    this._exitVersionView();
-
-    await this._versionManager?.revertToVersion(version);
-    this._versions = await this._versionManager?.listVersions() ?? [];
+    await this._versionCoordinator.revert(e.detail.versionId);
   }
 
   private async _handleVersionDiff(e: CustomEvent): Promise<void> {
-    if (!this._versionManager) return;
-    const fromVersion = await this._versionManager.getVersion(e.detail.fromId);
-    const toVersion = await this._versionManager.getVersion(e.detail.toId);
-    if (!fromVersion || !toVersion) return;
-
-    this._diffResult = this._versionManager.diffVersions(fromVersion, toVersion);
+    await this._versionCoordinator.diff(e.detail.fromId, e.detail.toId);
   }
 
   private _handleVersionDiffClear(): void {
-    this._diffResult = null;
-  }
-
-  private _exitVersionView(): void {
-    if (!this._viewingVersion) return;
-    this._viewingVersion = false;
-
-    if (this._binding) {
-      this._binding.setReadonly(this.readonly);
-      if (isBlameCapable(this._binding)) {
-        this._binding.disableBlame();
-      }
-      // Restore live content from Y.Text
-      if (this._collabProvider) {
-        this._binding.setContent(this._collabProvider.sharedText.toString());
-      }
-    }
-    this._selectedVersion = null;
+    this._versionCoordinator.clearDiff();
   }
 
   private _wireFormattingState(): void {
@@ -980,14 +888,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     super.disconnectedCallback();
     if (this._changeDebounce) clearTimeout(this._changeDebounce);
     this._formattingUnsub?.();
-    this._blameUpdateUnsub?.();
     if (this._awarenessHandler && this._collabProvider?.awareness) {
       this._collabProvider.awareness.off('change', this._awarenessHandler);
     }
-    this._versionManager?.destroy();
-    this._versionManager = null;
-    this._blameEngine?.stopLiveBlame();
-    this._blameEngine = null;
+    this._blameCoordinator.detach();
+    this._versionCoordinator.detach();
     this._binding?.destroy();
     this._collabProvider?.destroy();
   }
