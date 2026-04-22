@@ -87,13 +87,13 @@ func (pp *ProviderProcessor) ResolveStore(documentID string, req *StoreRequest) 
 // extractYjsUpdate strips the y-websocket frame header and returns the raw
 // Yjs update bytes. Returns nil if the frame is not a sync-update message.
 //
-// y-websocket frame format:
+// y-websocket frame format (lib0 encoding):
 //
-//	[messageType: varuint] [syncType: varuint] [yjsUpdate: bytes...]
+//	[messageType: varuint] [syncType: varuint] [updateLength: varuint] [yjsUpdate: bytes...]
 //
 // For sync-update: messageType=0 (sync), syncType=2 (update)
 func extractYjsUpdate(frame []byte) []byte {
-	if len(frame) < 2 {
+	if len(frame) < 3 {
 		return nil
 	}
 
@@ -109,7 +109,20 @@ func extractYjsUpdate(frame []byte) []byte {
 		return nil
 	}
 
-	return frame[n+m:]
+	// Read update length (varuint) — lib0 length-prefixed byte array
+	updateLen, k := readVaruint(frame[n+m:])
+	if k == 0 {
+		return nil
+	}
+
+	start := n + m + k
+	end := start + int(updateLen)
+	if end > len(frame) {
+		// If length doesn't match, try returning remaining bytes as fallback
+		return frame[start:]
+	}
+
+	return frame[start:end]
 }
 
 // readVaruint reads a variable-length unsigned integer.
