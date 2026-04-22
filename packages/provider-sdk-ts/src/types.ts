@@ -10,7 +10,6 @@ export interface UpdatePayload {
 export interface LoadResponse {
   content: string;
   mime_type: string;
-  updates?: UpdatePayload[];
   snapshot?: SnapshotPayload;
   metadata?: DocumentMetadata;
 }
@@ -31,6 +30,8 @@ export interface DocumentMetadata {
 
 export interface StoreRequest {
   updates: UpdatePayload[];
+  content?: string;
+  mime_type?: string;
 }
 
 export interface StoreResponse {

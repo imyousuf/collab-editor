@@ -53,8 +53,7 @@ describe('ProviderProcessor', () => {
     const resp = await processor.processLoad('doc1');
     expect(resp.content).toBe('# Hello');
     expect(resp.mime_type).toBe('text/markdown');
-    expect(resp.updates).toBeDefined();
-    expect(resp.updates!.length).toBe(1);
+    expect((resp as any).updates).toBeUndefined();
   });
 
   test('processLoad returns empty for nonexistent doc', async () => {
@@ -117,7 +116,7 @@ describe('ProviderProcessor', () => {
 
     const loadResp = await processor.processLoad('doc1');
     expect(loadResp.content).toBe('hello');
-    expect(loadResp.updates!.length).toBe(1);
+    expect((loadResp as any).updates).toBeUndefined();
   });
 
   test('processList delegates to provider', async () => {

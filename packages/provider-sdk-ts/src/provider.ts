@@ -20,7 +20,6 @@ import type {
 import {
   applyBase64Update,
   createDocWithContent,
-  encodeDocState,
   extractText,
   DocCache,
 } from './engine.js';
@@ -90,78 +89,61 @@ export class ProviderProcessor {
   async processLoad(documentId: string): Promise<LoadResponse> {
     const { content, mimeType } = await this._provider.readContent(documentId);
 
-    // If provider stores raw updates, return them for replay
-    const rawUpdates = this._provider.loadRawUpdates
-      ? await this._provider.loadRawUpdates(documentId)
-      : [];
-
-    if (rawUpdates.length > 0) {
-      return {
-        content,
-        mime_type: mimeType,
-        updates: rawUpdates,
-      };
-    }
-
-    // Otherwise encode current content as a Yjs state snapshot
-    let doc = this._cache.get(documentId);
-    if (!doc) {
-      doc = createDocWithContent(content);
+    // Seed the cache so subsequent stores can apply diffs
+    if (!this._cache.get(documentId)) {
+      const doc = createDocWithContent(content);
       this._cache.set(documentId, doc);
     }
-
-    const stateData = encodeDocState(doc);
 
     return {
       content,
       mime_type: mimeType,
-      updates: [{ sequence: 0, data: stateData, client_id: 0 }],
     };
   }
 
   /**
    * Process a store request from the relay.
    *
-   * Depending on what the provider implements:
-   * - writeContent: SDK applies diffs, extracts resolved text, calls writeContent()
-   * - storeRawUpdates: SDK passes raw updates through for the provider to store
-   * - Both: SDK does both — provider gets resolved text AND raw updates
+   * Always resolves content via the Y.Doc engine. The provider receives both
+   * resolved content AND raw updates. Depending on what the provider implements:
+   * - writeContent: called with the resolved text
+   * - storeRawUpdates: called with the raw Yjs updates
+   * - Both: provider gets resolved text AND raw updates
    */
   async processStore(documentId: string, updates: UpdatePayload[]): Promise<StoreResponse> {
     if (updates.length === 0) {
       return { stored: 0 };
     }
 
+    // Always resolve content via Y.Doc engine
+    let doc = this._cache.get(documentId);
+    if (!doc) {
+      const { content } = await this._provider.readContent(documentId);
+      doc = createDocWithContent(content);
+      this._cache.set(documentId, doc);
+    }
+
+    let applied = 0;
+    for (const update of updates) {
+      if (applyBase64Update(doc, update.data)) {
+        applied++;
+      }
+    }
+
+    const resolvedText = extractText(doc);
+    const { mimeType } = await this._provider.readContent(documentId);
+
     // Store raw updates if provider supports it
     if (this._provider.storeRawUpdates) {
       await this._provider.storeRawUpdates(documentId, updates);
     }
 
-    // Apply diffs and write resolved text if provider supports it
+    // Write resolved text if provider supports it
     if (this._provider.writeContent) {
-      let doc = this._cache.get(documentId);
-      if (!doc) {
-        const { content } = await this._provider.readContent(documentId);
-        doc = createDocWithContent(content);
-        this._cache.set(documentId, doc);
-      }
-
-      let applied = 0;
-      for (const update of updates) {
-        if (applyBase64Update(doc, update.data)) {
-          applied++;
-        }
-      }
-
-      const resolvedText = extractText(doc);
-      const { mimeType } = await this._provider.readContent(documentId);
       await this._provider.writeContent(documentId, resolvedText, mimeType);
-
-      return { stored: applied };
     }
 
-    // If only storeRawUpdates is implemented, count all as stored
-    return { stored: updates.length };
+    return { stored: applied };
   }
 
   /** Process a health request */
