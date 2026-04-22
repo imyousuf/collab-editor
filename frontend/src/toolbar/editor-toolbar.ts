@@ -62,6 +62,9 @@ export class EditorToolbar extends LitElement {
   @property({ type: Boolean }) readonly: boolean = false;
   @property({ type: Boolean }) blameActive: boolean = false;
   @property({ type: Boolean }) blameAvailable: boolean = false;
+  @property({ type: Boolean }) commentsAvailable: boolean = false;
+  @property({ type: Boolean }) suggestAvailable: boolean = false;
+  @property({ type: Boolean }) suggestActive: boolean = false;
 
   static styles = css`
     :host {
@@ -194,10 +197,52 @@ export class EditorToolbar extends LitElement {
       ${showModeSwitcher ? this._renderModeSwitcher() : nothing}
       ${showModeSwitcher && showFormatting ? html`<div class="separator" part="separator"></div>` : nothing}
       ${showFormatting ? this._renderFormattingButtons() : nothing}
-      ${showDocSwitcher || this.blameAvailable ? html`<div class="spacer"></div>` : nothing}
+      ${showDocSwitcher || this.blameAvailable || this.commentsAvailable
+        ? html`<div class="spacer"></div>`
+        : nothing}
+      ${this.commentsAvailable ? this._renderCommentButton() : nothing}
+      ${this.suggestAvailable ? this._renderSuggestToggle() : nothing}
       ${this.blameAvailable ? this._renderBlameToggle() : nothing}
       ${showDocSwitcher ? this._renderDocumentSwitcher() : nothing}
     `;
+  }
+
+  private _renderCommentButton() {
+    return html`
+      <button
+        class="fmt-btn"
+        part="comment-button"
+        title="Add comment"
+        @click=${this._dispatchCommentAdd}
+      >
+        <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </button>
+    `;
+  }
+
+  private _renderSuggestToggle() {
+    return html`
+      <button
+        class="fmt-btn ${this.suggestActive ? 'active' : ''}"
+        part="suggest-button"
+        title="${this.suggestActive ? 'Exit Suggest Mode' : 'Enter Suggest Mode'}"
+        @click=${this._dispatchSuggestToggle}
+      >
+        <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+      </button>
+    `;
+  }
+
+  private _dispatchCommentAdd(): void {
+    this.dispatchEvent(new CustomEvent('toolbar-comment-add', {
+      bubbles: true, composed: true, detail: {},
+    }));
+  }
+
+  private _dispatchSuggestToggle(): void {
+    this.dispatchEvent(new CustomEvent('toolbar-suggest-toggle', {
+      bubbles: true, composed: true, detail: { active: !this.suggestActive },
+    }));
   }
 
   private _renderModeSwitcher() {

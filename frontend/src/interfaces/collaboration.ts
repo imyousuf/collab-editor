@@ -31,6 +31,29 @@ export interface CollaborationConfig {
   liveBlameEnabled?: boolean;
   /** Enable version blame view for end users. Default: true */
   versionBlameEnabled?: boolean;
+
+  // --- Comments & Suggest Mode ---
+
+  /** Enable the comments UI. Default: true. Auto-false if the relay has no
+   * comments provider configured. When this is false, `suggestEnabled` is
+   * forced false as well — suggestions cannot exist without comments. */
+  commentsEnabled?: boolean;
+
+  /** Enable Google-Docs-style Suggest Mode. Default: true. Forced false
+   * when commentsEnabled is false or the Comments Provider does not declare
+   * `capabilities.suggestions`. */
+  suggestEnabled?: boolean;
+
+  /** Poll interval for external comment changes, in ms. Default 30000. 0 disables. */
+  commentsPollInterval?: number;
+
+  /** Whether the comment sidebar starts open. Default: false. */
+  commentsSidebarOpen?: boolean;
+
+  /** Optional fetch interceptor for embedders using bearer / custom header auth.
+   * The default SDK call wraps `fetch` with `credentials: 'include'`, which
+   * covers the typical same-origin cookie-auth deployment. */
+  fetchInterceptor?: (init: RequestInit) => RequestInit;
 }
 
 export type CollabStatusCallback = (status: CollabStatus) => void;

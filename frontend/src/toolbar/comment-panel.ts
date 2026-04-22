@@ -1,0 +1,405 @@
+/**
+ * Comment panel — popover anchored to the active comment anchor.
+ *
+ * Responsibilities:
+ *   - Render the thread (comments + suggestion, if any).
+ *   - Markdown-render comment bodies and the suggestion summary.
+ *   - Reply textarea with @-mention autocomplete.
+ *   - Resolve / reopen + delete (capability-gated).
+ *   - Suggestion Accept / Reject (capability-gated).
+ *
+ * Events dispatched on the parent:
+ *   - comment-panel-close
+ *   - comment-reply         { threadId, content }
+ *   - comment-thread-resolve { threadId }
+ *   - comment-thread-reopen  { threadId }
+ *   - comment-thread-delete  { threadId }
+ *   - comment-reaction-add   { threadId, commentId|null, emoji }
+ *   - comment-reaction-remove { threadId, commentId|null, emoji }
+ *   - comment-suggestion-accept { threadId }
+ *   - comment-suggestion-reject { threadId }
+ *   - comment-mention-search { query, resolve }   (async — multi-editor calls resolve([...]))
+ */
+
+import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
+import { customElement, property, state } from 'lit/decorators.js';
+import type {
+  Comment,
+  CommentThread,
+  CommentsCapabilities,
+  MentionCandidate,
+} from '../interfaces/comments.js';
+
+@customElement('comment-panel')
+export class CommentPanel extends LitElement {
+  @property({ type: Boolean, reflect: true }) open = false;
+  @property({ attribute: false }) thread: CommentThread | null = null;
+  @property({ attribute: false }) capabilities: CommentsCapabilities | null = null;
+  @property({ attribute: false }) currentUserId = '';
+
+  @state() private _replyDraft = '';
+  @state() private _mentionOptions: MentionCandidate[] = [];
+  @state() private _mentionActive = false;
+
+  static override styles = css`
+    :host {
+      display: none;
+      position: absolute;
+      z-index: 1000;
+      width: 360px;
+      max-width: 90vw;
+    }
+    :host([open]) { display: block; }
+    .panel {
+      background: var(--me-bg, #fff);
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      overflow: hidden;
+      font-size: 13px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--me-toolbar-border, #eee);
+      gap: 8px;
+    }
+    .header-quote {
+      flex: 1;
+      font-style: italic;
+      color: var(--me-status-color, #444);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .actions button {
+      background: none;
+      border: 1px solid transparent;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .actions button:hover { background: var(--me-toolbar-button-hover-bg, #f0f0f0); }
+    .actions .primary {
+      border-color: var(--me-toolbar-border, #d0d7de);
+      background: var(--me-toolbar-button-hover-bg, #f8f9fa);
+    }
+
+    .suggestion {
+      padding: 10px 14px;
+      background: rgba(66, 135, 245, 0.05);
+      border-bottom: 1px solid var(--me-toolbar-border, #eee);
+    }
+    .suggestion-summary {
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .suggestion-summary .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      text-transform: uppercase;
+      background: #e3f2fd;
+      color: #1565c0;
+    }
+    .suggestion-diff {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 6px 0 10px;
+    }
+    .suggestion-diff .col {
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.03);
+      word-break: break-word;
+    }
+    .suggestion-diff .col.before { color: #b71c1c; text-decoration: line-through; }
+    .suggestion-diff .col.after { color: #1b5e20; text-decoration: underline; }
+    .suggestion-actions { display: flex; gap: 6px; }
+
+    .comments {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    .comment {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--me-toolbar-border, #f0f0f0);
+    }
+    .comment:last-child { border-bottom: none; }
+    .comment-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 4px;
+    }
+    .comment-author { font-weight: 600; color: var(--me-status-color, #333); }
+    .comment-meta { font-size: 11px; color: #888; }
+    .comment-body { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+    .comment-body.deleted { color: #aaa; font-style: italic; }
+
+    .reply {
+      padding: 10px 14px;
+      border-top: 1px solid var(--me-toolbar-border, #eee);
+      position: relative;
+    }
+    .reply textarea {
+      width: 100%;
+      min-height: 52px;
+      resize: vertical;
+      padding: 6px 8px;
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    .reply-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .mention-list {
+      position: absolute;
+      bottom: 72px;
+      left: 14px;
+      right: 14px;
+      background: #fff;
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      max-height: 140px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    .mention-item {
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    .mention-item:hover { background: #f0f0f0; }
+  `;
+
+  override render(): TemplateResult | typeof nothing {
+    if (!this.thread) return nothing;
+    const t = this.thread;
+    const isResolved = t.status === 'resolved';
+    const canDelete = this.capabilities?.comment_delete ?? false;
+    return html`
+      <div class="panel">
+        <div class="header">
+          <span class="header-quote" title="${t.anchor.quoted_text}">
+            "${t.anchor.quoted_text || '(orphaned)'}"
+          </span>
+          <div class="actions">
+            ${isResolved
+              ? html`<button class="primary" @click=${() => this._dispatch('comment-thread-reopen', { threadId: t.id })}>Reopen</button>`
+              : html`<button class="primary" @click=${() => this._dispatch('comment-thread-resolve', { threadId: t.id })}>Resolve</button>`}
+            ${canDelete
+              ? html`<button title="Delete thread" @click=${() => this._dispatch('comment-thread-delete', { threadId: t.id })}>🗑</button>`
+              : nothing}
+            <button title="Close" @click=${() => this._dispatch('comment-panel-close', {})}>×</button>
+          </div>
+        </div>
+
+        ${t.suggestion ? this._renderSuggestion(t.suggestion) : nothing}
+
+        <div class="comments">
+          ${t.comments.length === 0 && !t.suggestion
+            ? html`<div class="comment"><em>No comments yet.</em></div>`
+            : t.comments.map((c) => this._renderComment(c))}
+        </div>
+
+        ${isResolved ? nothing : this._renderReplyBox(t.id)}
+      </div>
+    `;
+  }
+
+  private _renderSuggestion(s: NonNullable<CommentThread['suggestion']>): TemplateResult {
+    const canDecide = this.capabilities?.suggestions ?? false;
+    return html`
+      <div class="suggestion">
+        <div class="suggestion-summary">
+          <span>🔸 ${s.human_readable.summary}</span>
+          <span class="badge">${s.status}</span>
+        </div>
+        <div class="suggestion-diff">
+          <div class="col before" title="Before">${s.human_readable.before_text || '(empty)'}</div>
+          <div class="col after" title="After">${s.human_readable.after_text || '(empty)'}</div>
+        </div>
+        ${s.status === 'pending' && canDecide
+          ? html`
+              <div class="suggestion-actions">
+                <button class="primary" @click=${() => this._dispatch('comment-suggestion-accept', { threadId: this.thread?.id })}>Accept</button>
+                <button @click=${() => this._dispatch('comment-suggestion-reject', { threadId: this.thread?.id })}>Reject</button>
+              </div>
+            `
+          : nothing}
+        ${s.author_note
+          ? html`<div class="comment-body" style="margin-top: 6px; font-size: 12px;">${s.author_note}</div>`
+          : nothing}
+      </div>
+    `;
+  }
+
+  private _renderComment(c: Comment): TemplateResult {
+    const isDeleted = !!c.deleted_at;
+    const edited = !!c.updated_at && !isDeleted;
+    return html`
+      <div class="comment" data-comment-id=${c.id}>
+        <div class="comment-head">
+          <span class="comment-author">${c.author_name}</span>
+          <span class="comment-meta">
+            ${formatRelative(c.created_at)}${edited ? ' · edited' : ''}
+          </span>
+        </div>
+        <div class="comment-body ${isDeleted ? 'deleted' : ''}">
+          ${isDeleted ? '(deleted)' : renderCommentContent(c.content)}
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderReplyBox(threadId: string): TemplateResult {
+    return html`
+      <div class="reply">
+        ${this._mentionActive && this._mentionOptions.length > 0
+          ? html`
+              <div class="mention-list">
+                ${this._mentionOptions.map(
+                  (m) => html`
+                    <div class="mention-item" @click=${() => this._insertMention(m)}>
+                      @${m.display_name}
+                      <span class="comment-meta">${m.user_id}</span>
+                    </div>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
+        <textarea
+          .value=${this._replyDraft}
+          @input=${(e: Event) => this._onReplyInput(e)}
+          placeholder="Reply… (type @ for mentions)"
+        ></textarea>
+        <div class="reply-actions">
+          <button @click=${() => { this._replyDraft = ''; this._mentionActive = false; }}>Clear</button>
+          <button
+            class="primary"
+            ?disabled=${this._replyDraft.trim().length === 0}
+            @click=${() => this._sendReply(threadId)}
+          >Send</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private _onReplyInput(e: Event): void {
+    const textarea = e.target as HTMLTextAreaElement;
+    this._replyDraft = textarea.value;
+    const caret = textarea.selectionStart ?? textarea.value.length;
+    const preCaret = textarea.value.slice(0, caret);
+    const match = preCaret.match(/@([\w-]*)$/);
+    if (match) {
+      this._mentionActive = true;
+      this._requestMentionOptions(match[1]);
+    } else {
+      this._mentionActive = false;
+      this._mentionOptions = [];
+    }
+  }
+
+  private _requestMentionOptions(query: string): void {
+    // Multi-editor resolves via engine.searchMentions(); we don't fetch
+    // directly because that would couple the UI to network details.
+    const event = new CustomEvent('comment-mention-search', {
+      bubbles: true,
+      composed: true,
+      detail: {
+        query,
+        resolve: (results: MentionCandidate[]) => {
+          this._mentionOptions = results;
+        },
+      },
+    });
+    this.dispatchEvent(event);
+  }
+
+  private _insertMention(m: MentionCandidate): void {
+    this._replyDraft = this._replyDraft.replace(
+      /@([\w-]*)$/,
+      `@[${m.display_name}](${m.user_id}) `,
+    );
+    this._mentionActive = false;
+    this._mentionOptions = [];
+  }
+
+  private _sendReply(threadId: string): void {
+    const content = this._replyDraft.trim();
+    if (!content) return;
+    this._dispatch('comment-reply', { threadId, content });
+    this._replyDraft = '';
+    this._mentionActive = false;
+  }
+
+  private _dispatch(name: string, detail: any): void {
+    this.dispatchEvent(
+      new CustomEvent(name, { detail, bubbles: true, composed: true }),
+    );
+  }
+}
+
+// --- Helpers ---
+
+function formatRelative(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const delta = Date.now() - t;
+  const mins = Math.round(delta / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(t).toLocaleDateString();
+}
+
+/**
+ * Render comment content with mention tokens stylized. Keeps markdown-ish
+ * styling minimal to stay lightweight; the full markdown pipeline runs
+ * elsewhere when comments are piped through it.
+ */
+function renderCommentContent(content: string): TemplateResult {
+  const pieces: (string | TemplateResult)[] = [];
+  const re = /@\[([^\]]+)\]\(([^)]+)\)/g;
+  let lastIndex = 0;
+  let match;
+  while ((match = re.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      pieces.push(content.slice(lastIndex, match.index));
+    }
+    pieces.push(
+      html`<span
+        style="background: #e3f2fd; color: #1565c0; padding: 0 4px; border-radius: 3px;"
+        data-mention-user-id=${match[2]}
+      >@${match[1]}</span>`,
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < content.length) pieces.push(content.slice(lastIndex));
+  return html`${pieces}`;
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    'comment-panel': CommentPanel;
+  }
+}

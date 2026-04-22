@@ -1,0 +1,176 @@
+/**
+ * @vitest-environment jsdom
+ */
+import { describe, test, expect } from 'vitest';
+import '../../toolbar/comment-panel.js';
+import '../../toolbar/suggest-status.js';
+import type { CommentPanel } from '../../toolbar/comment-panel.js';
+import type { SuggestStatus } from '../../toolbar/suggest-status.js';
+import type { CommentThread } from '../../interfaces/comments.js';
+
+function makeThread(partial: Partial<CommentThread> = {}): CommentThread {
+  return {
+    id: partial.id ?? 't1',
+    document_id: 'doc.md',
+    anchor: partial.anchor ?? { start: 0, end: 5, quoted_text: 'hello' },
+    status: partial.status ?? 'open',
+    created_at: '2026-01-01T00:00:00Z',
+    comments: partial.comments ?? [
+      {
+        id: 'c1',
+        thread_id: partial.id ?? 't1',
+        author_id: 'u1',
+        author_name: 'Alice',
+        content: 'hey there',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+    ],
+    suggestion: partial.suggestion,
+  };
+}
+
+async function mountPanel(overrides: Partial<CommentPanel> = {}): Promise<CommentPanel> {
+  const el = document.createElement('comment-panel') as CommentPanel;
+  Object.assign(el, overrides);
+  document.body.appendChild(el);
+  el.open = true;
+  await (el as any).updateComplete;
+  return el;
+}
+
+describe('comment-panel', () => {
+  test('renders quoted text and comment body', async () => {
+    const panel = await mountPanel({ thread: makeThread() });
+    const quote = panel.shadowRoot!.querySelector('.header-quote')!;
+    expect(quote.textContent).toContain('hello');
+    const body = panel.shadowRoot!.querySelector('.comment-body');
+    expect(body?.textContent).toContain('hey there');
+  });
+
+  test('sending a reply dispatches comment-reply event', async () => {
+    const panel = await mountPanel({ thread: makeThread() });
+    let received: any = null;
+    panel.addEventListener('comment-reply', (e: any) => {
+      received = e.detail;
+    });
+
+    const textarea = panel.shadowRoot!.querySelector('textarea')!;
+    textarea.value = 'hi back';
+    textarea.dispatchEvent(new Event('input'));
+    await (panel as any).updateComplete;
+
+    const sendBtn = panel.shadowRoot!.querySelector('.reply-actions .primary') as HTMLButtonElement;
+    sendBtn.click();
+
+    expect(received?.content).toBe('hi back');
+    expect(received?.threadId).toBe('t1');
+  });
+
+  test('resolve button dispatches comment-thread-resolve', async () => {
+    const panel = await mountPanel({ thread: makeThread() });
+    let received: any = null;
+    panel.addEventListener('comment-thread-resolve', (e: any) => {
+      received = e.detail;
+    });
+    const btn = panel.shadowRoot!.querySelector('.actions .primary') as HTMLButtonElement;
+    btn.click();
+    expect(received?.threadId).toBe('t1');
+  });
+
+  test('resolved thread hides reply box and shows Reopen', async () => {
+    const panel = await mountPanel({ thread: makeThread({ status: 'resolved' }) });
+    expect(panel.shadowRoot!.querySelector('textarea')).toBeNull();
+    expect(panel.shadowRoot!.querySelector('.actions .primary')!.textContent).toContain('Reopen');
+  });
+
+  test('suggestion section renders before/after + Accept/Reject', async () => {
+    const panel = await mountPanel({
+      thread: makeThread({
+        suggestion: {
+          yjs_payload: 'AAA=',
+          human_readable: {
+            summary: 'Change "hello" to "HELLO"',
+            before_text: 'hello',
+            after_text: 'HELLO',
+            operations: [],
+          },
+          author_id: 'u1',
+          author_name: 'Alice',
+          status: 'pending',
+        },
+      }),
+      capabilities: {
+        comment_edit: false,
+        comment_delete: false,
+        reactions: [],
+        mentions: false,
+        suggestions: true,
+        max_comment_size: 10240,
+        poll_supported: false,
+      },
+    });
+
+    const diff = panel.shadowRoot!.querySelectorAll('.suggestion-diff .col');
+    expect(diff[0].textContent).toContain('hello');
+    expect(diff[1].textContent).toContain('HELLO');
+
+    let acceptReceived: any = null;
+    panel.addEventListener('comment-suggestion-accept', (e: any) => {
+      acceptReceived = e.detail;
+    });
+    const acceptBtn = panel.shadowRoot!.querySelector(
+      '.suggestion-actions .primary',
+    ) as HTMLButtonElement;
+    acceptBtn.click();
+    expect(acceptReceived?.threadId).toBe('t1');
+  });
+
+  test('@-mention autocomplete asks parent to resolve candidates', async () => {
+    const panel = await mountPanel({ thread: makeThread() });
+    panel.addEventListener('comment-mention-search', (e: any) => {
+      e.detail.resolve([{ user_id: 'bob', display_name: 'Bob' }]);
+    });
+
+    const textarea = panel.shadowRoot!.querySelector('textarea')!;
+    textarea.value = 'hey @bo';
+    textarea.setSelectionRange(7, 7);
+    textarea.dispatchEvent(new Event('input'));
+    await (panel as any).updateComplete;
+
+    const mentionItems = panel.shadowRoot!.querySelectorAll('.mention-item');
+    expect(mentionItems.length).toBe(1);
+    expect(mentionItems[0].textContent).toContain('Bob');
+  });
+});
+
+describe('suggest-status', () => {
+  async function mountStatus(overrides: Partial<SuggestStatus> = {}): Promise<SuggestStatus> {
+    const el = document.createElement('suggest-status') as SuggestStatus;
+    Object.assign(el, overrides);
+    document.body.appendChild(el);
+    await (el as any).updateComplete;
+    return el;
+  }
+
+  test('Submit button disabled when no pending changes', async () => {
+    const el = await mountStatus({ active: true, pendingChanges: 0 });
+    const btn = el.shadowRoot!.querySelector('button.primary') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  test('Submit dispatches suggest-submit event', async () => {
+    const el = await mountStatus({ active: true, pendingChanges: 2 });
+    let fired = false;
+    el.addEventListener('suggest-submit', () => { fired = true; });
+    const btn = el.shadowRoot!.querySelector('button.primary') as HTMLButtonElement;
+    btn.click();
+    expect(fired).toBe(true);
+  });
+
+  test('pluralizes pending change count', async () => {
+    const single = await mountStatus({ active: true, pendingChanges: 1 });
+    expect(single.shadowRoot!.querySelector('.count')!.textContent).toContain('1 pending change');
+    const multi = await mountStatus({ active: true, pendingChanges: 3 });
+    expect(multi.shadowRoot!.querySelector('.count')!.textContent).toContain('3 pending changes');
+  });
+});
