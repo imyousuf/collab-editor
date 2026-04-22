@@ -39,3 +39,5 @@ export {
   createExpressRouter,
   serve,
 } from './handler.js';
+
+export * from './comments/index.js';
