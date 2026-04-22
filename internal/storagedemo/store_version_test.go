@@ -432,7 +432,10 @@ func TestHTTPHandler_AutoVersionConfig(t *testing.T) {
 	srv, _ := newTestServer(t)
 
 	// GET — should be off by default
-	resp, _ := http.Get(srv.URL + "/config/auto-version")
+	resp, err := http.Get(srv.URL + "/config/auto-version")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -451,7 +454,10 @@ func TestHTTPHandler_AutoVersionConfig(t *testing.T) {
 	}
 
 	// GET — should now be on
-	resp2, _ := http.Get(srv.URL + "/config/auto-version")
+	resp2, err := http.Get(srv.URL + "/config/auto-version")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp2.Body.Close()
 	var result2 map[string]bool
 	json.NewDecoder(resp2.Body).Decode(&result2)

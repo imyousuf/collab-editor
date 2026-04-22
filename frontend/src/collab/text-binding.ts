@@ -20,7 +20,8 @@ export class TextBinding {
   private _editor: Editor;
   private _ytext: Y.Text;
   private _handler: IContentHandler;
-  private _editorHandler: (() => void) | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _editorHandler: ((...args: any[]) => void) | null = null;
   private _ytextObserver: ((event: Y.YTextEvent) => void) | null = null;
   private _syncTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly _origin = Symbol('TextBinding');
