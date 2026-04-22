@@ -34,7 +34,6 @@ class DocumentMetadata:
 class LoadResponse:
     content: str = ""
     mime_type: str = "text/plain"
-    updates: list[UpdatePayload] = field(default_factory=list)
     snapshot: Optional[SnapshotPayload] = None
     metadata: Optional[DocumentMetadata] = None
 
@@ -42,6 +41,8 @@ class LoadResponse:
 @dataclass
 class StoreRequest:
     updates: list[UpdatePayload] = field(default_factory=list)
+    content: Optional[str] = None
+    mime_type: Optional[str] = None
 
 
 @dataclass

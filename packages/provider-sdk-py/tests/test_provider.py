@@ -54,7 +54,6 @@ class TestProviderProcessor:
         resp = await processor.process_load("doc1")
         assert resp.content == "# Hello"
         assert resp.mime_type == "text/markdown"
-        assert len(resp.updates) == 1
 
     async def test_process_load_empty_for_nonexistent(
         self, processor: ProviderProcessor
@@ -149,7 +148,6 @@ class TestProviderProcessor:
 
         resp = await processor.process_load("doc1")
         assert resp.content == "hello"
-        assert len(resp.updates) == 1
 
     async def test_process_list(
         self, mock_provider: MockProvider, processor: ProviderProcessor

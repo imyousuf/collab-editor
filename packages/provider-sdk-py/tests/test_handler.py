@@ -72,7 +72,7 @@ class TestLoadEndpoint:
         data = resp.json()
         assert data["content"] == "# Hello"
         assert data["mime_type"] == "text/markdown"
-        assert "updates" in data
+        assert "updates" not in data
 
     async def test_load_missing_path(self, client: AsyncClient) -> None:
         resp = await client.post("/documents/load")

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from .provider import Provider, ProviderProcessor
-from .types import ClientUserMapping, CreateVersionRequest, StoreRequest, UpdatePayload
+from .types import ClientUserMapping, CreateVersionRequest, UpdatePayload
 
 
 def create_fastapi_router(
@@ -42,21 +42,10 @@ def create_fastapi_router(
     @router.post("/documents/load")
     async def load_document(path: str = Query(...)) -> dict[str, Any]:
         resp = await processor.process_load(path)
-        result: dict[str, Any] = {
+        return {
             "content": resp.content,
             "mime_type": resp.mime_type,
         }
-        if resp.updates:
-            result["updates"] = [
-                {
-                    "sequence": u.sequence,
-                    "data": u.data,
-                    "client_id": u.client_id,
-                    **({"created_at": u.created_at} if u.created_at else {}),
-                }
-                for u in resp.updates
-            ]
-        return result
 
     @router.post("/documents/updates")
     async def store_updates(
@@ -73,7 +62,11 @@ def create_fastapi_router(
             )
             for u in raw_updates
         ]
-        resp = await processor.process_store(path, updates)
+        req_content = body.get("content")
+        req_mime_type = body.get("mime_type")
+        resp = await processor.process_store(
+            path, updates, content=req_content, mime_type=req_mime_type
+        )
         result: dict[str, Any] = {"stored": resp.stored}
         if resp.failed:
             result["failed"] = [

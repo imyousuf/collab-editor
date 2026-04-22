@@ -25,7 +25,6 @@ from .types import (
 from .engine import (
     apply_base64_update,
     create_doc_with_content,
-    encode_doc_state,
     extract_text,
 )
 from .cache import DocCache
@@ -144,63 +143,58 @@ class ProviderProcessor:
     async def process_load(self, document_id: str) -> LoadResponse:
         result = await self._provider.read_content(document_id)
 
-        # If provider stores raw updates, return them for replay
-        raw_updates: list[UpdatePayload] = []
-        if self._provider.supports_load_raw_updates:
-            raw_updates = await self._provider.load_raw_updates(document_id)
-
-        if raw_updates:
-            return LoadResponse(
-                content=result.content,
-                mime_type=result.mime_type,
-                updates=raw_updates,
-            )
-
-        # Otherwise encode current content as a Yjs state snapshot
+        # Seed the cache from provider content so subsequent stores work
         doc = self._cache.get(document_id)
         if doc is None:
             doc = create_doc_with_content(result.content)
             self._cache.set(document_id, doc)
 
-        state_data = encode_doc_state(doc)
         return LoadResponse(
             content=result.content,
             mime_type=result.mime_type,
-            updates=[UpdatePayload(sequence=0, data=state_data, client_id=0)],
         )
 
     async def process_store(
-        self, document_id: str, updates: list[UpdatePayload]
+        self,
+        document_id: str,
+        updates: list[UpdatePayload],
+        content: str | None = None,
+        mime_type: str | None = None,
     ) -> StoreResponse:
         if not updates:
             return StoreResponse(stored=0)
+
+        # Always resolve content via the pycrdt Y.Doc engine
+        doc = self._cache.get(document_id)
+        if doc is None:
+            result = await self._provider.read_content(document_id)
+            doc = create_doc_with_content(result.content)
+            self._cache.set(document_id, doc)
+
+        applied = 0
+        for update in updates:
+            if apply_base64_update(doc, update.data):
+                applied += 1
+
+        resolved_text = extract_text(doc)
+
+        # Determine the mime_type: prefer what was sent in the request,
+        # fall back to what the provider already has
+        if mime_type is None:
+            result = await self._provider.read_content(document_id)
+            mime_type = result.mime_type
 
         # Store raw updates if provider supports it
         if self._provider.supports_raw_updates:
             await self._provider.store_raw_updates(document_id, updates)
 
-        # Apply diffs and write resolved text if provider supports it
+        # Write resolved text if provider supports it
         if self._provider.supports_write_content:
-            doc = self._cache.get(document_id)
-            if doc is None:
-                result = await self._provider.read_content(document_id)
-                doc = create_doc_with_content(result.content)
-                self._cache.set(document_id, doc)
-
-            applied = 0
-            for update in updates:
-                if apply_base64_update(doc, update.data):
-                    applied += 1
-
-            resolved_text = extract_text(doc)
-            result = await self._provider.read_content(document_id)
             await self._provider.write_content(
-                document_id, resolved_text, result.mime_type
+                document_id, resolved_text, mime_type
             )
-            return StoreResponse(stored=applied)
 
-        # If only store_raw_updates is implemented, count all as stored
-        return StoreResponse(stored=len(updates))
+        return StoreResponse(stored=applied)
 
     async def process_health(self) -> HealthResponse:
         return await self._provider.on_health()
