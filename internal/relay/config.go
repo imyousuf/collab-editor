@@ -11,13 +11,23 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `koanf:"server"`
-	GRPC    GRPCConfig    `koanf:"grpc"`
-	Storage StorageConfig `koanf:"storage"`
-	Room    RoomConfig    `koanf:"room"`
-	Redis   RedisConfig   `koanf:"redis"`
-	Metrics MetricsConfig `koanf:"metrics"`
-	Log     LogConfig     `koanf:"log"`
+	Server   ServerConfig   `koanf:"server"`
+	GRPC     GRPCConfig     `koanf:"grpc"`
+	Storage  StorageConfig  `koanf:"storage"`
+	Comments CommentsConfig `koanf:"comments"`
+	Room     RoomConfig     `koanf:"room"`
+	Redis    RedisConfig    `koanf:"redis"`
+	Metrics  MetricsConfig  `koanf:"metrics"`
+	Log      LogConfig      `koanf:"log"`
+}
+
+// CommentsConfig configures the optional Comments Provider the relay
+// proxies to. Omitting ProviderURL disables all /api/documents/comments/*
+// proxy routes and surfaces "comments not available" to the frontend.
+type CommentsConfig struct {
+	ProviderURL string        `koanf:"provider_url"`
+	AuthToken   string        `koanf:"auth_token"`
+	Timeout     time.Duration `koanf:"timeout"`
 }
 
 type GRPCConfig struct {
@@ -139,8 +149,10 @@ func LoadConfig(path string) (Config, error) {
 
 	// Load specific env vars that map to config fields
 	envMappings := map[string]string{
-		"COLLAB_STORAGE_PROVIDER_URL": "storage.provider_url",
-		"COLLAB_STORAGE_AUTH_TOKEN":   "storage.auth_token",
+		"COLLAB_STORAGE_PROVIDER_URL":  "storage.provider_url",
+		"COLLAB_STORAGE_AUTH_TOKEN":    "storage.auth_token",
+		"COLLAB_COMMENTS_PROVIDER_URL": "comments.provider_url",
+		"COLLAB_COMMENTS_AUTH_TOKEN":   "comments.auth_token",
 		"COLLAB_SERVER_ADDR":          "server.addr",
 		"COLLAB_METRICS_ADDR":         "metrics.addr",
 		"COLLAB_LOG_LEVEL":            "log.level",

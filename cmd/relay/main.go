@@ -51,6 +51,18 @@ func main() {
 		StoreTimeout: cfg.Storage.StoreTimeout,
 	})
 
+	// Optional Comments provider client. When ProviderURL is empty, comments
+	// are disabled globally and /api/documents/comments/* routes 404.
+	var commentsClient *provider.CommentsClient
+	if cfg.Comments.ProviderURL != "" {
+		commentsClient = provider.NewCommentsClient(provider.CommentsClientConfig{
+			BaseURL:   cfg.Comments.ProviderURL,
+			AuthToken: cfg.Comments.AuthToken,
+			Timeout:   cfg.Comments.Timeout,
+		})
+		slog.Info("comments provider configured", "url", cfg.Comments.ProviderURL)
+	}
+
 	// Create metrics and circuit breaker
 	metrics := relay.NewMetrics()
 	breaker := relay.NewCircuitBreaker(
@@ -265,6 +277,21 @@ func main() {
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{"stored": len(body.Mappings)})
 				})
+
+				// Relay-level meta endpoint: lets the frontend discover whether
+				// comments are configured at all without hitting the comments
+				// provider. Returns 200 with {"comments_supported": bool}.
+				r.Get("/capabilities", func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{
+						"comments_supported": commentsClient != nil,
+					})
+				})
+
+				// Comments proxy. All routes return 503 when comments are not
+				// configured so the frontend can distinguish "not configured"
+				// from "misbehaving provider".
+				registerCommentsProxy(r, commentsClient)
 			})
 		},
 	}
