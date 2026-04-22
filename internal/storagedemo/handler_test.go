@@ -18,7 +18,7 @@ const testToken = "test-token"
 func newTestServer(t *testing.T) (*httptest.Server, *FileStore) {
 	t.Helper()
 	store := newTestStore(t)
-	handler := NewServer(store, testToken)
+	handler := NewServer(store, nil, testToken)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	return srv, store
@@ -238,7 +238,7 @@ func TestAuth_WrongToken(t *testing.T) {
 func TestAuth_EmptyToken_AllowsRequests(t *testing.T) {
 	// When auth token is empty, all requests should be allowed (open dev mode)
 	store := newTestStore(t)
-	handler := NewServer(store, "") // empty token
+	handler := NewServer(store, nil, "") // empty token
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 

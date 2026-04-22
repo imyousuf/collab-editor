@@ -12,8 +12,12 @@ import (
 
 // NewServer creates the HTTP server for the demo storage provider.
 // Core SPI endpoints are handled by spi.NewHTTPHandler (the Go SDK).
+// Comments SPI endpoints are handled by spi.NewCommentsHTTPHandler.
 // Auth middleware and the extra /documents/compact endpoint are layered on top.
-func NewServer(store *FileStore, authToken string) http.Handler {
+//
+// Passing a nil commentStore disables the Comments routes (all
+// /comments-related paths return 404).
+func NewServer(store *FileStore, commentStore *CommentStore, authToken string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -25,6 +29,13 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 	// The SDK handler implements all standard SPI routes.
 	// The processor resolves Y.js diffs to content before calling Store.
 	spiHandler := spi.NewHTTPHandler(store, processor)
+
+	// Comments handler (plain REST, no Y.js engine). Only mounted when a
+	// comment store is supplied.
+	var commentsHandler http.Handler
+	if commentStore != nil {
+		commentsHandler = spi.NewCommentsHTTPHandler(commentStore)
+	}
 
 	// Health is public — no auth required.
 	r.Get("/health", spiHandler.ServeHTTP)
@@ -49,6 +60,13 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 
 		// Extra endpoint not in the SDK.
 		r.Post("/documents/compact", compactHandler(store))
+
+		// Comments SPI (Comments SDK-handled). All /comments routes and
+		// /capabilities are registered via the SDK; we just delegate.
+		if commentsHandler != nil {
+			r.Get("/capabilities", commentsHandler.ServeHTTP)
+			r.Mount("/documents/comments", commentsHandler)
+		}
 	})
 
 	// Demo-only config endpoint — NOT part of the SPI contract.

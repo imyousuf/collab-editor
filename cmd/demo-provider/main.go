@@ -37,9 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	mentionDir := storagedemo.NewMentionDirectory(storagedemo.ToMentionCandidates(cfg.Comments.Users))
+	commentStore, err := storagedemo.NewCommentStore(cfg.Storage.BaseDir, mentionDir)
+	if err != nil {
+		slog.Error("failed to create comment store", "err", err)
+		os.Exit(1)
+	}
+
 	srv := &http.Server{
 		Addr:         cfg.Server.Addr,
-		Handler:      storagedemo.NewServer(store, cfg.Auth.Token),
+		Handler:      storagedemo.NewServer(store, commentStore, cfg.Auth.Token),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}

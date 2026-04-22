@@ -10,10 +10,24 @@ import (
 )
 
 type Config struct {
-	Server  ServerConfig  `koanf:"server"`
-	Storage StorageConfig `koanf:"storage"`
-	Auth    AuthConfig    `koanf:"auth"`
-	Log     LogConfig     `koanf:"log"`
+	Server   ServerConfig   `koanf:"server"`
+	Storage  StorageConfig  `koanf:"storage"`
+	Auth     AuthConfig     `koanf:"auth"`
+	Log      LogConfig      `koanf:"log"`
+	Comments CommentsConfig `koanf:"comments"`
+}
+
+// CommentsConfig configures the demo Comments provider — specifically the
+// in-memory mention directory seeded at startup.
+type CommentsConfig struct {
+	Users []UserDirectoryEntry `koanf:"users"`
+}
+
+// UserDirectoryEntry is a single seeded user for @-mention autocomplete.
+type UserDirectoryEntry struct {
+	UserID      string `koanf:"user_id"`
+	DisplayName string `koanf:"display_name"`
+	AvatarURL   string `koanf:"avatar_url"`
 }
 
 type ServerConfig struct {
