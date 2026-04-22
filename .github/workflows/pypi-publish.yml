@@ -49,9 +49,8 @@ jobs:
         with:
           packages-dir: packages/provider-sdk-py/dist/
 
-      - name: Publish to TestPyPI (dev)
+      - name: Publish to PyPI (dev)
         if: github.event_name == 'push'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/provider-sdk-py/dist/
-          repository-url: https://test.pypi.org/legacy/
