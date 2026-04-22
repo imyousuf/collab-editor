@@ -344,6 +344,103 @@ describe('CommentEngine — polling', () => {
       document.hasFocus = originalHasFocus;
     }
   });
+
+  test('pollOnce applies external PATCH by refetching and updating Y.Map', async () => {
+    const originalHasFocus = document.hasFocus;
+    document.hasFocus = () => true;
+    try {
+      const { engine, fetchMock, ydoc } = setup();
+      // Pre-populate a thread that was already open.
+      const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+      const id = engine.createThread(anchor, startRel, endRel, 'hi', null);
+      await engine.flushNow();
+      fetchMock.mockClear();
+
+      // First call: the poll response. Second call: GET thread detail.
+      fetchMock
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              changes: [
+                { thread_id: id, action: 'resolved', by: 'other', at: '2026-01-02T00:00:00Z' },
+              ],
+              server_time: '2026-01-02T00:00:01Z',
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              id,
+              document_id: 'doc.md',
+              anchor: { start: 0, end: 5, quoted_text: 'hello' },
+              status: 'resolved',
+              created_at: '2026-01-01T00:00:00Z',
+              resolved_at: '2026-01-02T00:00:00Z',
+              resolved_by: 'other',
+              comments: [],
+            }),
+            { status: 200 },
+          ),
+        );
+
+      await engine.pollOnce();
+
+      const raw = ydoc.getMap('comments').get(id) as any;
+      expect(raw?.status).toBe('resolved');
+      expect(raw?.resolvedBy).toBe('other');
+    } finally {
+      document.hasFocus = originalHasFocus;
+    }
+  });
+
+  test('pollOnce reconciliation does not feed back to the persistence loop', async () => {
+    const originalHasFocus = document.hasFocus;
+    document.hasFocus = () => true;
+    try {
+      const { engine, fetchMock, ydoc } = setup();
+      fetchMock.mockClear();
+
+      // External "create" event arriving via poll.
+      const id = 'external-thread-id';
+      fetchMock
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              changes: [
+                { thread_id: id, action: 'created', by: 'other', at: '2026-01-02T00:00:00Z' },
+              ],
+              server_time: '2026-01-02T00:00:01Z',
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              id,
+              document_id: 'doc.md',
+              anchor: { start: 0, end: 5, quoted_text: 'hello' },
+              status: 'open',
+              created_at: '2026-01-02T00:00:00Z',
+              comments: [],
+            }),
+            { status: 200 },
+          ),
+        );
+      await engine.pollOnce();
+      fetchMock.mockClear();
+
+      // No outstanding dirty work — persistence loop should not POST
+      // (that would echo the poll result back to the server).
+      await engine.flushNow();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(ydoc.getMap('comments').has(id)).toBe(true);
+    } finally {
+      document.hasFocus = originalHasFocus;
+    }
+  });
 });
 
 // --- helpers ---
