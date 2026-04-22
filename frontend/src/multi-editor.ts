@@ -661,6 +661,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       return;
     }
 
+    // Re-push blame segments after mode switch so the newly-visible editor
+    // shows highlights immediately. Without this, switching to WYSIWYG after
+    // editing in source shows no blame highlights until the next debounced update.
+    if (this._blameActive && this._blameEngine && this._binding && isBlameCapable(this._binding)) {
+      const segments = this._blameEngine.getLiveBlame();
+      this._binding.updateBlame(segments);
+    }
+
     // Update formatting state — available commands change with mode
     this._wireFormattingState();
 
