@@ -72,6 +72,10 @@ func ProcessStoreRequest(ctx context.Context, p Provider, documentID string, bod
 // --- Framework integration: ready-made HTTP handler ---
 
 // NewHTTPHandler returns an http.Handler that routes requests to the provider.
+// If a ProviderProcessor is provided, Store requests are resolved via the
+// Y.Doc engine before calling the provider. If processor is nil, requests
+// pass through directly (provider must handle content resolution itself).
+//
 // Mounts the standard SPI endpoints:
 //
 //	GET  /health
@@ -83,7 +87,11 @@ func ProcessStoreRequest(ctx context.Context, p Provider, documentID string, bod
 //	GET  /documents/versions/detail?path={documentId}&version={versionId}(if OptionalVersions)
 //	GET  /documents/clients?path={documentId}                            (if OptionalClientMappings)
 //	POST /documents/clients?path={documentId}                            (if OptionalClientMappings)
-func NewHTTPHandler(p Provider) http.Handler {
+func NewHTTPHandler(p Provider, processor ...*ProviderProcessor) http.Handler {
+	var proc *ProviderProcessor
+	if len(processor) > 0 {
+		proc = processor[0]
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -124,6 +132,10 @@ func NewHTTPHandler(p Provider) http.Handler {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 			return
+		}
+		// Resolve Y.js diffs to content via the processor
+		if proc != nil {
+			proc.ResolveStore(documentID, &req)
 		}
 		resp, err := p.Store(r.Context(), documentID, &req)
 		if err != nil {

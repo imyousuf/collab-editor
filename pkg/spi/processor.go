@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"sync"
+
+	ysync "github.com/reearth/ygo/sync"
 )
 
 // ProviderProcessor wraps a Provider and applies Y.js resolution.
@@ -65,8 +67,9 @@ func (pp *ProviderProcessor) ResolveStore(documentID string, req *StoreRequest) 
 		}
 
 		// Extract the Yjs update from the y-websocket frame.
-		// y-websocket frames start with: messageType (varuint) + syncType (varuint)
-		// For sync-update messages: messageType=0, syncType=2, then the raw Yjs update.
+		// Frame format: [messageType: varuint(0=sync)] [syncBody...]
+		// We skip the first byte (message type) and use ygo's sync protocol
+		// parser to extract the raw Yjs update from the sync body.
 		yjsUpdate := extractYjsUpdate(raw)
 		if yjsUpdate == nil {
 			continue
@@ -87,60 +90,34 @@ func (pp *ProviderProcessor) ResolveStore(documentID string, req *StoreRequest) 
 // extractYjsUpdate strips the y-websocket frame header and returns the raw
 // Yjs update bytes. Returns nil if the frame is not a sync-update message.
 //
-// y-websocket frame format (lib0 encoding):
-//
-//	[messageType: varuint] [syncType: varuint] [updateLength: varuint] [yjsUpdate: bytes...]
-//
-// For sync-update: messageType=0 (sync), syncType=2 (update)
+// y-websocket frame: [messageType: varuint] [syncBody...]
+// The relay only buffers sync-update messages (messageType=0, syncType=2).
+// We skip the first byte (messageType) and use ygo's sync protocol parser
+// (ReadSyncMessage) to extract the payload.
 func extractYjsUpdate(frame []byte) []byte {
 	if len(frame) < 3 {
 		return nil
 	}
 
-	// Read messageType (varuint)
-	msgType, n := readVaruint(frame)
-	if n == 0 || msgType != 0 { // 0 = sync message
+	// Skip the y-websocket messageType byte (0x00 = sync).
+	// The rest is the sync protocol body.
+	if frame[0] != 0x00 {
 		return nil
 	}
 
-	// Read syncType (varuint)
-	syncType, m := readVaruint(frame[n:])
-	if m == 0 || syncType != 2 { // 2 = sync update
+	// Use ygo's sync protocol parser to extract the update payload.
+	msgType, payload, err := ysync.ReadSyncMessage(frame[1:])
+	if err != nil {
 		return nil
 	}
 
-	// Read update length (varuint) — lib0 length-prefixed byte array
-	updateLen, k := readVaruint(frame[n+m:])
-	if k == 0 {
+	// Only accept sync-update (type 2) and sync-step2 (type 1) messages.
+	// Step1 contains a state vector, not an update.
+	if msgType != ysync.MsgSyncStep2 && msgType != ysync.MsgUpdate {
 		return nil
 	}
 
-	start := n + m + k
-	end := start + int(updateLen)
-	if end > len(frame) {
-		// If length doesn't match, try returning remaining bytes as fallback
-		return frame[start:]
-	}
-
-	return frame[start:end]
-}
-
-// readVaruint reads a variable-length unsigned integer.
-// Returns the value and number of bytes consumed (0 if invalid).
-func readVaruint(data []byte) (uint64, int) {
-	var value uint64
-	var shift uint
-	for i, b := range data {
-		value |= uint64(b&0x7F) << shift
-		if b&0x80 == 0 {
-			return value, i + 1
-		}
-		shift += 7
-		if shift > 63 {
-			return 0, 0 // overflow
-		}
-	}
-	return 0, 0 // incomplete
+	return payload
 }
 
 // detectMimeType returns the MIME type based on the document file extension.

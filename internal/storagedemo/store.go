@@ -65,56 +65,6 @@ func (fs *FileStore) AutoVersion() bool {
 	return fs.autoVersion
 }
 
-// contentMatchesLatestVersion checks if content is identical to the most recent version.
-func (fs *FileStore) contentMatchesLatestVersion(ctx context.Context, documentID string, content string) bool {
-	versions, err := fs.ListVersions(ctx, documentID)
-	if err != nil || len(versions) == 0 {
-		return false
-	}
-	// versions are sorted newest first
-	latest, err := fs.GetVersion(ctx, documentID, versions[0].ID)
-	if err != nil || latest == nil {
-		return false
-	}
-	return latest.Content == content
-}
-
-// resolveTopContributor finds the user who contributed the most updates in a batch
-// by counting ClientIDs and resolving via client mappings.
-func (fs *FileStore) resolveTopContributor(ctx context.Context, documentID string, updates []spi.UpdatePayload) string {
-	// Count updates per client ID
-	counts := make(map[uint64]int)
-	for _, u := range updates {
-		counts[u.ClientID]++
-	}
-
-	// Find the client with the most updates
-	var topClient uint64
-	var topCount int
-	for clientID, count := range counts {
-		if count > topCount {
-			topClient = clientID
-			topCount = count
-		}
-	}
-
-	// Look up the user name from client mappings
-	mappings, err := fs.GetClientMappings(ctx, documentID)
-	if err == nil {
-		for _, m := range mappings {
-			if m.ClientID == topClient {
-				return m.UserName
-			}
-		}
-	}
-
-	// Fallback: use "system" if no mapping found
-	if topClient != 0 {
-		return fmt.Sprintf("client-%d", topClient)
-	}
-	return "system"
-}
-
 // contentMatchesLatestVersionLocked checks if content is identical to the most recent version.
 // Must be called with fs.mu held.
 func (fs *FileStore) contentMatchesLatestVersionLocked(documentID string, content string) bool {
@@ -295,39 +245,6 @@ func (fs *FileStore) LoadDocument(docID string) (*spi.LoadResponse, error) {
 
 	return &spi.LoadResponse{
 		Content: content,
-	}, nil
-}
-
-// StoreUpdates appends Y.js update data to the document's .yjs journal file.
-// The original document file is NOT modified — it serves as the initial seed.
-func (fs *FileStore) StoreUpdates(docID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
-	if err := validateDocID(docID); err != nil {
-		return nil, err
-	}
-
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	if len(updates) == 0 {
-		return &spi.StoreResponse{Stored: 0}, nil
-	}
-
-	yjsFile := fs.yjsPath(docID)
-	f, err := os.OpenFile(yjsFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("opening yjs file: %w", err)
-	}
-	defer f.Close()
-
-	for _, u := range updates {
-		if _, err := fmt.Fprintln(f, u.Data); err != nil {
-			return nil, fmt.Errorf("writing yjs update: %w", err)
-		}
-	}
-
-	return &spi.StoreResponse{
-		Stored:            len(updates),
-		DuplicatesIgnored: 0,
 	}, nil
 }
 

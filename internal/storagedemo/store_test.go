@@ -1,10 +1,10 @@
 package storagedemo
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/imyousuf/collab-editor/pkg/spi"
 )
@@ -49,80 +49,74 @@ func TestLoadDocument_ExistingFile(t *testing.T) {
 	}
 }
 
-func TestStoreUpdates_AppendsToYjsFile(t *testing.T) {
+func TestStore_WritesVersionedContent(t *testing.T) {
 	store := newTestStore(t)
-	ts := time.Now().UTC()
 
 	// Create the original document file (seed content)
 	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Seed"), 0o644)
 
-	updates := []spi.UpdatePayload{
-		{Sequence: 1, Data: "AQID", ClientID: 100, CreatedAt: ts}, // base64 of some bytes
+	req := &spi.StoreRequest{
+		Content:  "# Updated Content",
+		MimeType: "text/markdown",
 	}
 
-	resp, err := store.StoreUpdates("doc.md", updates)
+	resp, err := store.Store(context.Background(), "doc.md", req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Stored != 1 {
-		t.Errorf("stored: got %d, want 1", resp.Stored)
+	if resp.Stored != 0 {
+		t.Errorf("stored: got %d, want 0 (no updates)", resp.Stored)
 	}
 
-	// Original file should NOT be modified
+	// Original seed file should NOT be modified
 	content, _ := os.ReadFile(filepath.Join(store.baseDir, "doc.md"))
 	if string(content) != "# Seed" {
-		t.Errorf("original file modified: got %q", string(content))
+		t.Errorf("seed file modified: got %q", string(content))
 	}
 
-	// .yjs file should exist with the update
-	yjsContent, _ := os.ReadFile(store.yjsPath("doc.md"))
-	if string(yjsContent) != "AQID\n" {
-		t.Errorf("yjs file: got %q, want %q", string(yjsContent), "AQID\n")
+	// Load should return the versioned content, not the seed
+	loadResp, err := store.LoadDocument("doc.md")
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestStoreUpdates_AppendsMultiple(t *testing.T) {
-	store := newTestStore(t)
-	ts := time.Now().UTC()
-
-	// First batch
-	store.StoreUpdates("doc.md", []spi.UpdatePayload{
-		{Sequence: 1, Data: "first", ClientID: 100, CreatedAt: ts},
-		{Sequence: 2, Data: "second", ClientID: 100, CreatedAt: ts},
-	})
-
-	// Second batch (appends)
-	store.StoreUpdates("doc.md", []spi.UpdatePayload{
-		{Sequence: 3, Data: "third", ClientID: 200, CreatedAt: ts},
-	})
-
-	yjsContent, _ := os.ReadFile(store.yjsPath("doc.md"))
-	if string(yjsContent) != "first\nsecond\nthird\n" {
-		t.Errorf("yjs file: got %q", string(yjsContent))
+	if loadResp.Content != "# Updated Content" {
+		t.Errorf("Load after Store: got %q, want %q", loadResp.Content, "# Updated Content")
 	}
 }
 
-func TestLoadDocument_WithYjsUpdates(t *testing.T) {
+func TestStore_MultipleStoresReturnLatest(t *testing.T) {
 	store := newTestStore(t)
 
-	// Seed file
 	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Seed"), 0o644)
 
-	// Store some Y.js updates
-	ts := time.Now().UTC()
-	store.StoreUpdates("doc.md", []spi.UpdatePayload{
-		{Sequence: 1, Data: "update1", ClientID: 100, CreatedAt: ts},
-		{Sequence: 2, Data: "update2", ClientID: 100, CreatedAt: ts},
-	})
+	// First store
+	store.Store(context.Background(), "doc.md", &spi.StoreRequest{Content: "Version 1"})
+
+	// Second store
+	store.Store(context.Background(), "doc.md", &spi.StoreRequest{Content: "Version 2"})
+
+	// Load should return the latest
+	resp, err := store.LoadDocument("doc.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content != "Version 2" {
+		t.Errorf("expected %q, got %q", "Version 2", resp.Content)
+	}
+}
+
+func TestLoadDocument_FallsBackToSeed(t *testing.T) {
+	store := newTestStore(t)
+
+	// Only seed file, no stores yet
+	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Seed"), 0o644)
 
 	resp, err := store.LoadDocument("doc.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// LoadDocument returns the latest resolved content (seed or versioned);
-	// Y.js updates are stored in the journal but not returned in LoadResponse.
-	if resp.Content == "" {
-		t.Error("expected non-empty content")
+	if resp.Content != "# Seed" {
+		t.Errorf("Content: got %q, want %q", resp.Content, "# Seed")
 	}
 }
 

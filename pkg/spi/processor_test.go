@@ -6,29 +6,18 @@ import (
 
 	"github.com/imyousuf/collab-editor/pkg/spi"
 	"github.com/reearth/ygo/crdt"
+	ysync "github.com/reearth/ygo/sync"
 )
 
 // makeYWebSocketFrame wraps a raw Yjs update in a y-websocket sync-update frame.
-// Format: [messageType=0] [syncType=2] [updateLength: varuint] [yjsUpdate...]
+// Uses ygo's sync.EncodeUpdate to produce a properly encoded sync message,
+// then prepends the y-websocket messageType byte (0x00 = sync).
 func makeYWebSocketFrame(yjsUpdate []byte) []byte {
-	// Encode length as varuint
-	lenBytes := encodeVaruint(uint64(len(yjsUpdate)))
-	frame := make([]byte, 2+len(lenBytes)+len(yjsUpdate))
-	frame[0] = 0x00 // messageType: sync
-	frame[1] = 0x02 // syncType: update
-	copy(frame[2:], lenBytes)
-	copy(frame[2+len(lenBytes):], yjsUpdate)
+	syncMsg := ysync.EncodeUpdate(yjsUpdate)
+	frame := make([]byte, 1+len(syncMsg))
+	frame[0] = 0x00 // y-websocket messageType: sync
+	copy(frame[1:], syncMsg)
 	return frame
-}
-
-func encodeVaruint(v uint64) []byte {
-	var buf []byte
-	for v >= 0x80 {
-		buf = append(buf, byte(v)|0x80)
-		v >>= 7
-	}
-	buf = append(buf, byte(v))
-	return buf
 }
 
 func TestProviderProcessor_ResolveStore(t *testing.T) {
