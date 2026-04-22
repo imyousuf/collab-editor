@@ -89,6 +89,9 @@ export class CommentEngine {
   private readonly _listeners = new Set<(threads: CommentThread[]) => void>();
   private readonly _dirty = new Set<string>();
   private readonly _lastPersisted = new Map<string, string>(); // threadId -> JSON snapshot
+  /** per-key retry counter; cap prevents infinite loops on 4xx. */
+  private readonly _retryCount = new Map<string, number>();
+  private static readonly MAX_PERSIST_RETRIES = 5;
 
   private _capabilities: CommentsCapabilities | null;
   private _persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -573,6 +576,7 @@ export class CommentEngine {
     this._listeners.clear();
     this._dirty.clear();
     this._lastPersisted.clear();
+    this._retryCount.clear();
   }
 
   // --- Internal: mutators ---
@@ -689,10 +693,31 @@ export class CommentEngine {
         this._lastPersisted.set(key, snapshot);
       } catch (err) {
         // Re-queue on failure so the next debounce retries. Network
-        // errors and 5xx both land here.
-        console.warn('comment-engine: persist failed, will retry', key, err);
+        // errors, 5xx, and 4xx all land here, but we cap attempts per
+        // key so a permanent 401/403/404/409 doesn't cause an infinite
+        // retry storm.
+        const attempts = (this._retryCount.get(key) ?? 0) + 1;
+        if (attempts >= CommentEngine.MAX_PERSIST_RETRIES) {
+          console.error(
+            'comment-engine: giving up after max retries',
+            key,
+            attempts,
+            err,
+          );
+          this._retryCount.delete(key);
+          continue;
+        }
+        this._retryCount.set(key, attempts);
+        console.warn(
+          'comment-engine: persist failed, will retry',
+          key,
+          `(attempt ${attempts}/${CommentEngine.MAX_PERSIST_RETRIES})`,
+          err,
+        );
         failed.push(key);
       }
+      // Happy path: clear the retry counter on success.
+      this._retryCount.delete(key);
     }
 
     if (failed.length > 0) {

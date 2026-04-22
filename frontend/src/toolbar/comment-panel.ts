@@ -106,8 +106,8 @@ export class CommentPanel extends LitElement {
       border-radius: 3px;
       font-size: 10px;
       text-transform: uppercase;
-      background: #e3f2fd;
-      color: #1565c0;
+      background: var(--me-suggest-badge-bg, #e3f2fd);
+      color: var(--me-suggest-badge-color, #1565c0);
     }
     .suggestion-diff {
       display: grid;
@@ -118,11 +118,17 @@ export class CommentPanel extends LitElement {
     .suggestion-diff .col {
       padding: 6px 8px;
       border-radius: 4px;
-      background: rgba(0, 0, 0, 0.03);
+      background: var(--me-suggest-col-bg, rgba(0, 0, 0, 0.03));
       word-break: break-word;
     }
-    .suggestion-diff .col.before { color: #b71c1c; text-decoration: line-through; }
-    .suggestion-diff .col.after { color: #1b5e20; text-decoration: underline; }
+    .suggestion-diff .col.before {
+      color: var(--me-suggest-before-color, #b71c1c);
+      text-decoration: line-through;
+    }
+    .suggestion-diff .col.after {
+      color: var(--me-suggest-after-color, #1b5e20);
+      text-decoration: underline;
+    }
     .suggestion-actions { display: flex; gap: 6px; }
 
     .comments {
@@ -388,7 +394,7 @@ function renderCommentContent(content: string): TemplateResult {
     }
     pieces.push(
       html`<span
-        style="background: #e3f2fd; color: #1565c0; padding: 0 4px; border-radius: 3px;"
+        style="background: var(--me-suggest-badge-bg, #e3f2fd); color: var(--me-suggest-badge-color, #1565c0); padding: 0 4px; border-radius: 3px;"
         data-mention-user-id=${match[2]}
       >@${match[1]}</span>`,
     );
