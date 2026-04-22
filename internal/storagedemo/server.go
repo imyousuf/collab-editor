@@ -19,8 +19,12 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
+	// Create processor with YDocEngine for Y.js content resolution.
+	processor := spi.NewProviderProcessor(store, spi.NewYgoEngine, "source")
+
 	// The SDK handler implements all standard SPI routes.
-	spiHandler := spi.NewHTTPHandler(store)
+	// The processor resolves Y.js diffs to content before calling Store.
+	spiHandler := spi.NewHTTPHandler(store, processor)
 
 	// Health is public — no auth required.
 	r.Get("/health", spiHandler.ServeHTTP)
