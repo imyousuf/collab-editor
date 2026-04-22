@@ -28,6 +28,30 @@ from .cache import DocCache
 from .blame import compute_blame_from_versions
 from .provider import Provider, ProviderProcessor
 from .handler import create_fastapi_router, serve
+from .comments import (
+    AddReplyRequest,
+    Comment,
+    CommentAnchor,
+    CommentChange,
+    CommentPollResponse,
+    CommentThread,
+    CommentThreadListEntry,
+    CommentsCapabilities,
+    CommentsProvider,
+    CreateCommentThreadRequest,
+    Mention,
+    MentionCandidate,
+    NewComment,
+    OperationSummary,
+    Reaction,
+    ReactionRequest,
+    Suggestion,
+    SuggestionDecisionRequest,
+    SuggestionView,
+    UpdateCommentRequest,
+    UpdateThreadStatusRequest,
+    create_comments_fastapi_router,
+)
 
 __all__ = [
     # Types
@@ -62,4 +86,27 @@ __all__ = [
     # Handler
     "create_fastapi_router",
     "serve",
+    # Comments
+    "CommentThread",
+    "CommentAnchor",
+    "Comment",
+    "Mention",
+    "Reaction",
+    "Suggestion",
+    "SuggestionView",
+    "OperationSummary",
+    "CommentThreadListEntry",
+    "CommentsCapabilities",
+    "CommentChange",
+    "CommentPollResponse",
+    "NewComment",
+    "CreateCommentThreadRequest",
+    "AddReplyRequest",
+    "UpdateThreadStatusRequest",
+    "UpdateCommentRequest",
+    "ReactionRequest",
+    "SuggestionDecisionRequest",
+    "MentionCandidate",
+    "CommentsProvider",
+    "create_comments_fastapi_router",
 ]
