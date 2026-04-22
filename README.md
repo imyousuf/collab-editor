@@ -13,6 +13,9 @@ A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agn
 - **Multi-instance scaling** — Redis pub/sub for horizontal scaling on Cloud Run / Kubernetes
 - **Version history** — Auto and manual snapshots, inline diff view, revert to any version
 - **Blame view** — Live blame (during editing, stored in localStorage) and version blame (read-only, computed from version history). Both modes independently configurable
+- **Inline comments** — Threaded comment discussions anchored to text ranges, with reactions, @-mentions, soft-delete, and focus-gated polling so external systems (chat bridges, IM integrations) can participate in-place
+- **Suggest Mode** — Google-Docs-style tracked suggestions. Toggle on, edit freely; changes accumulate in a local buffer and render as overlay decorations. Submit turns the buffer into a shared suggestion thread; reviewers Accept (applies the edit to the shared Y.Doc) or Reject
+- **Independent Comments Provider** — Separate REST SPI from Storage, configured by its own URL. Yjs-free: suggestion payloads flow through as opaque base64, so the provider can be written in any language without touching Y.js
 - **Dual transport** — WebSocket (direct browser) and gRPC (service-to-service, e.g., Socket.io bridge)
 - **Socket.io support** — Frontend `SocketIOProvider` for environments that use Socket.io instead of raw WebSocket
 

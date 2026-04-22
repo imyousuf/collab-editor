@@ -2,11 +2,12 @@
 
 ## Project Overview
 
-A collaborative editor system with four components:
-1. **Web Component** (`<multi-editor>`) — Lit-based custom element with Tiptap v3 (WYSIWYG) and CodeMirror 6 (source editing), using Yjs CRDTs for real-time collaboration. Built-in configurable toolbar, status bar, formatting buttons, document switcher, and collaborator presence.
-2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Persistence delegated to an external HTTP storage provider via the SDK.
+A collaborative editor system with five components:
+1. **Web Component** (`<multi-editor>`) — Lit-based custom element with Tiptap v3 (WYSIWYG) and CodeMirror 6 (source editing), using Yjs CRDTs for real-time collaboration. Built-in configurable toolbar, status bar, formatting buttons, document switcher, collaborator presence, threaded inline comments, and Google-Docs-style Suggest Mode.
+2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Persistence delegated to an external HTTP storage provider via the SDK; comments are proxied to an independent HTTP comments provider.
 3. **Storage Provider SPI** — Pluggable, **Yjs-agnostic** REST API contract for document persistence (any language, any backend). Providers receive resolved plain text content on Store and return it on Load. No Yjs concepts in the SPI — the SDKs handle all CRDT internals. Document IDs passed via `?path=` query parameter.
-4. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs that handle Yjs diff resolution, HTTP routing, and Y.Doc caching. Implementors only write `read`/`write` for their storage.
+4. **Comments Provider SPI** — Separate, **Yjs-free** REST API contract for threaded comments + suggestion persistence. A suggestion's `yjs_payload` is stored as an opaque base64 string; the provider never decodes it. Applying a suggestion on Accept is a frontend-only action (`Y.applyUpdate` on the base Y.Doc propagates the change via normal y-websocket sync).
+5. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs. Storage modules include Y.js engines for diff resolution + caching. Comments modules are plain REST + JSON — no Yjs dependency.
 
 ## Project Structure
 
@@ -14,10 +15,16 @@ A collaborative editor system with four components:
 cmd/relay/             — Go relay server entrypoint
 cmd/demo-provider/     — Demo storage provider (reference implementation using Go SDK)
 pkg/spi/               — Go provider SDK: Provider interface, ProviderProcessor, YDocEngine,
-                         NewHTTPHandler(), types
+                         NewHTTPHandler(), CommentsProvider + NewCommentsHTTPHandler, types
   ydoc_engine.go       — YDocEngine interface (swappable Y.js abstraction)
   ygo_engine.go        — YDocEngine implementation backed by reearth/ygo
   processor.go         — ProviderProcessor: applies Y.js diffs, resolves content
+  comments_types.go    — Comments SPI types (threads, comments, reactions,
+                         suggestions, capabilities, poll changes)
+  comments_provider.go — CommentsProvider + Optional{CommentEdit,Reactions,
+                         Suggestions,Mentions,CommentPoll} interfaces
+  comments_handler.go  — NewCommentsHTTPHandler — plain REST + JSON, no
+                         Yjs engine; conditional routes by type assertion
 pkg/relayapi/v1/       — gRPC proto definition + generated Go stubs
 internal/relay/        — Relay server: transport, rooms, peers, buffer, flush, metrics
   transport.go         — Transport/Conn/ConnectionHandler interfaces
@@ -28,12 +35,19 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
   redis_broker.go      — Redis pub/sub implementation
   flush_lock.go        — FlushLock interface (local + Redis implementations)
   redis_flush_lock.go  — Redis SETNX distributed flush lock
-internal/provider/     — HTTP client for the storage provider SPI
-internal/storagedemo/  — Demo filesystem-based storage provider
+internal/provider/     — HTTP clients for both SPIs
+  client.go            — Storage Provider client
+  comments_client.go   — Comments Provider client (used by the relay proxy)
+internal/storagedemo/  — Demo filesystem-based storage + comments provider
   store.go             — FileStore implementing spi.Provider + OptionalList
                          + OptionalVersions + OptionalClientMappings
-  server.go            — chi router: spi.NewHTTPHandler(store, processor) + bearer auth
-  config.go            — koanf config loader
+  comments_store.go    — CommentStore implementing spi.CommentsProvider +
+                         every Optional* sub-interface
+  mentions.go          — in-memory MentionDirectory for @-autocomplete
+  server.go            — chi router: spi.NewHTTPHandler(store, processor)
+                         + spi.NewCommentsHTTPHandler(commentStore) under /comments/*
+                         + bearer auth
+  config.go            — koanf config loader (adds comments.users)
   handler_compact.go   — Extra compact endpoint (not in SDK)
 packages/              — SDK packages
   provider-sdk-ts/     — TypeScript provider SDK (@imyousuf/collab-editor-provider)
@@ -42,27 +56,40 @@ packages/              — SDK packages
     src/handler.ts     — Express router factory + standalone server
     src/types.ts       — SPI types (including VersionEntry, BlameSegment, ClientUserMapping)
     src/blame.ts       — computeBlameFromVersions (LCS-based line diff)
+    src/comments/      — Comments SDK module (Yjs-free)
+      types.ts         — CommentThread, Suggestion, CommentsCapabilities, ...
+      provider.ts      — CommentsProvider interface + optional methods
+      handler.ts       — createCommentsExpressRouter with conditional routes
+      index.ts         — re-exports
   provider-sdk-py/     — Python provider SDK (collab-editor-provider)
     collab_editor_provider/engine.py    — pycrdt-based Yjs engine
     collab_editor_provider/provider.py  — Provider ABC + ProviderProcessor
     collab_editor_provider/handler.py   — FastAPI router factory
     collab_editor_provider/cache.py     — LRU DocCache
     collab_editor_provider/types.py     — Dataclass types (including version + blame types)
-    collab_editor_provider/blame.py    — compute_blame_from_versions
+    collab_editor_provider/blame.py     — compute_blame_from_versions
+    collab_editor_provider/comments/    — Comments SDK module (Yjs-free)
+      types.py                          — dataclasses for all comment/suggest/mention types
+      provider.py                       — CommentsProvider ABC + supports_* gating
+      handler.py                        — create_comments_fastapi_router
   grpc-client-ts/      — gRPC TypeScript client (@imyousuf/collab-editor-grpc)
     src/index.ts       — createRelayClient(), checkHealth(), PROTO_PATH
     proto/relay.proto  — Bundled proto file
 frontend/src/          — Lit web component (TypeScript)
   interfaces/          — IEditorBinding, IContentHandler, ICollaborationProvider,
-                         IFormattingCapability, IBlameCapability, ToolbarConfig, StatusBarConfig, events
+                         IFormattingCapability, IBlameCapability, ICommentCapability,
+                         ISuggestCapability, ToolbarConfig, StatusBarConfig, events
   bindings/            — DualMode, SourceOnly, PreviewSource + shared editor instances
-                         (all three implement IBlameCapability)
+                         (all three implement IBlameCapability + ICommentCapability)
   handlers/            — Markdown, HTML, PlainText content handlers
   collab/              — CollaborationProvider (y-websocket + SocketIOProvider),
                          TextBinding (Y.Text <-> Tiptap), BlameEngine (dual-mode),
                          BlameCoordinator, VersionCoordinator, VersionManager,
-                         diff-engine, blame-cm-extension, blame-tiptap-plugin
-  toolbar/             — Built-in editor-toolbar and editor-status-bar Lit components
+                         CommentEngine, CommentCoordinator, SuggestEngine,
+                         diff-engine, blame-cm-extension, blame-tiptap-plugin,
+                         comment-cm-extension, comment-tiptap-plugin
+  toolbar/             — Built-in editor-toolbar, editor-status-bar, version-panel,
+                         comment-panel, suggest-status Lit components
   react/               — React wrapper via @lit/react
   registry.ts          — EditorBindingFactory + MIME-type registration
   multi-editor.ts      — <multi-editor> Lit orchestrator (delegates to coordinators)
@@ -155,6 +182,18 @@ make test-e2e                               # Run ATR browser tests
 - Blame has two modes: **live blame** (captures Y.Doc update events in localStorage, resets on refresh) and **version blame** (read-only, blame segments from SPI). Developer controls which modes are available via `liveBlameEnabled`/`versionBlameEnabled` config
 - `IBlameCapability` is an optional interface — `DualModeBinding`, `SourceOnlyBinding`, and `PreviewSourceBinding` implement it. Checked via `isBlameCapable()` type guard
 - Relay proxies version/client-mapping API calls to the provider via `/api/documents/versions`, `/api/documents/clients` endpoints
+
+### Comments & Suggest Mode
+
+- **Comments Provider is independent from Storage Provider.** Separate SPI, separate URL, separate auth. The relay config gains a `comments.provider_url` section; when omitted, `/api/documents/comments/*` routes return 503 and the frontend reports `commentsSupported: false` via `/api/capabilities`.
+- **Comments SDKs are Yjs-free.** Suggestion `yjs_payload` is stored as an opaque base64 string. No `ProviderProcessor` / `YDocEngine` involvement. Providers can be written in any language with zero Yjs dependency.
+- **Capability-driven features.** Provider's `GET /capabilities` declares `comment_edit`, `comment_delete`, `reactions[]`, `mentions`, `suggestions`, `max_comment_size`, `poll_supported`. The editor adapts UI to whatever the provider supports; unsupported features produce no UI.
+- **Feature-flag dependency.** `suggestEnabled` is forced false when `commentsEnabled` is false — suggestions cannot exist without comments. Three gates stack: relay config (deployment), provider capabilities, client `CollaborationConfig`.
+- **Anchors** use `Y.RelativePosition` internally (robust to concurrent edits) and `{start, end, quoted_text}` on the wire. Orphaned threads (anchor lost after content changes) stay visible in the panel but without inline decoration.
+- **Suggest Mode** is a toggle. While active, the SuggestEngine creates a local Y.Doc buffer seeded from the base Y.Text. Editor writes route into the buffer; remote base updates replay onto the buffer so the local suggestion auto-rebases. On Submit, the buffer's delta relative to the enable-time state vector is encoded as the opaque `yjs_payload` + structured `SuggestionView` (summary + before/after + operation list).
+- **Accept** is a frontend-only action: `Y.applyUpdate(baseDoc, decodeBase64(yjs_payload))`. The Y.Text mutation propagates via normal y-websocket sync — peers see it as if the reviewer had typed it. The comments provider only records the status change (PATCH on decision).
+- `ICommentCapability` + `ISuggestCapability` are optional interfaces; all three bindings implement ICommentCapability, and the SuggestEngine is lifecycle-owned by `CommentCoordinator`.
+- Polling: per-document, focus-gated. `document.hasFocus()` skips network calls. Poll-driven Y.Map mutations are tagged with a `POLL_ORIGIN` so the debounced persistence loop doesn't echo them back to the SPI.
 
 ## Conventions
 

@@ -437,3 +437,99 @@ cd packages/grpc-client-ts && npm test     # 4 tests
 # Demo provider
 go test ./internal/storagedemo/...         # 31 tests
 ```
+
+---
+
+## Comments Provider (separate SPI)
+
+The Comments SPI is **independent** from the Storage SPI — different URL, different auth, no shared state. A single binary may implement both (the demo provider does), or they can be served by separate services. The Comments SDK is **Yjs-free**: a suggestion's `yjs_payload` is stored opaquely and flows through untouched. Applying the payload on Accept is a frontend-only action.
+
+### Go SDK
+
+```go
+import "github.com/imyousuf/collab-editor/pkg/spi"
+
+type MyComments struct { /* your storage */ }
+
+// CommentsProvider base interface (required):
+func (c *MyComments) Capabilities(ctx context.Context) (*spi.CommentsCapabilities, error) { ... }
+func (c *MyComments) ListCommentThreads(ctx context.Context, documentID string) ([]spi.CommentThreadListEntry, error) { ... }
+func (c *MyComments) GetCommentThread(ctx context.Context, documentID, threadID string) (*spi.CommentThread, error) { ... }
+func (c *MyComments) CreateCommentThread(ctx context.Context, documentID string, req *spi.CreateCommentThreadRequest) (*spi.CommentThread, error) { ... }
+func (c *MyComments) AddReply(ctx context.Context, documentID, threadID string, req *spi.AddReplyRequest) (*spi.Comment, error) { ... }
+func (c *MyComments) UpdateThreadStatus(ctx context.Context, documentID, threadID string, req *spi.UpdateThreadStatusRequest) (*spi.CommentThread, error) { ... }
+func (c *MyComments) DeleteCommentThread(ctx context.Context, documentID, threadID string) error { ... }
+
+// Optional interfaces — implement what you support; unimplemented routes
+// are NOT registered on the handler.
+//
+//   spi.OptionalCommentEdit    — per-comment edit / soft-delete
+//   spi.OptionalReactions      — emoji reactions on threads + comments
+//   spi.OptionalSuggestions    — Accept/Reject decisions
+//   spi.OptionalMentions       — @-mention search
+//   spi.OptionalCommentPoll    — external-change polling
+
+handler := spi.NewCommentsHTTPHandler(&MyComments{})
+http.ListenAndServe(":8082", handler)
+```
+
+### TypeScript SDK
+
+```typescript
+import {
+  CommentsProvider,
+  createCommentsExpressRouter,
+} from '@imyousuf/collab-editor-provider';
+
+class MyComments implements CommentsProvider {
+  async capabilities() { ... }
+  async listCommentThreads(documentId) { ... }
+  async getCommentThread(documentId, threadId) { ... }
+  async createCommentThread(documentId, req) { ... }
+  async addReply(documentId, threadId, req) { ... }
+  async updateThreadStatus(documentId, threadId, req) { ... }
+  async deleteCommentThread(documentId, threadId) { ... }
+
+  // Optional methods — their presence controls route registration:
+  //   updateComment / deleteComment
+  //   addReaction / removeReaction
+  //   decideSuggestion
+  //   searchMentions
+  //   pollCommentChanges
+}
+
+const app = express();
+app.use('/comments', createCommentsExpressRouter(new MyComments()));
+```
+
+### Python SDK
+
+```python
+from collab_editor_provider.comments import (
+    CommentsProvider,
+    create_comments_fastapi_router,
+)
+
+class MyComments(CommentsProvider):
+    async def capabilities(self): ...
+    async def list_comment_threads(self, document_id): ...
+    # ... base + optional methods ...
+
+# Optional capability detection uses `supports_*` properties that are
+# True when the subclass overrides the corresponding method.
+
+app = FastAPI()
+app.include_router(create_comments_fastapi_router(MyComments()))
+```
+
+### Relay configuration
+
+```yaml
+provider:
+  storage:
+    url: http://storage-provider:8081
+  comments:
+    url: http://comments-provider:8082   # optional; omit to disable comments
+```
+
+Omitting `comments.url` disables all `/api/documents/comments/*` proxy routes (they 503). The frontend discovers this via `GET /api/capabilities` which returns `{"comments_supported": false}`.
