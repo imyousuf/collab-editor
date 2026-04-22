@@ -33,8 +33,8 @@ export class SuggestStatus extends LitElement {
       border-radius: 50%;
       background: var(--me-suggest-color, #1f77b4);
     }
-    .label { font-weight: 600; color: #333; }
-    .count { color: #666; }
+    .label { font-weight: 600; color: var(--me-status-color, #333); }
+    .count { color: var(--me-comment-meta-color, #666); }
     button {
       border: 1px solid transparent;
       background: none;

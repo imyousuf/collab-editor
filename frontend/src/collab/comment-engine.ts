@@ -636,6 +636,7 @@ export class CommentEngine {
     const failed: string[] = [];
 
     for (const key of ids) {
+      let succeeded = false;
       try {
         if (key.startsWith('__deleted__:')) {
           const threadId = key.slice('__deleted__:'.length);
@@ -645,13 +646,20 @@ export class CommentEngine {
           );
           if (!resp.ok) throw new Error(`delete ${threadId}: ${resp.status}`);
           this._lastPersisted.delete(threadId);
+          succeeded = true;
           continue;
         }
 
         const stored = this._readThread(key);
-        if (!stored) continue;
+        if (!stored) {
+          succeeded = true;
+          continue;
+        }
         const snapshot = JSON.stringify(stored);
-        if (this._lastPersisted.get(key) === snapshot) continue;
+        if (this._lastPersisted.get(key) === snapshot) {
+          succeeded = true;
+          continue;
+        }
 
         const url = `/api/documents/comments?path=${encodeURIComponent(this._config.documentId)}`;
         const existingOnServer = this._lastPersisted.has(key);
@@ -691,6 +699,7 @@ export class CommentEngine {
         }
         if (!resp.ok) throw new Error(`persist ${key}: ${resp.status}`);
         this._lastPersisted.set(key, snapshot);
+        succeeded = true;
       } catch (err) {
         // Re-queue on failure so the next debounce retries. Network
         // errors, 5xx, and 4xx all land here, but we cap attempts per
@@ -715,9 +724,11 @@ export class CommentEngine {
           err,
         );
         failed.push(key);
+      } finally {
+        // Covers all success + no-op paths (including `continue` exits);
+        // the catch branch already handled its own retryCount updates.
+        if (succeeded) this._retryCount.delete(key);
       }
-      // Happy path: clear the retry counter on success.
-      this._retryCount.delete(key);
     }
 
     if (failed.length > 0) {

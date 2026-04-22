@@ -147,9 +147,9 @@ export class CommentPanel extends LitElement {
       margin-bottom: 4px;
     }
     .comment-author { font-weight: 600; color: var(--me-status-color, #333); }
-    .comment-meta { font-size: 11px; color: #888; }
+    .comment-meta { font-size: 11px; color: var(--me-comment-meta-color, #888); }
     .comment-body { white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
-    .comment-body.deleted { color: #aaa; font-style: italic; }
+    .comment-body.deleted { color: var(--me-comment-deleted-color, #aaa); font-style: italic; }
 
     .reply {
       padding: 10px 14px;
@@ -178,7 +178,7 @@ export class CommentPanel extends LitElement {
       bottom: 72px;
       left: 14px;
       right: 14px;
-      background: #fff;
+      background: var(--me-bg, #fff);
       border: 1px solid var(--me-toolbar-border, #d0d7de);
       border-radius: 6px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.08);
@@ -190,7 +190,7 @@ export class CommentPanel extends LitElement {
       padding: 6px 8px;
       cursor: pointer;
     }
-    .mention-item:hover { background: #f0f0f0; }
+    .mention-item:hover { background: var(--me-toolbar-button-hover-bg, #f0f0f0); }
   `;
 
   override render(): TemplateResult | typeof nothing {
