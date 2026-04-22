@@ -13,6 +13,11 @@ With FastAPI support:
 pip install collab-editor-provider[fastapi]
 ```
 
+For the latest dev build (published on every push to main):
+```bash
+pip install --pre collab-editor-provider
+```
+
 ## Quick Start
 
 ```python

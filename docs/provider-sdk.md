@@ -274,6 +274,9 @@ pip install collab-editor-provider
 
 # With FastAPI support:
 pip install collab-editor-provider[fastapi]
+
+# Latest dev build (published on every push to main):
+pip install --pre collab-editor-provider
 ```
 
 ### Interface
