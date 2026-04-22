@@ -249,6 +249,32 @@ describe('blame-tiptap-plugin', () => {
       editor.destroy();
     });
 
+    test('full-document segment with end exceeding PM text length is clamped', () => {
+      // Simulates the real scenario: Y.Text has raw markdown (e.g. "# Title\n\nBody")
+      // which is longer than the ProseMirror text content ("Title\nBody").
+      // The blame segment covers the full Y.Text length, but PM has fewer chars.
+      const editor = createEditor('<h1>Title</h1><p>Body</p>');
+      editor.registerPlugin(createBlamePlugin());
+
+      // PM text content is "Title\nBody" = 10 chars, but Y.Text markdown
+      // "# Title\n\nBody" = 14 chars. Segment end=14 exceeds PM's 10.
+      const segments: BlameSegment[] = [
+        { start: 0, end: 14, userName: 'alice' },
+      ];
+
+      const { tr } = editor.state;
+      tr.setMeta(blamePluginKey, segments);
+      editor.view.dispatch(tr);
+
+      const decoSet = blamePluginKey.getState(editor.state);
+      let count = 0;
+      decoSet?.find().forEach(() => count++);
+      // Should produce at least 1 decoration (clamped to PM doc end)
+      expect(count).toBeGreaterThan(0);
+
+      editor.destroy();
+    });
+
     test('decorations survive doc changes', () => {
       const editor = createEditor('<p>hello world</p>');
       editor.registerPlugin(createBlamePlugin());

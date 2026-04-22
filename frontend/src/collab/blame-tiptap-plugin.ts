@@ -58,9 +58,16 @@ function createDecorations(doc: any, segments: BlameSegment[]): DecorationSet {
   // Build a character offset -> PM position mapping by walking the doc
   const posMap = buildPositionMap(doc);
 
+  // The posMap's maximum character offset (used for clamping)
+  const maxCharOffset = Math.max(...posMap.keys());
+
   for (const seg of segments) {
     const from = posMap.get(seg.start);
-    const to = posMap.get(seg.end);
+    // Clamp seg.end to the max mapped offset — blame segments use Y.Text
+    // character offsets which may exceed ProseMirror's text content length
+    // (raw markdown vs rendered content).
+    const clampedEnd = Math.min(seg.end, maxCharOffset);
+    const to = posMap.get(clampedEnd);
     if (from === undefined || to === undefined) continue;
     if (from >= to) continue;
 
