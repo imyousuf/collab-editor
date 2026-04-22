@@ -25,8 +25,9 @@ describe('EditorToolbar', () => {
 
     const buttons = el.shadowRoot!.querySelectorAll('.mode-btn');
     expect(buttons.length).toBe(2);
-    expect(buttons[0].textContent).toBe('WYSIWYG');
-    expect(buttons[1].textContent).toBe('Source');
+    expect(buttons[0].getAttribute('title')).toBe('WYSIWYG');
+    expect(buttons[1].getAttribute('title')).toBe('Source');
+    expect(buttons[0].querySelector('svg')).not.toBeNull();
     expect(buttons[1].classList.contains('active')).toBe(true);
     expect(buttons[0].classList.contains('active')).toBe(false);
 
@@ -41,7 +42,7 @@ describe('EditorToolbar', () => {
 
     const buttons = el.shadowRoot!.querySelectorAll('.mode-btn');
     expect(buttons.length).toBe(2);
-    expect(buttons[0].textContent).toBe('Preview');
+    expect(buttons[0].getAttribute('title')).toBe('Preview');
     expect(buttons[0].classList.contains('active')).toBe(true);
 
     el.remove();

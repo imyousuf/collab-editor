@@ -12,11 +12,18 @@ import type { FormattingCommand, FormattingState } from '../interfaces/formattin
 import { emptyFormattingState } from '../interfaces/formatting.js';
 import type { ToolbarConfig, ToolbarGroup, DocumentEntry } from '../interfaces/toolbar-config.js';
 
-/** Label mappings for mode buttons */
+/** Mode button definitions with icons */
 const MODE_LABELS: Record<EditorMode, string> = {
   wysiwyg: 'WYSIWYG',
   source: 'Source',
   preview: 'Preview',
+};
+
+/** SVG icon paths for mode buttons (viewBox 0 0 24 24, stroke-based) */
+const MODE_ICONS: Record<EditorMode, string> = {
+  wysiwyg: 'M4 6h16M4 10h16M4 14h10M4 18h12',  // rich text lines
+  source: 'M16 18l6-6-6-6M8 6l-6 6 6 6',        // code brackets </>
+  preview: 'M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', // eye
 };
 
 /** Formatting button definitions */
@@ -111,8 +118,18 @@ export class EditorToolbar extends LitElement {
     }
 
     .mode-btn {
-      padding: 4px 12px;
+      padding: 4px;
+      min-width: 28px;
       min-height: 28px;
+    }
+    .mode-btn svg {
+      width: var(--me-icon-size, 18px);
+      height: var(--me-icon-size, 18px);
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .fmt-btn {
@@ -192,7 +209,7 @@ export class EditorToolbar extends LitElement {
             part="mode-button"
             title="${MODE_LABELS[m]}"
             @click=${() => this._dispatchModeSwitch(m)}
-          >${MODE_LABELS[m]}</button>
+          ><svg viewBox="0 0 24 24"><path d="${MODE_ICONS[m]}"/></svg></button>
         `)}
       </div>
     `;
