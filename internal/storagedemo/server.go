@@ -1,6 +1,7 @@
 package storagedemo
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -18,8 +19,12 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
 
+	// Create processor with YDocEngine for Y.js content resolution.
+	processor := spi.NewProviderProcessor(store, spi.NewYgoEngine, "source")
+
 	// The SDK handler implements all standard SPI routes.
-	spiHandler := spi.NewHTTPHandler(store)
+	// The processor resolves Y.js diffs to content before calling Store.
+	spiHandler := spi.NewHTTPHandler(store, processor)
 
 	// Health is public — no auth required.
 	r.Get("/health", spiHandler.ServeHTTP)
@@ -31,11 +36,40 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 		// Delegate standard SPI document endpoints to the SDK handler.
 		r.Post("/documents/load", spiHandler.ServeHTTP)
 		r.Post("/documents/updates", spiHandler.ServeHTTP)
-		r.Delete("/documents", spiHandler.ServeHTTP)
 		r.Get("/documents", spiHandler.ServeHTTP)
+
+		// Version history endpoints (SDK-handled).
+		r.Get("/documents/versions", spiHandler.ServeHTTP)
+		r.Post("/documents/versions", spiHandler.ServeHTTP)
+		r.Get("/documents/versions/detail", spiHandler.ServeHTTP)
+
+		// Client mapping endpoints (SDK-handled).
+		r.Get("/documents/clients", spiHandler.ServeHTTP)
+		r.Post("/documents/clients", spiHandler.ServeHTTP)
 
 		// Extra endpoint not in the SDK.
 		r.Post("/documents/compact", compactHandler(store))
+	})
+
+	// Demo-only config endpoint — NOT part of the SPI contract.
+	// Allows the demo app to toggle auto-version creation.
+	r.Get("/config/auto-version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"enabled": store.AutoVersion()})
+	})
+	r.Post("/config/auto-version", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+			return
+		}
+		store.SetAutoVersion(body.Enabled)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"enabled": body.Enabled})
 	})
 
 	return r
@@ -44,10 +78,13 @@ func NewServer(store *FileStore, authToken string) http.Handler {
 func bearerAuth(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			auth := r.Header.Get("Authorization")
-			if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
-				http.Error(w, `{"error":"unauthorized","message":"invalid or missing bearer token"}`, http.StatusUnauthorized)
-				return
+			// Skip auth when no token is configured (open dev mode)
+			if token != "" {
+				auth := r.Header.Get("Authorization")
+				if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") != token {
+					http.Error(w, `{"error":"unauthorized","message":"invalid or missing bearer token"}`, http.StatusUnauthorized)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 		})

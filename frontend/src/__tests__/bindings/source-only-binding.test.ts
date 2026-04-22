@@ -1,6 +1,7 @@
 import { describe, test, expect, vi } from 'vitest';
 import { editorBindingContractTests } from '../interfaces/editor-binding.contract.js';
 import { SourceOnlyBinding } from '../../bindings/source-only-binding.js';
+import { isBlameCapable } from '../../interfaces/blame.js';
 
 // Run interface contract tests
 editorBindingContractTests(
@@ -98,5 +99,29 @@ describe('SourceOnlyBinding unit tests', () => {
 
     binding.destroy();
     ydoc.destroy();
+  });
+
+  test('implements IBlameCapability', () => {
+    const binding = new SourceOnlyBinding('javascript');
+    expect(isBlameCapable(binding)).toBe(true);
+  });
+
+  test('blame enable/disable/update do not throw when mounted', async () => {
+    const binding = new SourceOnlyBinding('javascript');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const segments = [{ start: 0, end: 5, userName: 'alice' }];
+    expect(() => binding.enableBlame(segments)).not.toThrow();
+    expect(() => binding.updateBlame(segments)).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('blame enable/disable do not throw when unmounted', () => {
+    const binding = new SourceOnlyBinding('javascript');
+    expect(() => binding.enableBlame([])).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
   });
 });

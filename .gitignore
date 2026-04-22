@@ -1,8 +1,8 @@
 # Go
 bin/
 *.exe
-demo-provider
-relay
+/demo-provider
+/relay
 
 # Node
 node_modules/

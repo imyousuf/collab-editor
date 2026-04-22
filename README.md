@@ -11,6 +11,8 @@ A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agn
 - **60+ CSS custom properties** — Full theming with `--me-*` variables, `::part()` exports, dark mode, slot escape hatches
 - **Pluggable storage** — REST SPI for persistence with SDKs in Go, TypeScript, and Python
 - **Multi-instance scaling** — Redis pub/sub for horizontal scaling on Cloud Run / Kubernetes
+- **Version history** — Auto and manual snapshots, inline diff view, revert to any version
+- **Blame view** — Live blame (during editing, stored in localStorage) and version blame (read-only, computed from version history). Both modes independently configurable
 - **Dual transport** — WebSocket (direct browser) and gRPC (service-to-service, e.g., Socket.io bridge)
 - **Socket.io support** — Frontend `SocketIOProvider` for environments that use Socket.io instead of raw WebSocket
 

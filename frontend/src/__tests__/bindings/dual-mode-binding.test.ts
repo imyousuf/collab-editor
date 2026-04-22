@@ -3,6 +3,7 @@ import { editorBindingContractTests } from '../interfaces/editor-binding.contrac
 import { DualModeBinding } from '../../bindings/dual-mode-binding.js';
 import { HtmlContentHandler } from '../../handlers/html-handler.js';
 import { MarkdownContentHandler } from '../../handlers/markdown-handler.js';
+import { isBlameCapable } from '../../interfaces/blame.js';
 import { isFormattingCapable, emptyFormattingState } from '../../interfaces/formatting.js';
 import type { FormattingState } from '../../interfaces/formatting.js';
 
@@ -248,6 +249,78 @@ describe('DualModeBinding IFormattingCapability', () => {
     const source = container.querySelector('[part="source-container"]');
     expect(wysiwyg).not.toBeNull();
     expect(source).not.toBeNull();
+
+    binding.destroy();
+  });
+
+  test('implements IBlameCapability', () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler, 'markdown');
+    expect(isBlameCapable(binding)).toBe(true);
+  });
+
+  test('blame enable/disable/update do not throw when mounted', async () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler, 'markdown');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const segments = [{ start: 0, end: 5, userName: 'alice' }];
+    expect(() => binding.enableBlame(segments)).not.toThrow();
+    expect(() => binding.updateBlame(segments)).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('blame enable/disable do not throw when unmounted', () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler, 'markdown');
+    expect(() => binding.enableBlame([])).not.toThrow();
+    expect(() => binding.disableBlame()).not.toThrow();
+  });
+
+  test('blame updateBlame works after switchMode (re-push on mode switch)', async () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler, 'markdown');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const segments = [{ start: 0, end: 5, userName: 'alice' }];
+    binding.enableBlame(segments);
+
+    // Switch to WYSIWYG — blame plugin should still be registered
+    await binding.switchMode('wysiwyg');
+    expect(() => binding.updateBlame(segments)).not.toThrow();
+
+    // Switch back to source — blame should still work
+    await binding.switchMode('source');
+    expect(() => binding.updateBlame(segments)).not.toThrow();
+
+    binding.destroy();
+  });
+
+  test('blame persists through multiple mode switches', async () => {
+    const handler = new MarkdownContentHandler();
+    const binding = new DualModeBinding(handler, 'markdown');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const segments = [{ start: 0, end: 3, userName: 'bob' }];
+    binding.enableBlame(segments);
+
+    // Multiple round-trips should not corrupt blame state
+    await binding.switchMode('wysiwyg');
+    await binding.switchMode('source');
+    await binding.switchMode('wysiwyg');
+    await binding.switchMode('source');
+
+    // updateBlame should still function after multiple switches
+    const updated = [{ start: 0, end: 3, userName: 'bob' }, { start: 4, end: 8, userName: 'carol' }];
+    expect(() => binding.updateBlame(updated)).not.toThrow();
+
+    // disableBlame should cleanly stop after all the switches
+    expect(() => binding.disableBlame()).not.toThrow();
 
     binding.destroy();
   });

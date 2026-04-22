@@ -4,7 +4,7 @@
 import type { FormattingCommand } from './formatting.js';
 
 /** Groups of buttons that can be shown/hidden independently */
-export type ToolbarGroup = 'mode-switcher' | 'formatting' | 'document-switcher';
+export type ToolbarGroup = 'mode-switcher' | 'formatting' | 'document-switcher' | 'blame';
 
 /** A document entry for the built-in document switcher */
 export interface DocumentEntry {
@@ -54,4 +54,7 @@ export interface StatusBarConfig {
 
   /** Show collaborator presence indicators. Default: true */
   showPresence?: boolean;
+
+  /** Show version history controls. Default: true when versions are available */
+  showVersionHistory?: boolean;
 }

@@ -44,7 +44,7 @@ func TestLoad_NoContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Snapshot != nil || resp.Updates != nil {
+	if resp.Content != "" || resp.MimeType != "" {
 		t.Errorf("expected empty response for new doc")
 	}
 }
@@ -72,9 +72,11 @@ func TestStore_Accepted(t *testing.T) {
 
 	c := NewClient(ClientConfig{BaseURL: srv.URL, StoreTimeout: 5 * time.Second})
 	ts := time.Now().UTC()
-	resp, err := c.Store(context.Background(), "doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "d1", ClientID: 100, CreatedAt: ts},
-		{Sequence: 2, Data: "d2", ClientID: 200, CreatedAt: ts},
+	resp, err := c.Store(context.Background(), "doc-1", &spi.StoreRequest{
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "d1", ClientID: 100, CreatedAt: ts},
+			{Sequence: 2, Data: "d2", ClientID: 200, CreatedAt: ts},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,30 +98,17 @@ func TestStore_PartialFailure(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(ClientConfig{BaseURL: srv.URL, StoreTimeout: 5 * time.Second})
-	resp, err := c.Store(context.Background(), "doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "d1", CreatedAt: time.Now()},
-		{Sequence: 2, Data: "d2", CreatedAt: time.Now()},
+	resp, err := c.Store(context.Background(), "doc-1", &spi.StoreRequest{
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "d1", CreatedAt: time.Now()},
+			{Sequence: 2, Data: "d2", CreatedAt: time.Now()},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.Stored != 1 || len(resp.Failed) != 1 {
 		t.Errorf("expected partial failure: stored=%d, failed=%d", resp.Stored, len(resp.Failed))
-	}
-}
-
-func TestDelete(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "DELETE" || r.URL.Path != "/documents" || r.URL.Query().Get("path") != "doc-1" {
-			t.Errorf("unexpected: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	c := NewClient(ClientConfig{BaseURL: srv.URL, StoreTimeout: 5 * time.Second})
-	if err := c.Delete(context.Background(), "doc-1"); err != nil {
-		t.Fatal(err)
 	}
 }
 

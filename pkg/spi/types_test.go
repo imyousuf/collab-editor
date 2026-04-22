@@ -1,6 +1,7 @@
 package spi
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
@@ -31,17 +32,9 @@ func TestLoadRequestJSON(t *testing.T) {
 }
 
 func TestLoadResponseJSON(t *testing.T) {
-	ts := time.Date(2026, 4, 14, 10, 30, 0, 0, time.UTC)
 	resp := LoadResponse{
-		Snapshot: &SnapshotPayload{
-			Data:        "base64data",
-			StateVector: "base64sv",
-			CreatedAt:   ts,
-			UpdateCount: 847,
-		},
-		Updates: []UpdatePayload{
-			{Sequence: 848, Data: "upd1", ClientID: 123, CreatedAt: ts},
-		},
+		Content:  "# Hello World",
+		MimeType: "text/markdown",
 		Metadata: &DocumentMetadata{
 			Format:      "markdown",
 			Language:    "javascript",
@@ -60,14 +53,11 @@ func TestLoadResponseJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got.Snapshot.Data != "base64data" {
-		t.Errorf("snapshot data: got %q", got.Snapshot.Data)
+	if got.Content != "# Hello World" {
+		t.Errorf("content: got %q", got.Content)
 	}
-	if got.Snapshot.UpdateCount != 847 {
-		t.Errorf("update count: got %d", got.Snapshot.UpdateCount)
-	}
-	if len(got.Updates) != 1 || got.Updates[0].Sequence != 848 {
-		t.Errorf("updates: got %+v", got.Updates)
+	if got.MimeType != "text/markdown" {
+		t.Errorf("mime_type: got %q", got.MimeType)
 	}
 	if got.Metadata.Format != "markdown" {
 		t.Errorf("metadata format: got %q", got.Metadata.Format)
@@ -81,11 +71,14 @@ func TestLoadResponseNoContent(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Snapshot != nil {
-		t.Error("expected nil snapshot")
+	if got.Content != "" {
+		t.Error("expected empty content")
 	}
-	if got.Updates != nil {
-		t.Error("expected nil updates")
+	if got.MimeType != "" {
+		t.Error("expected empty mime_type")
+	}
+	if got.Metadata != nil {
+		t.Error("expected nil metadata")
 	}
 }
 
@@ -139,6 +132,39 @@ func TestStoreResponseJSON(t *testing.T) {
 		}
 		if got.Failed[0].Sequence != 1043 || got.Failed[0].Error != "storage_full" {
 			t.Errorf("failed: %+v", got.Failed[0])
+		}
+	})
+
+	t.Run("with version_created", func(t *testing.T) {
+		ts := time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC)
+		resp := StoreResponse{
+			Stored: 2,
+			VersionCreated: &VersionListEntry{
+				ID:        "v-auto-1",
+				CreatedAt: ts,
+				Type:      "auto",
+				Creator:   "system",
+			},
+		}
+		data, _ := json.Marshal(resp)
+		var got StoreResponse
+		json.Unmarshal(data, &got)
+		if got.VersionCreated == nil {
+			t.Fatal("expected version_created")
+		}
+		if got.VersionCreated.ID != "v-auto-1" {
+			t.Errorf("version id: got %q", got.VersionCreated.ID)
+		}
+		if got.VersionCreated.Type != "auto" {
+			t.Errorf("version type: got %q", got.VersionCreated.Type)
+		}
+	})
+
+	t.Run("without version_created omits field", func(t *testing.T) {
+		resp := StoreResponse{Stored: 1}
+		data, _ := json.Marshal(resp)
+		if bytes.Contains(data, []byte("version_created")) {
+			t.Error("version_created should be omitted when nil")
 		}
 	})
 }

@@ -237,4 +237,31 @@ describe('CollaborationProvider unit tests', () => {
     };
     expect(config.transport).toBeUndefined();
   });
+
+  test('onAppMessage registers and unregisters callbacks', () => {
+    const provider = new CollaborationProvider();
+    const callback = vi.fn();
+    const unsub = provider.onAppMessage(callback);
+
+    // Simulate an app message by accessing private callbacks
+    (provider as any)._appMessageCallbacks.forEach((cb: any) => cb({ type: 'test' }));
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback.mock.calls[0][0]).toEqual({ type: 'test' });
+
+    // Unsubscribe
+    unsub();
+    callback.mockClear();
+    (provider as any)._appMessageCallbacks.forEach((cb: any) => cb({ type: 'test2' }));
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  test('onAppMessage callbacks are cleared on destroy', () => {
+    const provider = new CollaborationProvider();
+    const callback = vi.fn();
+    provider.onAppMessage(callback);
+
+    provider.destroy();
+
+    expect((provider as any)._appMessageCallbacks.size).toBe(0);
+  });
 });

@@ -6,6 +6,8 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import type { IContentHandler } from '../interfaces/content-handler.js';
+import { createBlamePlugin, blamePluginKey } from '../collab/blame-tiptap-plugin.js';
+import type { BlameSegment } from '../collab/blame-engine.js';
 
 export interface WysiwygEditorOptions {
   readonly: boolean;
@@ -22,6 +24,7 @@ export class WysiwygEditorInstance {
   private _contentHandler: IContentHandler;
   private _updateCallbacks: Set<(content: string) => void> = new Set();
   private _ready: Promise<void>;
+  private _blameActive = false;
 
   constructor(
     container: HTMLElement,
@@ -85,6 +88,37 @@ export class WysiwygEditorInstance {
   onUpdate(callback: (content: string) => void): () => void {
     this._updateCallbacks.add(callback);
     return () => this._updateCallbacks.delete(callback);
+  }
+
+  enableBlame(segments: BlameSegment[]): void {
+    if (!this._blameActive) {
+      // Register the blame ProseMirror plugin
+      this._editor.registerPlugin(createBlamePlugin());
+      this._blameActive = true;
+    }
+    // Push segments via transaction meta
+    const { tr } = this._editor.state;
+    tr.setMeta(blamePluginKey, segments);
+    this._editor.view.dispatch(tr);
+  }
+
+  disableBlame(): void {
+    if (this._blameActive) {
+      // Clear decorations then unregister
+      const { tr } = this._editor.state;
+      tr.setMeta(blamePluginKey, null);
+      this._editor.view.dispatch(tr);
+      this._editor.unregisterPlugin(blamePluginKey);
+      this._blameActive = false;
+    }
+  }
+
+  updateBlame(segments: BlameSegment[]): void {
+    if (this._blameActive) {
+      const { tr } = this._editor.state;
+      tr.setMeta(blamePluginKey, segments);
+      this._editor.view.dispatch(tr);
+    }
   }
 
   destroy(): void {

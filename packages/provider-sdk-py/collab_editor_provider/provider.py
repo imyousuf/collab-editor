@@ -10,17 +10,21 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from .types import (
+    BlameSegment,
+    ClientUserMapping,
     ContentResult,
+    CreateVersionRequest,
     DocumentListEntry,
     HealthResponse,
     LoadResponse,
     StoreResponse,
     UpdatePayload,
+    VersionEntry,
+    VersionListEntry,
 )
 from .engine import (
     apply_base64_update,
     create_doc_with_content,
-    encode_doc_state,
     extract_text,
 )
 from .cache import DocCache
@@ -62,10 +66,6 @@ class Provider(ABC):
         """Load previously stored raw Yjs updates for replay."""
         raise NotImplementedError
 
-    async def delete_content(self, document_id: str) -> None:
-        """Delete a document."""
-        raise NotImplementedError
-
     async def list_documents(self) -> list[DocumentListEntry]:
         """List available documents."""
         raise NotImplementedError
@@ -89,12 +89,48 @@ class Provider(ABC):
         return type(self).load_raw_updates is not Provider.load_raw_updates
 
     @property
-    def supports_delete(self) -> bool:
-        return type(self).delete_content is not Provider.delete_content
-
-    @property
     def supports_list(self) -> bool:
         return type(self).list_documents is not Provider.list_documents
+
+    # --- Version history (optional) ---
+
+    async def list_versions(self, document_id: str) -> list[VersionListEntry]:
+        """List versions for a document."""
+        raise NotImplementedError
+
+    async def create_version(
+        self, document_id: str, req: CreateVersionRequest
+    ) -> VersionListEntry:
+        """Create a new version snapshot."""
+        raise NotImplementedError
+
+    async def get_version(
+        self, document_id: str, version_id: str
+    ) -> VersionEntry | None:
+        """Get a full version with content and blame."""
+        raise NotImplementedError
+
+    # --- Client mappings (optional) ---
+
+    async def get_client_mappings(
+        self, document_id: str
+    ) -> list[ClientUserMapping]:
+        """Get client-ID-to-user mappings for blame."""
+        raise NotImplementedError
+
+    async def store_client_mappings(
+        self, document_id: str, mappings: list[ClientUserMapping]
+    ) -> None:
+        """Store client-ID-to-user mappings."""
+        raise NotImplementedError
+
+    @property
+    def supports_versions(self) -> bool:
+        return type(self).list_versions is not Provider.list_versions
+
+    @property
+    def supports_client_mappings(self) -> bool:
+        return type(self).get_client_mappings is not Provider.get_client_mappings
 
 
 class ProviderProcessor:
@@ -107,76 +143,121 @@ class ProviderProcessor:
     async def process_load(self, document_id: str) -> LoadResponse:
         result = await self._provider.read_content(document_id)
 
-        # If provider stores raw updates, return them for replay
-        raw_updates: list[UpdatePayload] = []
-        if self._provider.supports_load_raw_updates:
-            raw_updates = await self._provider.load_raw_updates(document_id)
-
-        if raw_updates:
-            return LoadResponse(
-                content=result.content,
-                mime_type=result.mime_type,
-                updates=raw_updates,
-            )
-
-        # Otherwise encode current content as a Yjs state snapshot
+        # Seed the cache from provider content so subsequent stores work
         doc = self._cache.get(document_id)
         if doc is None:
             doc = create_doc_with_content(result.content)
             self._cache.set(document_id, doc)
 
-        state_data = encode_doc_state(doc)
         return LoadResponse(
             content=result.content,
             mime_type=result.mime_type,
-            updates=[UpdatePayload(sequence=0, data=state_data, client_id=0)],
         )
 
     async def process_store(
-        self, document_id: str, updates: list[UpdatePayload]
+        self,
+        document_id: str,
+        updates: list[UpdatePayload],
+        content: str | None = None,
+        mime_type: str | None = None,
     ) -> StoreResponse:
         if not updates:
             return StoreResponse(stored=0)
+
+        # Always resolve content via the pycrdt Y.Doc engine
+        doc = self._cache.get(document_id)
+        if doc is None:
+            result = await self._provider.read_content(document_id)
+            doc = create_doc_with_content(result.content)
+            self._cache.set(document_id, doc)
+
+        applied = 0
+        for update in updates:
+            if apply_base64_update(doc, update.data):
+                applied += 1
+
+        resolved_text = extract_text(doc)
+
+        # Determine the mime_type: prefer what was sent in the request,
+        # fall back to what the provider already has
+        if mime_type is None:
+            result = await self._provider.read_content(document_id)
+            mime_type = result.mime_type
 
         # Store raw updates if provider supports it
         if self._provider.supports_raw_updates:
             await self._provider.store_raw_updates(document_id, updates)
 
-        # Apply diffs and write resolved text if provider supports it
+        # Write resolved text if provider supports it
         if self._provider.supports_write_content:
-            doc = self._cache.get(document_id)
-            if doc is None:
-                result = await self._provider.read_content(document_id)
-                doc = create_doc_with_content(result.content)
-                self._cache.set(document_id, doc)
-
-            applied = 0
-            for update in updates:
-                if apply_base64_update(doc, update.data):
-                    applied += 1
-
-            resolved_text = extract_text(doc)
-            result = await self._provider.read_content(document_id)
             await self._provider.write_content(
-                document_id, resolved_text, result.mime_type
+                document_id, resolved_text, mime_type
             )
-            return StoreResponse(stored=applied)
 
-        # If only store_raw_updates is implemented, count all as stored
-        return StoreResponse(stored=len(updates))
+        return StoreResponse(stored=applied)
 
     async def process_health(self) -> HealthResponse:
         return await self._provider.on_health()
-
-    async def process_delete(self, document_id: str) -> None:
-        self._cache.delete(document_id)
-        if self._provider.supports_delete:
-            await self._provider.delete_content(document_id)
 
     async def process_list(self) -> list[DocumentListEntry]:
         if self._provider.supports_list:
             return await self._provider.list_documents()
         return []
+
+    async def process_list_versions(
+        self, document_id: str
+    ) -> list[VersionListEntry]:
+        if self._provider.supports_versions:
+            return await self._provider.list_versions(document_id)
+        return []
+
+    async def process_create_version(
+        self, document_id: str, req: CreateVersionRequest
+    ) -> VersionListEntry | None:
+        if self._provider.supports_versions:
+            return await self._provider.create_version(document_id, req)
+        return None
+
+    async def process_get_version(
+        self, document_id: str, version_id: str
+    ) -> VersionEntry | None:
+        if not self._provider.supports_versions:
+            return None
+        entry = await self._provider.get_version(document_id, version_id)
+        if entry is None:
+            return None
+
+        # Auto-compute blame from version history if not populated
+        if not entry.blame and self._provider.supports_versions:
+            all_versions = await self._provider.list_versions(document_id)
+            sorted_versions = sorted(
+                [v for v in all_versions if v.created_at <= entry.created_at],
+                key=lambda v: v.created_at,
+            )
+            if sorted_versions:
+                full_versions: list[VersionEntry] = []
+                for v in sorted_versions:
+                    full = await self._provider.get_version(document_id, v.id)
+                    if full is not None:
+                        full_versions.append(full)
+                if full_versions:
+                    from .blame import compute_blame_from_versions
+                    entry.blame = compute_blame_from_versions(full_versions)
+
+        return entry
+
+    async def process_get_client_mappings(
+        self, document_id: str
+    ) -> list[ClientUserMapping]:
+        if self._provider.supports_client_mappings:
+            return await self._provider.get_client_mappings(document_id)
+        return []
+
+    async def process_store_client_mappings(
+        self, document_id: str, mappings: list[ClientUserMapping]
+    ) -> None:
+        if self._provider.supports_client_mappings:
+            await self._provider.store_client_mappings(document_id, mappings)
 
     def clear_cache(self) -> None:
         self._cache.clear()

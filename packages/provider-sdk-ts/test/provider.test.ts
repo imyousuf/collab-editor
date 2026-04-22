@@ -28,9 +28,6 @@ function createMockProvider(): Provider & {
     async writeContent(documentId: string, content: string, mimeType: string) {
       store.set(documentId, { content, mimeType });
     },
-    async deleteContent(documentId: string) {
-      store.delete(documentId);
-    },
     async listDocuments() {
       return Array.from(store.entries()).map(([name, { mimeType }]) => ({
         name,
@@ -56,8 +53,7 @@ describe('ProviderProcessor', () => {
     const resp = await processor.processLoad('doc1');
     expect(resp.content).toBe('# Hello');
     expect(resp.mime_type).toBe('text/markdown');
-    expect(resp.updates).toBeDefined();
-    expect(resp.updates!.length).toBe(1);
+    expect((resp as any).updates).toBeUndefined();
   });
 
   test('processLoad returns empty for nonexistent doc', async () => {
@@ -120,17 +116,7 @@ describe('ProviderProcessor', () => {
 
     const loadResp = await processor.processLoad('doc1');
     expect(loadResp.content).toBe('hello');
-    expect(loadResp.updates!.length).toBe(1);
-  });
-
-  test('processDelete clears cache and calls provider', async () => {
-    mockProvider._store.set('doc1', { content: 'hello', mimeType: 'text/plain' });
-
-    // Load to populate cache
-    await processor.processLoad('doc1');
-
-    await processor.processDelete('doc1');
-    expect(mockProvider._store.has('doc1')).toBe(false);
+    expect((loadResp as any).updates).toBeUndefined();
   });
 
   test('processList delegates to provider', async () => {

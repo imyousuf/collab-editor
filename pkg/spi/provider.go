@@ -14,28 +14,43 @@ import (
 //  1. Framework handler: use NewHTTPHandler() or GinHandler() to get a ready-made router
 //  2. Manual: call ProcessLoadRequest() / ProcessStoreRequest() from your own controller
 type Provider interface {
-	// Load returns the document content and any stored Yjs updates.
+	// Load returns the latest resolved document content.
 	// Called when a new room is created and needs to bootstrap state.
 	Load(ctx context.Context, documentID string) (*LoadResponse, error)
 
-	// Store persists a batch of incremental Yjs updates.
-	// Called periodically by the relay's flush loop.
-	Store(ctx context.Context, documentID string, updates []UpdatePayload) (*StoreResponse, error)
+	// Store persists the document state. Receives the resolved content
+	// (latest full text) and optionally raw Y.js updates.
+	// Called periodically by the relay's flush loop via the SDK processor.
+	Store(ctx context.Context, documentID string, req *StoreRequest) (*StoreResponse, error)
 
 	// Health returns the provider's health status.
 	Health(ctx context.Context) (*HealthResponse, error)
-}
-
-// OptionalDelete is an optional interface that providers can implement
-// to support document deletion.
-type OptionalDelete interface {
-	Delete(ctx context.Context, documentID string) error
 }
 
 // OptionalList is an optional interface that providers can implement
 // to support listing documents.
 type OptionalList interface {
 	ListDocuments(ctx context.Context) ([]DocumentListEntry, error)
+}
+
+// OptionalVersions is an optional interface that providers can implement
+// to support document version history.
+type OptionalVersions interface {
+	// ListVersions returns lightweight version summaries (no content or blame).
+	ListVersions(ctx context.Context, documentID string) ([]VersionListEntry, error)
+
+	// CreateVersion stores a new version snapshot.
+	CreateVersion(ctx context.Context, documentID string, req *CreateVersionRequest) (*VersionListEntry, error)
+
+	// GetVersion returns a full version with content and blame data.
+	GetVersion(ctx context.Context, documentID string, versionID string) (*VersionEntry, error)
+}
+
+// OptionalClientMappings is an optional interface that providers can implement
+// to persist Yjs client-ID-to-user mappings (for blame attribution across sessions).
+type OptionalClientMappings interface {
+	GetClientMappings(ctx context.Context, documentID string) ([]ClientUserMapping, error)
+	StoreClientMappings(ctx context.Context, documentID string, mappings []ClientUserMapping) error
 }
 
 // --- Manual integration: process request bodies directly ---
@@ -51,20 +66,32 @@ func ProcessStoreRequest(ctx context.Context, p Provider, documentID string, bod
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, err
 	}
-	return p.Store(ctx, documentID, req.Updates)
+	return p.Store(ctx, documentID, &req)
 }
 
 // --- Framework integration: ready-made HTTP handler ---
 
 // NewHTTPHandler returns an http.Handler that routes requests to the provider.
+// If a ProviderProcessor is provided, Store requests are resolved via the
+// Y.Doc engine before calling the provider. If processor is nil, requests
+// pass through directly (provider must handle content resolution itself).
+//
 // Mounts the standard SPI endpoints:
 //
 //	GET  /health
 //	POST /documents/load?path={documentId}
 //	POST /documents/updates?path={documentId}
-//	DELETE /documents?path={documentId}        (if provider implements OptionalDelete)
-//	GET  /documents                            (if provider implements OptionalList)
-func NewHTTPHandler(p Provider) http.Handler {
+//	GET  /documents                                                      (if OptionalList)
+//	GET  /documents/versions?path={documentId}                           (if OptionalVersions)
+//	POST /documents/versions?path={documentId}                           (if OptionalVersions)
+//	GET  /documents/versions/detail?path={documentId}&version={versionId}(if OptionalVersions)
+//	GET  /documents/clients?path={documentId}                            (if OptionalClientMappings)
+//	POST /documents/clients?path={documentId}                            (if OptionalClientMappings)
+func NewHTTPHandler(p Provider, processor ...*ProviderProcessor) http.Handler {
+	var proc *ProviderProcessor
+	if len(processor) > 0 {
+		proc = processor[0]
+	}
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +133,11 @@ func NewHTTPHandler(p Provider) http.Handler {
 			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 			return
 		}
-		resp, err := p.Store(r.Context(), documentID, req.Updates)
+		// Resolve Y.js diffs to content via the processor
+		if proc != nil {
+			proc.ResolveStore(documentID, &req)
+		}
+		resp, err := p.Store(r.Context(), documentID, &req)
 		if err != nil {
 			slog.Error("provider store failed", "doc", documentID, "err", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -119,22 +150,6 @@ func NewHTTPHandler(p Provider) http.Handler {
 		writeJSON(w, status, resp)
 	})
 
-	// Optional: DELETE
-	if dp, ok := p.(OptionalDelete); ok {
-		mux.HandleFunc("DELETE /documents", func(w http.ResponseWriter, r *http.Request) {
-			documentID := r.URL.Query().Get("path")
-			if documentID == "" {
-				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
-				return
-			}
-			if err := dp.Delete(r.Context(), documentID); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-		})
-	}
-
 	// Optional: LIST
 	if lp, ok := p.(OptionalList); ok {
 		mux.HandleFunc("GET /documents", func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +159,102 @@ func NewHTTPHandler(p Provider) http.Handler {
 				return
 			}
 			writeJSON(w, http.StatusOK, map[string]any{"documents": docs})
+		})
+	}
+
+	// Optional: VERSIONS
+	if vp, ok := p.(OptionalVersions); ok {
+		mux.HandleFunc("GET /documents/versions", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			versions, err := vp.ListVersions(r.Context(), documentID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"versions": versions})
+		})
+
+		mux.HandleFunc("POST /documents/versions", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			var req CreateVersionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+				return
+			}
+			entry, err := vp.CreateVersion(r.Context(), documentID, &req)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusCreated, entry)
+		})
+
+		mux.HandleFunc("GET /documents/versions/detail", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			versionID := r.URL.Query().Get("version")
+			if versionID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'version' query parameter")
+				return
+			}
+			entry, err := vp.GetVersion(r.Context(), documentID, versionID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if entry == nil {
+				writeError(w, http.StatusNotFound, "version not found")
+				return
+			}
+			writeJSON(w, http.StatusOK, entry)
+		})
+	}
+
+	// Optional: CLIENT MAPPINGS
+	if cmp, ok := p.(OptionalClientMappings); ok {
+		mux.HandleFunc("GET /documents/clients", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			mappings, err := cmp.GetClientMappings(r.Context(), documentID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"mappings": mappings})
+		})
+
+		mux.HandleFunc("POST /documents/clients", func(w http.ResponseWriter, r *http.Request) {
+			documentID := r.URL.Query().Get("path")
+			if documentID == "" {
+				writeError(w, http.StatusBadRequest, "missing 'path' query parameter")
+				return
+			}
+			var body struct {
+				Mappings []ClientUserMapping `json:"mappings"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+				return
+			}
+			if err := cmp.StoreClientMappings(r.Context(), documentID, body.Mappings); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"stored": len(body.Mappings)})
 		})
 	}
 

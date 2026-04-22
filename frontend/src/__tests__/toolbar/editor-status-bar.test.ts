@@ -199,4 +199,55 @@ describe('EditorStatusBar', () => {
 
     el.remove();
   });
+
+  test('shows version section with save button when versionsAvailable', async () => {
+    const el = createElement();
+    el.versionsAvailable = true;
+    el.versionCount = 0;
+    await waitUpdate(el);
+
+    // Should show "Versions" text (no count) and a Save button
+    const indicator = el.shadowRoot!.querySelector('.version-indicator');
+    expect(indicator).not.toBeNull();
+    expect(indicator?.textContent).toContain('Versions');
+
+    const saveBtn = el.shadowRoot!.querySelector('.version-save-btn');
+    expect(saveBtn).not.toBeNull();
+
+    el.remove();
+  });
+
+  test('version quick-save button dispatches version-quick-save event', async () => {
+    const el = createElement();
+    el.versionsAvailable = true;
+    el.versionCount = 3;
+    await waitUpdate(el);
+
+    let fired = false;
+    el.addEventListener('version-quick-save', () => { fired = true; });
+
+    const saveBtn = el.shadowRoot!.querySelector('.version-save-btn') as HTMLElement;
+    saveBtn?.click();
+
+    expect(fired).toBe(true);
+
+    el.remove();
+  });
+
+  test('version count shows correct text', async () => {
+    const el = createElement();
+    el.versionsAvailable = true;
+    el.versionCount = 1;
+    await waitUpdate(el);
+
+    const indicator = el.shadowRoot!.querySelector('.version-indicator');
+    expect(indicator?.textContent).toContain('1 version');
+    expect(indicator?.textContent).not.toContain('versions');
+
+    el.versionCount = 5;
+    await waitUpdate(el);
+    expect(indicator?.textContent).toContain('5 versions');
+
+    el.remove();
+  });
 });

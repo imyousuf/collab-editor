@@ -4,16 +4,20 @@
 
 A collaborative editor system with four components:
 1. **Web Component** (`<multi-editor>`) — Lit-based custom element with Tiptap v3 (WYSIWYG) and CodeMirror 6 (source editing), using Yjs CRDTs for real-time collaboration. Built-in configurable toolbar, status bar, formatting buttons, document switcher, and collaborator presence.
-2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Persistence delegated to an external HTTP storage provider.
-3. **Storage Provider SPI** — Pluggable REST API contract for document persistence (any language, any backend). Document IDs passed via `?path=` query parameter.
-4. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs that handle Yjs diff application, HTTP routing, and Y.Doc caching. Implementors only write `read`/`write` for their storage.
+2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Persistence delegated to an external HTTP storage provider via the SDK.
+3. **Storage Provider SPI** — Pluggable, **Yjs-agnostic** REST API contract for document persistence (any language, any backend). Providers receive resolved plain text content on Store and return it on Load. No Yjs concepts in the SPI — the SDKs handle all CRDT internals. Document IDs passed via `?path=` query parameter.
+4. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs that handle Yjs diff resolution, HTTP routing, and Y.Doc caching. Implementors only write `read`/`write` for their storage.
 
 ## Project Structure
 
 ```
 cmd/relay/             — Go relay server entrypoint
 cmd/demo-provider/     — Demo storage provider (reference implementation using Go SDK)
-pkg/spi/               — Go provider SDK: Provider interface, NewHTTPHandler(), types
+pkg/spi/               — Go provider SDK: Provider interface, ProviderProcessor, YDocEngine,
+                         NewHTTPHandler(), types
+  ydoc_engine.go       — YDocEngine interface (swappable Y.js abstraction)
+  ygo_engine.go        — YDocEngine implementation backed by reearth/ygo
+  processor.go         — ProviderProcessor: applies Y.js diffs, resolves content
 pkg/relayapi/v1/       — gRPC proto definition + generated Go stubs
 internal/relay/        — Relay server: transport, rooms, peers, buffer, flush, metrics
   transport.go         — Transport/Conn/ConnectionHandler interfaces
@@ -26,8 +30,9 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
   redis_flush_lock.go  — Redis SETNX distributed flush lock
 internal/provider/     — HTTP client for the storage provider SPI
 internal/storagedemo/  — Demo filesystem-based storage provider
-  store.go             — FileStore implementing spi.Provider + OptionalDelete + OptionalList
-  server.go            — chi router: spi.NewHTTPHandler() + bearer auth + compact endpoint
+  store.go             — FileStore implementing spi.Provider + OptionalList
+                         + OptionalVersions + OptionalClientMappings
+  server.go            — chi router: spi.NewHTTPHandler(store, processor) + bearer auth
   config.go            — koanf config loader
   handler_compact.go   — Extra compact endpoint (not in SDK)
 packages/              — SDK packages
@@ -35,27 +40,32 @@ packages/              — SDK packages
     src/engine.ts      — Yjs diff extraction, Y.Doc management, LRU cache
     src/provider.ts    — Provider interface + ProviderProcessor
     src/handler.ts     — Express router factory + standalone server
-    src/types.ts       — SPI types
+    src/types.ts       — SPI types (including VersionEntry, BlameSegment, ClientUserMapping)
+    src/blame.ts       — computeBlameFromVersions (LCS-based line diff)
   provider-sdk-py/     — Python provider SDK (collab-editor-provider)
     collab_editor_provider/engine.py    — pycrdt-based Yjs engine
     collab_editor_provider/provider.py  — Provider ABC + ProviderProcessor
     collab_editor_provider/handler.py   — FastAPI router factory
     collab_editor_provider/cache.py     — LRU DocCache
-    collab_editor_provider/types.py     — Dataclass types
+    collab_editor_provider/types.py     — Dataclass types (including version + blame types)
+    collab_editor_provider/blame.py    — compute_blame_from_versions
   grpc-client-ts/      — gRPC TypeScript client (@imyousuf/collab-editor-grpc)
     src/index.ts       — createRelayClient(), checkHealth(), PROTO_PATH
     proto/relay.proto  — Bundled proto file
 frontend/src/          — Lit web component (TypeScript)
   interfaces/          — IEditorBinding, IContentHandler, ICollaborationProvider,
-                         IFormattingCapability, ToolbarConfig, StatusBarConfig, events
+                         IFormattingCapability, IBlameCapability, ToolbarConfig, StatusBarConfig, events
   bindings/            — DualMode, SourceOnly, PreviewSource + shared editor instances
+                         (all three implement IBlameCapability)
   handlers/            — Markdown, HTML, PlainText content handlers
   collab/              — CollaborationProvider (y-websocket + SocketIOProvider),
-                         TextBinding (Y.Text <-> Tiptap)
+                         TextBinding (Y.Text <-> Tiptap), BlameEngine (dual-mode),
+                         BlameCoordinator, VersionCoordinator, VersionManager,
+                         diff-engine, blame-cm-extension, blame-tiptap-plugin
   toolbar/             — Built-in editor-toolbar and editor-status-bar Lit components
   react/               — React wrapper via @lit/react
   registry.ts          — EditorBindingFactory + MIME-type registration
-  multi-editor.ts      — <multi-editor> Lit orchestrator
+  multi-editor.ts      — <multi-editor> Lit orchestrator (delegates to coordinators)
 test/fixtures/         — 10 shared JSON test fixtures generated from canonical yjs
 config/                — Default YAML configs for relay and provider
 docker/                — Dockerfiles and nginx config
@@ -80,11 +90,11 @@ make proto              # Generate gRPC stubs (requires buf CLI)
 # Frontend
 cd frontend && npm install && npm run dev   # Dev server on :5173
 cd frontend && npm run build                # Production build (tsc + vite)
-cd frontend && npm test                     # Run vitest (269 tests)
+cd frontend && npm test                     # Run vitest (400 tests)
 
 # Provider SDKs
-cd packages/provider-sdk-ts && npm test     # 41 tests
-cd packages/provider-sdk-py && pytest -v    # 52 tests
+cd packages/provider-sdk-ts && npm test     # 50 tests
+cd packages/provider-sdk-py && pytest -v    # 60 tests
 cd packages/grpc-client-ts && npm test      # 4 tests
 
 # Docker (full stack)
@@ -93,6 +103,18 @@ make test-e2e                               # Run ATR browser tests
 ```
 
 ## Key Architecture Concepts
+
+### SPI Contract (Yjs-agnostic)
+
+- **`Store`** receives resolved plain text content AND raw Y.js diffs. The SDK resolves the diffs to content before calling the provider. Providers receive both and store however they see fit.
+- **`Load`** returns only resolved plain text content. No Y.js updates, no CRDT binary. Providers just return the latest document text.
+- The SDK handles all Yjs complexity internally — providers never see Y.Doc, Y.Text, or binary updates in the SPI contract.
+- All three SDKs (Go, TS, Python) have Y.js engines that apply diffs and extract text:
+  - Go SDK: `YDocEngine` interface backed by `reearth/ygo` (pure Go, swappable)
+  - TS SDK: `yjs` library with `DocCache` LRU
+  - Python SDK: `pycrdt` library with `DocCache` LRU
+
+### Editor Architecture
 
 - `Y.Text` is the canonical CRDT type — all modes (WYSIWYG, source, preview) bind to the same Y.Text
 - DualModeBinding keeps both Tiptap (WYSIWYG) and CodeMirror (source) mounted simultaneously, toggling visibility on mode switch. Both bind to Y.Text: CodeMirror via yCollab, Tiptap via TextBinding (diff-based sync)
@@ -105,10 +127,34 @@ make test-e2e                               # Run ATR browser tests
 - MIME-type registry pattern: `EditorBindingFactory` maps MIME types to binding constructors (DualModeBinding, SourceOnlyBinding, PreviewSourceBinding) and content handlers
 - `IFormattingCapability` is an optional interface — only DualModeBinding implements it. Checked via `isFormattingCapable()` type guard
 - CSS custom properties (`--me-*`) define all visual values. Dark mode via `:host([theme="dark"])`. `::part()` exports on all structural sections
+
+### Multi-editor Coordinators
+
+- `multi-editor.ts` is a thin lifecycle orchestrator that delegates domain concerns to coordinators
+- `BlameCoordinator` — owns BlameEngine lifecycle, debounced Y.Doc update observer, blame toggle, mode switch re-push
+- `VersionCoordinator` — owns VersionManager lifecycle, version panel events, version view mode, diff
+- Coordinators use `attach(binding, ydoc, ...)` / `detach()` pattern for clean lifecycle management
+
+### Scaling & Persistence
+
 - Multi-instance scaling via Redis pub/sub: broker peer pattern adds a synthetic peer to each room that relays messages cross-instance without changing Room code
 - Distributed flush lock (Redis SETNX + Lua release) ensures only one instance flushes per document
-- Provider SDKs support dual storage: raw updates mode (append-only journal) and/or resolved text mode (SDK applies Yjs diffs, gives you plain text)
-- The demo provider implements `spi.Provider`, `spi.OptionalDelete`, and `spi.OptionalList`, using `spi.NewHTTPHandler()` for SPI routing with chi middleware for bearer auth
+- The relay's flush loop sends raw Y.js diffs to the SDK. The SDK's `ProviderProcessor` resolves them to content via `YDocEngine` before calling the provider's `Store`
+- On room creation, the relay loads content from the provider via `Load`. Since Load returns no Y.js updates, the room starts with empty history. The frontend seeds from `initialContent` when Y.Text is empty after a 200ms settle window
+
+### Demo Provider Storage
+
+- The demo provider implements `spi.Provider`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, using `spi.NewHTTPHandler(store, processor)` for SPI routing
+- Store writes resolved content to `.versions/{docID}/{versionID}/{docName}` and appends a `VERSION:` pointer to the journal file
+- Load reads the last `VERSION:` pointer from the journal and returns that file's content. Falls back to the seed file when no versions exist
+- Seed files are never modified — they serve as the initial baseline
+
+### Version History & Blame
+
+- Version history: SPI is Yjs-agnostic — `VersionEntry` returns plain text content, not CRDT binary. SDKs compute blame from version content chain (LCS-based line diff). Demo provider stores versions as JSON files in `.versions/{docID}/`
+- Blame has two modes: **live blame** (captures Y.Doc update events in localStorage, resets on refresh) and **version blame** (read-only, blame segments from SPI). Developer controls which modes are available via `liveBlameEnabled`/`versionBlameEnabled` config
+- `IBlameCapability` is an optional interface — `DualModeBinding`, `SourceOnlyBinding`, and `PreviewSourceBinding` implement it. Checked via `isBlameCapable()` type guard
+- Relay proxies version/client-mapping API calls to the provider via `/api/documents/versions`, `/api/documents/clients` endpoints
 
 ## Conventions
 
@@ -126,3 +172,4 @@ make test-e2e                               # Run ATR browser tests
 - CSS custom properties use `--me-` prefix (me = multi-editor)
 - All provider SDKs share the same 10 JSON test fixtures (`test/fixtures/`) generated from canonical yjs for cross-language consistency
 - SPI endpoints use `?path=` query parameter for document IDs (not path segments)
+- `YDocEngine` interface in Go SDK abstracts the Y.js implementation — swap `reearth/ygo` for another library by implementing `YDocEngine`

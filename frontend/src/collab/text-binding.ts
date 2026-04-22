@@ -5,9 +5,12 @@
  *   Y.Text → TextBinding → Tiptap  (remote changes, initial load)
  *   Tiptap → TextBinding → Y.Text  (local user edits only)
  *
- * Echo prevention: uses a content snapshot to detect if Tiptap's
- * serialized output matches what was last written from Y.Text.
- * No timers, no flags, no race conditions.
+ * Echo prevention uses two layers:
+ * 1. Guard flag (_applyingFromYText) — blocks the debounce from starting
+ *    during Y.Text→Tiptap application, so setContent() cannot trigger a
+ *    write-back cycle.
+ * 2. Content snapshot (_lastAppliedFromYText) — if a debounce does fire,
+ *    compares serialized output against the last snapshot to detect echoes.
  */
 import type { Editor } from '@tiptap/core';
 import * as Y from 'yjs';
@@ -17,7 +20,8 @@ export class TextBinding {
   private _editor: Editor;
   private _ytext: Y.Text;
   private _handler: IContentHandler;
-  private _editorHandler: (() => void) | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _editorHandler: ((...args: any[]) => void) | null = null;
   private _ytextObserver: ((event: Y.YTextEvent) => void) | null = null;
   private _syncTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly _origin = Symbol('TextBinding');
@@ -30,6 +34,23 @@ export class TextBinding {
    */
   private _lastAppliedFromYText: string = '';
 
+  /**
+   * Guard flag: true while we are applying Y.Text content to Tiptap.
+   * Prevents Tiptap's 'update' event (fired synchronously by setContent)
+   * from starting a debounce timer that would write normalized content
+   * back to Y.Text — which corrupts the source editor's view.
+   */
+  private _applyingFromYText = false;
+
+  /**
+   * When true, the Tiptap→Y.Text sync direction is completely disabled.
+   * Used when the source (CodeMirror) editor is active — yCollab handles
+   * CodeMirror→Y.Text sync, so TextBinding should only sync Y.Text→Tiptap
+   * (one-directional) to keep the hidden Tiptap up to date.
+   */
+  private _paused = false;
+  private _ytextPendingApply = false;
+
   constructor(editor: Editor, ytext: Y.Text, handler: IContentHandler) {
     this._editor = editor;
     this._ytext = ytext;
@@ -40,8 +61,15 @@ export class TextBinding {
       this._applyYTextToEditor();
     }
 
-    // Tiptap → Y.Text: debounced
-    this._editorHandler = () => {
+    // Tiptap → Y.Text: debounced, only for genuine user edits in WYSIWYG mode
+    this._editorHandler = ({ transaction }: any) => {
+      // Skip metadata-only transactions (e.g., blame plugin decoration updates).
+      if (transaction && !transaction.docChanged) return;
+      // Skip when paused (source mode active — yCollab handles sync).
+      if (this._paused) return;
+      // Skip events triggered by our own Y.Text→Tiptap application.
+      if (this._applyingFromYText) return;
+
       if (this._syncTimer) clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
         this._applyEditorToYText();
@@ -49,11 +77,23 @@ export class TextBinding {
     };
     this._editor.on('update', this._editorHandler);
 
-    // Y.Text → Tiptap: immediate for remote changes
+    // Y.Text → Tiptap: deferred to microtask to avoid running setContent
+    // inside a Y.Doc transaction (which disrupts CodeMirror keystroke processing).
+    // When paused (source mode), skip entirely — sync on unpause instead.
+    this._ytextPendingApply = false;
     this._ytextObserver = (event) => {
       // Skip our own writes
       if (event.transaction.origin === this._origin) return;
-      this._applyYTextToEditor();
+      // When paused, skip Y.Text→Tiptap sync entirely.
+      // The hidden Tiptap will get a single sync when setPaused(false) is called.
+      if (this._paused) return;
+      if (!this._ytextPendingApply) {
+        this._ytextPendingApply = true;
+        queueMicrotask(() => {
+          this._ytextPendingApply = false;
+          this._applyYTextToEditor();
+        });
+      }
     };
     this._ytext.observe(this._ytextObserver);
   }
@@ -69,6 +109,28 @@ export class TextBinding {
     }, this._origin);
     this._applyContentToEditor(text);
     this._lastAppliedFromYText = this._getSerializedContent();
+  }
+
+  /**
+   * Pause/resume the Tiptap→Y.Text sync direction.
+   * When paused, Y.Text→Tiptap still works (keeps hidden Tiptap up to date),
+   * but Tiptap changes are NOT written back to Y.Text.
+   * Call with `true` when source mode is active (yCollab handles sync).
+   * Call with `false` when switching back to WYSIWYG mode.
+   */
+  setPaused(paused: boolean): void {
+    this._paused = paused;
+    if (paused) {
+      // Cancel any pending Tiptap→Y.Text write-back
+      if (this._syncTimer) {
+        clearTimeout(this._syncTimer);
+        this._syncTimer = null;
+      }
+    } else {
+      // Sync current Y.Text to Tiptap on unpause — the hidden
+      // Tiptap may have missed changes while paused.
+      this._applyYTextToEditor();
+    }
   }
 
   private _applyEditorToYText(): void {
@@ -98,9 +160,16 @@ export class TextBinding {
       this._syncTimer = null;
     }
 
+    // Guard: setContent fires Tiptap's 'update' event synchronously.
+    // The flag prevents our handler from starting a debounce timer that
+    // would write normalized content back to Y.Text (corrupting source).
+    this._applyingFromYText = true;
     this._applyContentToEditor(text);
+    this._applyingFromYText = false;
+
     // Store what Tiptap WILL serialize (after normalization) as the snapshot.
-    // This prevents the echo: Y.Text → Tiptap → (normalized) → back to Y.Text.
+    // This is a secondary echo prevention: if a debounce somehow starts,
+    // _applyEditorToYText() will see the match and skip the write.
     this._lastAppliedFromYText = this._getSerializedContent();
   }
 

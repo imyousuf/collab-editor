@@ -29,9 +29,6 @@ class MockProvider(Provider):
     ) -> None:
         self.store[document_id] = (content, mime_type)
 
-    async def delete_content(self, document_id: str) -> None:
-        self.store.pop(document_id, None)
-
     async def list_documents(self) -> list[DocumentListEntry]:
         return [
             DocumentListEntry(name=k, mime_type=v[1])
@@ -75,7 +72,7 @@ class TestLoadEndpoint:
         data = resp.json()
         assert data["content"] == "# Hello"
         assert data["mime_type"] == "text/markdown"
-        assert "updates" in data
+        assert "updates" not in data
 
     async def test_load_missing_path(self, client: AsyncClient) -> None:
         resp = await client.post("/documents/load")
@@ -108,17 +105,6 @@ class TestStoreEndpoint:
         )
         assert resp.status_code == 202
         assert resp.json()["stored"] == 0
-
-
-class TestDeleteEndpoint:
-    async def test_delete_document(
-        self, mock_provider: MockProvider, client: AsyncClient
-    ) -> None:
-        mock_provider.store["doc1"] = ("hello", "text/plain")
-        resp = await client.delete("/documents?path=doc1")
-        assert resp.status_code == 200
-        assert resp.json()["deleted"] is True
-        assert "doc1" not in mock_provider.store
 
 
 class TestListEndpoint:

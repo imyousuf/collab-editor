@@ -13,8 +13,10 @@ import type {
 } from '../interfaces/editor-binding.js';
 import { SourceEditorInstance } from './_source-editor.js';
 import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
+import type { IBlameCapability } from '../interfaces/blame.js';
+import type { BlameSegment } from '../collab/blame-engine.js';
 
-export class SourceOnlyBinding implements IEditorBinding {
+export class SourceOnlyBinding implements IEditorBinding, IBlameCapability {
   readonly supportedModes: readonly EditorMode[] = ['source'];
 
   private _activeMode: EditorMode | null = null;
@@ -99,6 +101,20 @@ export class SourceOnlyBinding implements IEditorBinding {
   onRemoteChange(callback: RemoteChangeCallback): () => void {
     this._remoteCallbacks.add(callback);
     return () => this._remoteCallbacks.delete(callback);
+  }
+
+  // --- IBlameCapability ---
+
+  enableBlame(segments: BlameSegment[]): void {
+    this._editor?.enableBlame(segments);
+  }
+
+  disableBlame(): void {
+    this._editor?.disableBlame();
+  }
+
+  updateBlame(segments: BlameSegment[]): void {
+    this._editor?.updateBlame(segments);
   }
 
   destroy(): void {

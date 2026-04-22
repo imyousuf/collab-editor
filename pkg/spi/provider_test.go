@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testProvider implements Provider for testing.
@@ -26,9 +27,9 @@ func (p *testProvider) Load(_ context.Context, documentID string) (*LoadResponse
 	return p.loadResp, p.loadErr
 }
 
-func (p *testProvider) Store(_ context.Context, documentID string, updates []UpdatePayload) (*StoreResponse, error) {
+func (p *testProvider) Store(_ context.Context, documentID string, req *StoreRequest) (*StoreResponse, error) {
 	p.lastStoreDocID = documentID
-	p.lastStoreUpdates = updates
+	p.lastStoreUpdates = req.Updates
 	return p.storeResp, p.storeErr
 }
 
@@ -60,9 +61,6 @@ func TestHTTPHandler_Load(t *testing.T) {
 		loadResp: &LoadResponse{
 			Content:  "# Hello",
 			MimeType: "text/markdown",
-			Updates: []UpdatePayload{
-				{Sequence: 1, Data: "AQEHA3NvdXJjZQ=="},
-			},
 		},
 	}
 	handler := NewHTTPHandler(p)
@@ -80,8 +78,8 @@ func TestHTTPHandler_Load(t *testing.T) {
 	if resp.Content != "# Hello" {
 		t.Errorf("content: got %q", resp.Content)
 	}
-	if len(resp.Updates) != 1 {
-		t.Errorf("updates: got %d, want 1", len(resp.Updates))
+	if resp.MimeType != "text/markdown" {
+		t.Errorf("mime_type: got %q, want %q", resp.MimeType, "text/markdown")
 	}
 }
 
@@ -205,32 +203,6 @@ func TestProcessStoreRequest_InvalidJSON(t *testing.T) {
 
 // Test with optional interfaces
 
-type testProviderWithDelete struct {
-	testProvider
-	deletedDoc string
-}
-
-func (p *testProviderWithDelete) Delete(_ context.Context, documentID string) error {
-	p.deletedDoc = documentID
-	return nil
-}
-
-func TestHTTPHandler_Delete(t *testing.T) {
-	p := &testProviderWithDelete{}
-	handler := NewHTTPHandler(p)
-
-	req := httptest.NewRequest("DELETE", "/documents?path=doc1", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
-	}
-	if p.deletedDoc != "doc1" {
-		t.Errorf("deleted doc: got %q", p.deletedDoc)
-	}
-}
-
 type testProviderWithList struct {
 	testProvider
 }
@@ -259,5 +231,237 @@ func TestHTTPHandler_ListDocuments(t *testing.T) {
 	json.Unmarshal(body, &result)
 	if len(result["documents"]) != 2 {
 		t.Errorf("documents: got %d, want 2", len(result["documents"]))
+	}
+}
+
+// --- Version History tests ---
+
+type testProviderWithVersions struct {
+	testProvider
+	versions        []VersionListEntry
+	createdVersion  *VersionListEntry
+	versionDetail   *VersionEntry
+	lastCreateReq   *CreateVersionRequest
+	lastGetDocID    string
+	lastGetVersionID string
+}
+
+func (p *testProviderWithVersions) ListVersions(_ context.Context, documentID string) ([]VersionListEntry, error) {
+	return p.versions, nil
+}
+
+func (p *testProviderWithVersions) CreateVersion(_ context.Context, documentID string, req *CreateVersionRequest) (*VersionListEntry, error) {
+	p.lastCreateReq = req
+	return p.createdVersion, nil
+}
+
+func (p *testProviderWithVersions) GetVersion(_ context.Context, documentID string, versionID string) (*VersionEntry, error) {
+	p.lastGetDocID = documentID
+	p.lastGetVersionID = versionID
+	return p.versionDetail, nil
+}
+
+func TestHTTPHandler_ListVersions(t *testing.T) {
+	ts := time.Now().UTC()
+	p := &testProviderWithVersions{
+		versions: []VersionListEntry{
+			{ID: "v1", CreatedAt: ts, Type: "manual", Label: "first"},
+			{ID: "v2", CreatedAt: ts, Type: "auto"},
+		},
+	}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/versions?path=doc1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	var result map[string][]VersionListEntry
+	json.Unmarshal(body, &result)
+	if len(result["versions"]) != 2 {
+		t.Errorf("versions: got %d, want 2", len(result["versions"]))
+	}
+}
+
+func TestHTTPHandler_ListVersions_MissingPath(t *testing.T) {
+	p := &testProviderWithVersions{}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/versions", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHTTPHandler_CreateVersion(t *testing.T) {
+	ts := time.Now().UTC()
+	p := &testProviderWithVersions{
+		createdVersion: &VersionListEntry{ID: "v-new", CreatedAt: ts, Type: "manual", Label: "snapshot"},
+	}
+	handler := NewHTTPHandler(p)
+
+	body := `{"content":"hello world","mime_type":"text/plain","label":"snapshot","creator":"alice","type":"manual"}`
+	req := httptest.NewRequest("POST", "/documents/versions?path=doc1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusCreated)
+	}
+	if p.lastCreateReq == nil {
+		t.Fatal("expected create request")
+	}
+	if p.lastCreateReq.Content != "hello world" {
+		t.Errorf("content: got %q", p.lastCreateReq.Content)
+	}
+	if p.lastCreateReq.Label != "snapshot" {
+		t.Errorf("label: got %q", p.lastCreateReq.Label)
+	}
+}
+
+func TestHTTPHandler_GetVersion(t *testing.T) {
+	p := &testProviderWithVersions{
+		versionDetail: &VersionEntry{
+			ID:      "v1",
+			Content: "hello world",
+			Blame: []BlameSegment{
+				{Start: 0, End: 5, UserName: "alice"},
+				{Start: 5, End: 11, UserName: "bob"},
+			},
+		},
+	}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/versions/detail?path=doc1&version=v1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+	if p.lastGetDocID != "doc1" {
+		t.Errorf("docID: got %q", p.lastGetDocID)
+	}
+	if p.lastGetVersionID != "v1" {
+		t.Errorf("versionID: got %q", p.lastGetVersionID)
+	}
+
+	var resp VersionEntry
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.Content != "hello world" {
+		t.Errorf("content: got %q", resp.Content)
+	}
+	if len(resp.Blame) != 2 {
+		t.Errorf("blame segments: got %d, want 2", len(resp.Blame))
+	}
+}
+
+func TestHTTPHandler_GetVersion_NotFound(t *testing.T) {
+	p := &testProviderWithVersions{versionDetail: nil}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/versions/detail?path=doc1&version=nonexistent", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestHTTPHandler_GetVersion_MissingVersion(t *testing.T) {
+	p := &testProviderWithVersions{}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/versions/detail?path=doc1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+// --- Client Mappings tests ---
+
+type testProviderWithClientMappings struct {
+	testProvider
+	mappings       []ClientUserMapping
+	storedMappings []ClientUserMapping
+}
+
+func (p *testProviderWithClientMappings) GetClientMappings(_ context.Context, documentID string) ([]ClientUserMapping, error) {
+	return p.mappings, nil
+}
+
+func (p *testProviderWithClientMappings) StoreClientMappings(_ context.Context, documentID string, mappings []ClientUserMapping) error {
+	p.storedMappings = mappings
+	return nil
+}
+
+func TestHTTPHandler_GetClientMappings(t *testing.T) {
+	p := &testProviderWithClientMappings{
+		mappings: []ClientUserMapping{
+			{ClientID: 100, UserName: "alice"},
+			{ClientID: 200, UserName: "bob"},
+		},
+	}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/clients?path=doc1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(w.Body)
+	var result map[string][]ClientUserMapping
+	json.Unmarshal(body, &result)
+	if len(result["mappings"]) != 2 {
+		t.Errorf("mappings: got %d, want 2", len(result["mappings"]))
+	}
+}
+
+func TestHTTPHandler_StoreClientMappings(t *testing.T) {
+	p := &testProviderWithClientMappings{}
+	handler := NewHTTPHandler(p)
+
+	body := `{"mappings":[{"client_id":100,"user_name":"alice"},{"client_id":200,"user_name":"bob"}]}`
+	req := httptest.NewRequest("POST", "/documents/clients?path=doc1", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+	if len(p.storedMappings) != 2 {
+		t.Errorf("stored mappings: got %d, want 2", len(p.storedMappings))
+	}
+	if p.storedMappings[0].UserName != "alice" {
+		t.Errorf("first mapping: got %q", p.storedMappings[0].UserName)
+	}
+}
+
+func TestHTTPHandler_GetClientMappings_MissingPath(t *testing.T) {
+	p := &testProviderWithClientMappings{}
+	handler := NewHTTPHandler(p)
+
+	req := httptest.NewRequest("GET", "/documents/clients", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status: got %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }

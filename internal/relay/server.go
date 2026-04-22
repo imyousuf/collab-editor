@@ -2,7 +2,7 @@ package relay
 
 import (
 	"context"
-	"encoding/base64"
+
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -63,22 +63,10 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 			return nil
 		}
 
-		// If the provider returned stored Y.js updates, decode and set them
-		// for replay to newly connecting peers.
-		if resp != nil && len(resp.Updates) > 0 {
-			msgs := make([][]byte, 0, len(resp.Updates))
-			for _, u := range resp.Updates {
-				decoded, err := base64.StdEncoding.DecodeString(u.Data)
-				if err != nil {
-					slog.Warn("skipping corrupted stored update", "doc", documentID, "err", err)
-					continue
-				}
-				msgs = append(msgs, decoded)
-			}
-			if len(msgs) > 0 {
-				room.SetStoredMessages(msgs)
-				slog.Info("loaded stored Y.js state", "doc", documentID, "updates", len(msgs))
-			}
+		// Load returns resolved content only (no Y.js updates).
+		// The room starts with empty history — the frontend seeds from initialContent.
+		if resp != nil && resp.Content != "" {
+			slog.Info("loaded document content", "doc", documentID, "size", len(resp.Content))
 		}
 
 		// Start the flush goroutine for this room — uses its own

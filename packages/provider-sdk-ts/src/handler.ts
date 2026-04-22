@@ -69,20 +69,6 @@ export function createExpressRouter(
     }
   });
 
-  router.delete('/documents', async (req: Request, res: Response) => {
-    const documentId = req.query.path as string;
-    if (!documentId) {
-      res.status(400).json({ error: "missing 'path' query parameter" });
-      return;
-    }
-    try {
-      await processor.processDelete(documentId);
-      res.status(200).json({ deleted: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   router.get('/documents', async (_req: Request, res: Response) => {
     try {
       const docs = await processor.processList();
@@ -91,6 +77,95 @@ export function createExpressRouter(
       res.status(500).json({ error: err.message });
     }
   });
+
+  // Optional: VERSIONS
+  if (provider.listVersions) {
+    router.get('/documents/versions', async (req: Request, res: Response) => {
+      const documentId = req.query.path as string;
+      if (!documentId) {
+        res.status(400).json({ error: "missing 'path' query parameter" });
+        return;
+      }
+      try {
+        const versions = await processor.processListVersions(documentId);
+        res.json({ versions });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    router.post('/documents/versions', express.json(), async (req: Request, res: Response) => {
+      const documentId = req.query.path as string;
+      if (!documentId) {
+        res.status(400).json({ error: "missing 'path' query parameter" });
+        return;
+      }
+      try {
+        const entry = await processor.processCreateVersion(documentId, req.body);
+        if (!entry) {
+          res.status(500).json({ error: 'version creation not supported' });
+          return;
+        }
+        res.status(201).json(entry);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    router.get('/documents/versions/detail', async (req: Request, res: Response) => {
+      const documentId = req.query.path as string;
+      const versionId = req.query.version as string;
+      if (!documentId) {
+        res.status(400).json({ error: "missing 'path' query parameter" });
+        return;
+      }
+      if (!versionId) {
+        res.status(400).json({ error: "missing 'version' query parameter" });
+        return;
+      }
+      try {
+        const entry = await processor.processGetVersion(documentId, versionId);
+        if (!entry) {
+          res.status(404).json({ error: 'version not found' });
+          return;
+        }
+        res.json(entry);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+  }
+
+  // Optional: CLIENT MAPPINGS
+  if (provider.getClientMappings) {
+    router.get('/documents/clients', async (req: Request, res: Response) => {
+      const documentId = req.query.path as string;
+      if (!documentId) {
+        res.status(400).json({ error: "missing 'path' query parameter" });
+        return;
+      }
+      try {
+        const mappings = await processor.processGetClientMappings(documentId);
+        res.json({ mappings });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    router.post('/documents/clients', express.json(), async (req: Request, res: Response) => {
+      const documentId = req.query.path as string;
+      if (!documentId) {
+        res.status(400).json({ error: "missing 'path' query parameter" });
+        return;
+      }
+      try {
+        await processor.processStoreClientMappings(documentId, req.body.mappings ?? []);
+        res.json({ stored: (req.body.mappings ?? []).length });
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+  }
 
   return router;
 }

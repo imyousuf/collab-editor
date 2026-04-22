@@ -2,47 +2,49 @@
 
 The collab-editor relay delegates all document persistence to an external **storage provider** via a REST SPI. Provider SDKs are available in Go, TypeScript, and Python to handle the protocol details — you only implement `read`/`write` for your storage backend.
 
+**The SPI is fully Yjs-agnostic.** All three SDKs contain built-in Y.js engines that resolve CRDT diffs internally. Your provider never sees Y.Doc, Y.Text, or binary updates — it only receives and returns plain text content strings.
+
 ## How It Works
 
 ```
-Browser ──WebSocket──> Relay ──HTTP REST──> Your Storage Provider
-                                                 │
-                                        Provider SDK handles:
-                                        • Yjs diff extraction
-                                        • Document state encoding
-                                        • HTTP routing
-                                        • Y.Doc caching
+Browser ──WebSocket──> Relay ──HTTP REST──> Provider SDK ──> Your Provider
+                                                │                  │
+                                       SDK handles:        You implement:
+                                       • Y.js diff           • read(id) → text
+                                         resolution          • write(id, text)
+                                       • Y.Doc caching
+                                       • HTTP routing
+                                       • MIME detection
 ```
 
-The relay batches Yjs updates from connected peers and periodically flushes them to your provider via `POST /documents/updates`. When a new peer joins, the relay calls `POST /documents/load` to bootstrap state.
+The relay batches Y.js updates from connected peers and periodically flushes them to your provider via `POST /documents/updates`. The SDK intercepts these requests, applies the Y.js diffs to a cached Y.Doc, resolves the document to plain text, and passes the resolved content to your provider's write method. When a new peer joins, the relay calls `POST /documents/load` — the SDK calls your provider's read method and returns the plain text content.
 
 ## SPI Endpoints
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/health` | GET | Health check |
-| `/documents/load?path={id}` | POST | Load document content + stored Yjs updates |
-| `/documents/updates?path={id}` | POST | Persist batched incremental Yjs updates |
-| `/documents?path={id}` | DELETE | Delete a document (optional) |
+| `/documents/load?path={id}` | POST | Load latest document content (plain text) |
+| `/documents/updates?path={id}` | POST | Persist document content (SDK resolves Y.js diffs to text) |
 | `/documents` | GET | List available documents (optional) |
+| `/documents/versions?path={id}` | GET/POST | Version history (optional) |
+| `/documents/clients?path={id}` | GET/POST | Client-user mappings for blame (optional) |
 
 See [HTTP SPI Contract](research/collab-editor-http-spi.md) for the full specification.
 
-## Storage Strategies
+## Provider Model
 
-Each SDK supports two storage strategies (choose one or both):
+All three SDKs follow the same pattern: the SDK resolves Y.js diffs to plain text content, and your provider only deals with content strings.
 
-### 1. Raw Updates Mode (recommended)
+**On Store:** The relay sends raw Y.js updates. The SDK applies them to a cached Y.Doc, extracts the resolved document text, and calls your provider's write method with the plain text content and MIME type.
 
-Store the base64-encoded Yjs updates as-is in an append-only journal. On load, return them for replay. This is efficient, preserves full history, and requires no Yjs knowledge in your backend.
+**On Load:** The SDK calls your provider's read method, which returns the latest document text and MIME type. No Y.js binary data is involved.
 
-### 2. Resolved Text Mode
+Your provider implementation is a simple read/write interface:
+- `read(documentId)` -- returns the current document text and MIME type
+- `write(documentId, content, mimeType)` -- persists the resolved text
 
-The SDK applies Yjs diffs internally and gives you the final plain text after each batch. You store the resolved text. Simple, but loses granular update history.
-
-### 3. Both
-
-Implement all methods. You get searchable resolved text AND efficient binary replay.
+The SDKs also support optional raw update storage (append-only journal) for providers that want to retain Y.js update history alongside the resolved content.
 
 ---
 
@@ -50,26 +52,58 @@ Implement all methods. You get searchable resolved text AND efficient binary rep
 
 **Package:** `github.com/imyousuf/collab-editor/pkg/spi`
 
-The Go SDK provides the `Provider` interface and a ready-made `http.Handler`.
+The Go SDK provides the `Provider` interface, a `ProviderProcessor` that resolves Y.js diffs via a pluggable `YDocEngine`, and a ready-made `http.Handler`.
 
-### Interface
+### Provider Interface
+
+Your provider implements simple read/write operations for plain text content:
 
 ```go
 import "github.com/imyousuf/collab-editor/pkg/spi"
 
 type Provider interface {
+    // Load returns the latest resolved document content (plain text).
     Load(ctx context.Context, documentID string) (*LoadResponse, error)
-    Store(ctx context.Context, documentID string, updates []UpdatePayload) (*StoreResponse, error)
+
+    // Store persists the document state. Receives the resolved content
+    // (latest full text) alongside raw Y.js updates. The SDK populates
+    // req.Content and req.MimeType before calling this method.
+    Store(ctx context.Context, documentID string, req *StoreRequest) (*StoreResponse, error)
+
+    // Health returns the provider's health status.
     Health(ctx context.Context) (*HealthResponse, error)
 }
 
-// Optional interfaces
-type OptionalDelete interface {
-    Delete(ctx context.Context, documentID string) error
-}
+// Optional interfaces for extended capabilities
 type OptionalList interface {
     ListDocuments(ctx context.Context) ([]DocumentListEntry, error)
 }
+type OptionalVersions interface {
+    ListVersions(ctx context.Context, documentID string) ([]VersionListEntry, error)
+    CreateVersion(ctx context.Context, documentID string, req *CreateVersionRequest) (*VersionListEntry, error)
+    GetVersion(ctx context.Context, documentID string, versionID string) (*VersionEntry, error)
+}
+type OptionalClientMappings interface {
+    GetClientMappings(ctx context.Context, documentID string) ([]ClientUserMapping, error)
+    StoreClientMappings(ctx context.Context, documentID string, mappings []ClientUserMapping) error
+}
+```
+
+The `LoadResponse` contains `Content` (string) and `MimeType` (string) -- no Y.js binary fields. The `StoreRequest` includes `Content` and `MimeType` fields that the SDK populates with the resolved plain text before calling your provider.
+
+### YDocEngine Interface
+
+The Go SDK uses a `YDocEngine` interface (backed by `reearth/ygo`) to resolve Y.js diffs. The `ProviderProcessor` creates one engine per document and applies raw updates to extract resolved text:
+
+```go
+type YDocEngine interface {
+    ApplyUpdate(update []byte) error
+    GetText(name string) string
+    InsertText(name string, content string)
+    EncodeStateAsUpdate() []byte
+}
+
+type YDocEngineFactory func() YDocEngine
 ```
 
 ### Framework Integration (net/http)
@@ -81,19 +115,19 @@ type MyProvider struct { /* your storage */ }
 
 func (p *MyProvider) Load(ctx context.Context, id string) (*spi.LoadResponse, error) {
     content, _ := readFromDB(ctx, id)
-    updates, _ := loadUpdatesFromDB(ctx, id)
     return &spi.LoadResponse{
         Content:  content,
         MimeType: "text/markdown",
-        Updates:  updates,
     }, nil
 }
 
-func (p *MyProvider) Store(ctx context.Context, id string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
-    if err := appendUpdatesToDB(ctx, id, updates); err != nil {
+func (p *MyProvider) Store(ctx context.Context, id string, req *spi.StoreRequest) (*spi.StoreResponse, error) {
+    // req.Content contains the resolved plain text (populated by the SDK)
+    // req.MimeType contains the document MIME type
+    if err := writeContentToDB(ctx, id, req.Content, req.MimeType); err != nil {
         return nil, err
     }
-    return &spi.StoreResponse{Stored: len(updates)}, nil
+    return &spi.StoreResponse{Stored: len(req.Updates)}, nil
 }
 
 func (p *MyProvider) Health(ctx context.Context) (*spi.HealthResponse, error) {
@@ -102,7 +136,10 @@ func (p *MyProvider) Health(ctx context.Context) (*spi.HealthResponse, error) {
 
 func main() {
     provider := &MyProvider{}
-    handler := spi.NewHTTPHandler(provider)
+    // Create the processor with a YDocEngine factory for Y.js resolution
+    processor := spi.NewProviderProcessor(provider, spi.NewYgoEngine, "source")
+    // Pass the processor to the HTTP handler so it resolves diffs before calling Store
+    handler := spi.NewHTTPHandler(provider, processor)
     http.ListenAndServe(":8081", handler)
 }
 ```
@@ -119,7 +156,7 @@ resp, err := spi.ProcessStoreRequest(ctx, provider, documentID, requestBody)
 
 ### Reference Implementation
 
-The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage. It implements `spi.Provider`, `spi.OptionalDelete`, and `spi.OptionalList`, delegates all SPI routing to `spi.NewHTTPHandler()`, and layers chi middleware for bearer auth on top.
+The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage. It implements `spi.Provider`, `spi.OptionalList`, `spi.OptionalVersions`, and `spi.OptionalClientMappings`, delegates all SPI routing to `spi.NewHTTPHandler()`, and layers chi middleware for bearer auth on top. It stores resolved content in versioned files: `.versions/{docId}/{versionId}/{filename}`, with `VERSION:` pointers in a journal file. Load reads the latest VERSION pointer from the journal, falling back to the seed file.
 
 ---
 
@@ -127,7 +164,7 @@ The demo provider (`cmd/demo-provider/`) uses the Go SDK with filesystem storage
 
 **Package:** `@imyousuf/collab-editor-provider` (GitHub Packages)
 
-The TypeScript SDK handles Yjs diff application via the `yjs` library, so your Node.js backend doesn't need to understand CRDTs.
+The TypeScript SDK resolves Y.js diffs internally via the `yjs` library. Your Node.js backend never touches CRDTs -- it only reads and writes plain text content.
 
 ### Install
 
@@ -138,19 +175,33 @@ npm install @imyousuf/collab-editor-provider
 
 ### Interface
 
+The core interface requires only `readContent()` and optionally `writeContent()`. The SDK handles all Y.js resolution:
+
 ```typescript
 import { Provider, ContentResult } from '@imyousuf/collab-editor-provider';
 
 interface Provider {
+  /** Read the current document text from your storage */
   readContent(documentId: string): Promise<ContentResult>;
+
+  /** Write the resolved text back to your storage (called after SDK resolves diffs) */
   writeContent?(documentId: string, content: string, mimeType: string): Promise<void>;
+
+  /** Optional: store raw Y.js updates alongside resolved content */
   storeRawUpdates?(documentId: string, updates: UpdatePayload[]): Promise<void>;
+
+  /** Optional: load raw Y.js updates for replay (append-only journal) */
   loadRawUpdates?(documentId: string): Promise<UpdatePayload[]>;
-  deleteContent?(documentId: string): Promise<void>;
+
+  /** Optional: list available documents */
   listDocuments?(): Promise<DocumentListEntry[]>;
+
+  /** Optional: custom health check */
   onHealth?(): Promise<HealthResponse>;
 }
 ```
+
+The `ProviderProcessor` applies Y.js diffs to a cached Y.Doc, extracts the resolved text, and calls your `writeContent()` with the plain text result. On load, it calls your `readContent()` and returns the content directly.
 
 ### Express Integration
 
@@ -195,7 +246,7 @@ const storeResult = await processor.processStore(documentId, updates);
 
 ### Engine Utilities
 
-The SDK also exports low-level Yjs utilities if you need them:
+The SDK also exports low-level Y.js utilities for advanced use cases:
 
 ```typescript
 import {
@@ -214,7 +265,7 @@ import {
 
 **Package:** `collab-editor-provider` (PyPI)
 
-The Python SDK uses `pycrdt` (Rust-based Yjs bindings) for high-performance CRDT operations.
+The Python SDK resolves Y.js diffs internally via `pycrdt` (Rust-based Y.js bindings). Your Python backend only reads and writes plain text content.
 
 ### Install
 
@@ -227,20 +278,30 @@ pip install collab-editor-provider[fastapi]
 
 ### Interface
 
+The core interface requires only `read_content()` and optionally `write_content()`. The SDK handles all Y.js resolution:
+
 ```python
 from collab_editor_provider import Provider, ContentResult
 
 class Provider(ABC):
     @abstractmethod
-    async def read_content(self, document_id: str) -> ContentResult: ...
+    async def read_content(self, document_id: str) -> ContentResult:
+        """Read the current document text from your storage."""
+        ...
 
-    async def write_content(self, document_id: str, content: str, mime_type: str) -> None: ...
-    async def store_raw_updates(self, document_id: str, updates: list[UpdatePayload]) -> None: ...
-    async def load_raw_updates(self, document_id: str) -> list[UpdatePayload]: ...
-    async def delete_content(self, document_id: str) -> None: ...
+    async def write_content(self, document_id: str, content: str, mime_type: str) -> None:
+        """Write the resolved text back to your storage (called after SDK resolves diffs)."""
+        ...
+
+    async def store_raw_updates(self, document_id: str, updates: list[UpdatePayload]) -> None:
+        """Optional: store raw Y.js updates alongside resolved content."""
+        ...
+
     async def list_documents(self) -> list[DocumentListEntry]: ...
     async def on_health(self) -> HealthResponse: ...
 ```
+
+The `ProviderProcessor` applies Y.js diffs to a cached `pycrdt.Doc`, extracts the resolved text, and calls your `write_content()` with the plain text result. On load, it calls your `read_content()` and returns the content directly.
 
 ### FastAPI Integration
 
@@ -280,6 +341,8 @@ result = await processor.process_store(document_id, updates)
 ```
 
 ### Engine Utilities
+
+The SDK also exports low-level Y.js utilities for advanced use cases:
 
 ```python
 from collab_editor_provider import (
