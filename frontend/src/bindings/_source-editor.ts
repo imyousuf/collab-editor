@@ -7,6 +7,15 @@ import { EditorState, Compartment } from '@codemirror/state';
 import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { createBlameExtensions, setBlameData } from '../collab/blame-cm-extension.js';
 import type { BlameSegment } from '../collab/blame-engine.js';
+import {
+  createCommentCmExtensions,
+  setCommentCmData,
+} from '../collab/comment-cm-extension.js';
+import type {
+  CommentThread,
+  SuggestionOverlayRegion,
+} from '../interfaces/comments.js';
+import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
 import { markdown } from '@codemirror/lang-markdown';
 import { html } from '@codemirror/lang-html';
 import { javascript } from '@codemirror/lang-javascript';
@@ -45,8 +54,16 @@ export class SourceEditorInstance {
   private _languageCompartment = new Compartment();
   private _readonlyCompartment = new Compartment();
   private _blameCompartment = new Compartment();
+  private _commentsCompartment = new Compartment();
   private _blameActive = false;
+  private _commentsActive = false;
   private _updateCallbacks: Set<(content: string) => void> = new Set();
+  private _lastCommentState: {
+    threads: CommentThread[];
+    overlays: SuggestionOverlayRegion[];
+    pending: PendingSuggestOverlay | null;
+    activeThreadId: string | null;
+  } = { threads: [], overlays: [], pending: null, activeThreadId: null };
 
   constructor(
     container: HTMLElement,
@@ -76,6 +93,7 @@ export class SourceEditorInstance {
         ...themeExtensions,
         cssVarTheme,
         this._blameCompartment.of([]),
+        this._commentsCompartment.of([]),
       ],
     });
 
@@ -136,6 +154,40 @@ export class SourceEditorInstance {
     if (this._blameActive) {
       this._view.dispatch({ effects: setBlameData.of(segments) });
     }
+  }
+
+  enableComments(): void {
+    if (this._commentsActive) return;
+    this._view.dispatch({
+      effects: this._commentsCompartment.reconfigure(createCommentCmExtensions()),
+    });
+    this._commentsActive = true;
+    // Re-push whatever state we had so decorations appear immediately.
+    this._pushCommentState();
+  }
+
+  disableComments(): void {
+    if (!this._commentsActive) return;
+    this._view.dispatch({
+      effects: this._commentsCompartment.reconfigure([]),
+    });
+    this._commentsActive = false;
+  }
+
+  updateComments(
+    threads: CommentThread[],
+    overlays: SuggestionOverlayRegion[],
+    activeThreadId: string | null,
+    pending: PendingSuggestOverlay | null = null,
+  ): void {
+    this._lastCommentState = { threads, overlays, pending, activeThreadId };
+    if (this._commentsActive) this._pushCommentState();
+  }
+
+  private _pushCommentState(): void {
+    this._view.dispatch({
+      effects: setCommentCmData.of(this._lastCommentState),
+    });
   }
 
   destroy(): void {

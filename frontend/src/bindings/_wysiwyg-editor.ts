@@ -8,6 +8,16 @@ import { Markdown } from '@tiptap/markdown';
 import type { IContentHandler } from '../interfaces/content-handler.js';
 import { createBlamePlugin, blamePluginKey } from '../collab/blame-tiptap-plugin.js';
 import type { BlameSegment } from '../collab/blame-engine.js';
+import {
+  buildCommentMeta,
+  commentPluginKey,
+  createCommentPlugin,
+} from '../collab/comment-tiptap-plugin.js';
+import type {
+  CommentThread,
+  SuggestionOverlayRegion,
+} from '../interfaces/comments.js';
+import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
 
 export interface WysiwygEditorOptions {
   readonly: boolean;
@@ -25,6 +35,13 @@ export class WysiwygEditorInstance {
   private _updateCallbacks: Set<(content: string) => void> = new Set();
   private _ready: Promise<void>;
   private _blameActive = false;
+  private _commentsActive = false;
+  private _lastCommentState: {
+    threads: CommentThread[];
+    overlays: SuggestionOverlayRegion[];
+    pending: PendingSuggestOverlay | null;
+    activeThreadId: string | null;
+  } = { threads: [], overlays: [], pending: null, activeThreadId: null };
 
   constructor(
     container: HTMLElement,
@@ -119,6 +136,43 @@ export class WysiwygEditorInstance {
       tr.setMeta(blamePluginKey, segments);
       this._editor.view.dispatch(tr);
     }
+  }
+
+  enableComments(): void {
+    if (this._commentsActive) return;
+    this._editor.registerPlugin(createCommentPlugin());
+    this._commentsActive = true;
+    this._pushCommentState();
+  }
+
+  disableComments(): void {
+    if (!this._commentsActive) return;
+    this._editor.unregisterPlugin(commentPluginKey);
+    this._commentsActive = false;
+  }
+
+  updateComments(
+    threads: CommentThread[],
+    overlays: SuggestionOverlayRegion[],
+    activeThreadId: string | null,
+    pending: PendingSuggestOverlay | null = null,
+  ): void {
+    this._lastCommentState = { threads, overlays, pending, activeThreadId };
+    if (this._commentsActive) this._pushCommentState();
+  }
+
+  private _pushCommentState(): void {
+    const { tr } = this._editor.state;
+    tr.setMeta(
+      commentPluginKey,
+      buildCommentMeta(
+        this._lastCommentState.threads,
+        this._lastCommentState.overlays,
+        this._lastCommentState.activeThreadId,
+        this._lastCommentState.pending,
+      ),
+    );
+    this._editor.view.dispatch(tr);
   }
 
   destroy(): void {

@@ -15,8 +15,16 @@ import { PreviewRendererInstance } from './_preview-renderer.js';
 import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
 import type { IBlameCapability } from '../interfaces/blame.js';
 import type { BlameSegment } from '../collab/blame-engine.js';
+import type {
+  CommentThread,
+  ICommentCapability,
+  SuggestionOverlayRegion,
+} from '../interfaces/comments.js';
+import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
 
-export class PreviewSourceBinding implements IEditorBinding, IBlameCapability {
+export class PreviewSourceBinding
+  implements IEditorBinding, IBlameCapability, ICommentCapability
+{
   readonly supportedModes: readonly EditorMode[] = ['preview', 'source'];
 
   private _activeMode: EditorMode | null = null;
@@ -159,6 +167,25 @@ export class PreviewSourceBinding implements IEditorBinding, IBlameCapability {
 
   updateBlame(segments: BlameSegment[]): void {
     this._sourceEditor?.updateBlame(segments);
+  }
+
+  // --- ICommentCapability ---
+
+  enableComments(): void {
+    this._sourceEditor?.enableComments();
+  }
+
+  disableComments(): void {
+    this._sourceEditor?.disableComments();
+  }
+
+  updateComments(
+    threads: CommentThread[],
+    overlays: SuggestionOverlayRegion[],
+    activeThreadId: string | null,
+    pending: PendingSuggestOverlay | null = null,
+  ): void {
+    this._sourceEditor?.updateComments(threads, overlays, activeThreadId, pending);
   }
 
   destroy(): void {

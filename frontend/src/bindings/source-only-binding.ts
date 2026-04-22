@@ -15,8 +15,16 @@ import { SourceEditorInstance } from './_source-editor.js';
 import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
 import type { IBlameCapability } from '../interfaces/blame.js';
 import type { BlameSegment } from '../collab/blame-engine.js';
+import type {
+  CommentThread,
+  ICommentCapability,
+  SuggestionOverlayRegion,
+} from '../interfaces/comments.js';
+import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
 
-export class SourceOnlyBinding implements IEditorBinding, IBlameCapability {
+export class SourceOnlyBinding
+  implements IEditorBinding, IBlameCapability, ICommentCapability
+{
   readonly supportedModes: readonly EditorMode[] = ['source'];
 
   private _activeMode: EditorMode | null = null;
@@ -115,6 +123,25 @@ export class SourceOnlyBinding implements IEditorBinding, IBlameCapability {
 
   updateBlame(segments: BlameSegment[]): void {
     this._editor?.updateBlame(segments);
+  }
+
+  // --- ICommentCapability ---
+
+  enableComments(): void {
+    this._editor?.enableComments();
+  }
+
+  disableComments(): void {
+    this._editor?.disableComments();
+  }
+
+  updateComments(
+    threads: CommentThread[],
+    overlays: SuggestionOverlayRegion[],
+    activeThreadId: string | null,
+    pending: PendingSuggestOverlay | null = null,
+  ): void {
+    this._editor?.updateComments(threads, overlays, activeThreadId, pending);
   }
 
   destroy(): void {

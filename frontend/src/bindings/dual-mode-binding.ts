@@ -23,11 +23,19 @@ import type {
 import { ALL_FORMATTING_COMMANDS, emptyFormattingState } from '../interfaces/formatting.js';
 import type { IBlameCapability } from '../interfaces/blame.js';
 import type { BlameSegment } from '../collab/blame-engine.js';
+import type {
+  CommentThread,
+  ICommentCapability,
+  SuggestionOverlayRegion,
+} from '../interfaces/comments.js';
+import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
 import { SourceEditorInstance } from './_source-editor.js';
 import { WysiwygEditorInstance } from './_wysiwyg-editor.js';
 import { setCollabContent, observeRemoteChanges } from './collab-helpers.js';
 
-export class DualModeBinding implements IEditorBinding, IFormattingCapability, IBlameCapability {
+export class DualModeBinding
+  implements IEditorBinding, IFormattingCapability, IBlameCapability, ICommentCapability
+{
   readonly supportedModes: readonly EditorMode[] = ['wysiwyg', 'source'];
 
   private _activeMode: EditorMode | null = null;
@@ -268,6 +276,28 @@ export class DualModeBinding implements IEditorBinding, IFormattingCapability, I
   updateBlame(segments: BlameSegment[]): void {
     this._sourceEditor?.updateBlame(segments);
     this._wysiwygEditor?.updateBlame(segments);
+  }
+
+  // --- ICommentCapability ---
+
+  enableComments(): void {
+    this._sourceEditor?.enableComments();
+    this._wysiwygEditor?.enableComments();
+  }
+
+  disableComments(): void {
+    this._sourceEditor?.disableComments();
+    this._wysiwygEditor?.disableComments();
+  }
+
+  updateComments(
+    threads: CommentThread[],
+    overlays: SuggestionOverlayRegion[],
+    activeThreadId: string | null,
+    pending: PendingSuggestOverlay | null = null,
+  ): void {
+    this._sourceEditor?.updateComments(threads, overlays, activeThreadId, pending);
+    this._wysiwygEditor?.updateComments(threads, overlays, activeThreadId, pending);
   }
 
   destroy(): void {
