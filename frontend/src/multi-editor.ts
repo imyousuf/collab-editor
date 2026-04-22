@@ -41,12 +41,23 @@ import { EditorBindingFactory, registerDefaults } from './registry.js';
 import { CollaborationProvider } from './collab/collab-provider.js';
 import { BlameCoordinator } from './collab/blame-coordinator.js';
 import { VersionCoordinator } from './collab/version-coordinator.js';
+import * as Y from 'yjs';
+import { CommentCoordinator } from './collab/comment-coordinator.js';
+import { CommentEngine } from './collab/comment-engine.js';
+import { SuggestEngine } from './collab/suggest-engine.js';
 import type { VersionListEntry, VersionEntry, DiffLine } from './collab/version-manager.js';
+import type {
+  CommentThread,
+  CommentsCapabilities,
+  MentionCandidate,
+} from './interfaces/comments.js';
 
 // Register internal toolbar components
 import './toolbar/editor-toolbar.js';
 import './toolbar/editor-status-bar.js';
 import './toolbar/version-panel.js';
+import './toolbar/comment-panel.js';
+import './toolbar/suggest-status.js';
 
 @customElement('multi-editor')
 export class MultiEditor extends LitElement implements IEditorEventEmitter {
@@ -72,6 +83,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _selectedVersion: VersionEntry | null = null;
   @state() private _diffResult: DiffLine[] | null = null;
   @state() private _viewingVersion = false;
+  @state() private _commentsAvailable = false;
+  @state() private _suggestAvailable = false;
+  @state() private _suggestActive = false;
+  @state() private _suggestPendingCount = 0;
+  @state() private _activeCommentThread: CommentThread | null = null;
+  @state() private _commentPanelPos: { x: number; y: number } | null = null;
+  @state() private _commentCapabilities: CommentsCapabilities | null = null;
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -97,6 +115,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   // Domain coordinators
   private _blameCoordinator = new BlameCoordinator();
   private _versionCoordinator = new VersionCoordinator();
+  private _commentCoordinator = new CommentCoordinator();
+  private _commentEngine: CommentEngine | null = null;
+  private _suggestEngine: SuggestEngine | null = null;
 
   constructor() {
     super();
@@ -363,11 +384,51 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     return html`
       ${toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
-      <div class="editor-wrapper">
+      <div class="editor-wrapper" style="position: relative;">
         <div id="editor-root" class="editor-root" part="editor-area"></div>
         ${statusBarVisible ? this._renderStatusBarSlot() : nothing}
+        ${this._suggestActive ? this._renderSuggestStatus() : nothing}
+        ${this._activeCommentThread ? this._renderCommentPanel() : nothing}
       </div>
       ${!toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
+    `;
+  }
+
+  private _renderSuggestStatus() {
+    return html`
+      <div style="position: absolute; top: 8px; right: 8px; z-index: 900;">
+        <suggest-status
+          .active=${true}
+          .pendingChanges=${this._suggestPendingCount}
+          .userColor=${this.collaboration?.user?.color ?? '#1f77b4'}
+          .userName=${this.collaboration?.user?.name ?? ''}
+          @suggest-submit=${this._handleSuggestSubmit}
+          @suggest-discard=${this._handleSuggestDiscard}
+          @suggest-toggle-off=${() => this._handleSuggestToggle({ detail: { active: false } } as any)}
+        ></suggest-status>
+      </div>
+    `;
+  }
+
+  private _renderCommentPanel() {
+    const pos = this._commentPanelPos ?? { x: 16, y: 48 };
+    return html`
+      <div style="position: absolute; left: ${pos.x}px; top: ${pos.y}px; z-index: 1000;">
+        <comment-panel
+          .open=${true}
+          .thread=${this._activeCommentThread}
+          .capabilities=${this._commentCapabilities}
+          .currentUserId=${this.collaboration?.user?.name ?? ''}
+          @comment-panel-close=${this._handleCommentPanelClose}
+          @comment-reply=${this._handleCommentReply}
+          @comment-thread-resolve=${this._handleCommentThreadResolve}
+          @comment-thread-reopen=${this._handleCommentThreadReopen}
+          @comment-thread-delete=${this._handleCommentThreadDelete}
+          @comment-suggestion-accept=${this._handleCommentSuggestionAccept}
+          @comment-suggestion-reject=${this._handleCommentSuggestionReject}
+          @comment-mention-search=${this._handleCommentMentionSearch}
+        ></comment-panel>
+      </div>
     `;
   }
 
@@ -386,10 +447,15 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .readonly=${this.readonly}
           .blameActive=${this._blameActive}
           .blameAvailable=${this._blameCoordinator.available}
+          .commentsAvailable=${this._commentsAvailable}
+          .suggestAvailable=${this._suggestAvailable}
+          .suggestActive=${this._suggestActive}
           @toolbar-command=${this._handleToolbarCommand}
           @toolbar-mode-switch=${this._handleToolbarModeSwitch}
           @toolbar-document-switch=${this._handleToolbarDocumentSwitch}
           @toolbar-blame-toggle=${this._handleBlameToggle}
+          @toolbar-comment-add=${this._handleCommentAdd}
+          @toolbar-suggest-toggle=${this._handleSuggestToggle}
         ></editor-toolbar>
       </slot>
     `;
@@ -493,6 +559,17 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._versions = [];
     this._selectedVersion = null;
     this._diffResult = null;
+    this._commentCoordinator.detach();
+    this._commentEngine?.destroy();
+    this._commentEngine = null;
+    this._suggestEngine?.disable();
+    this._suggestEngine = null;
+    this._activeCommentThread = null;
+    this._commentPanelPos = null;
+    this._commentsAvailable = false;
+    this._suggestAvailable = false;
+    this._suggestActive = false;
+    this._suggestPendingCount = 0;
     this._binding?.destroy();
     this._binding = null;
     if (this._collabProvider) {
@@ -611,15 +688,138 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       this._collabProvider.onAppMessage((data: any) => {
         this._versionCoordinator.handleAppMessage(data);
       });
+
+      // Comments coordinator — fetch capabilities first, then attach.
+      await this._attachCommentCoordinator(relayUrl, docId, config.collaboration);
     }
 
     this._readyResolve?.();
     this._readyResolve = null;
   }
 
+  private async _attachCommentCoordinator(
+    relayUrl: string,
+    docId: string,
+    collab: CollaborationConfig,
+  ): Promise<void> {
+    if (!this._collabProvider || !this._binding) return;
+
+    // Check relay-level comments availability (GET /api/capabilities).
+    let relayComments = false;
+    try {
+      const resp = await fetch(`${relayUrl}/api/capabilities`, { credentials: 'include' });
+      if (resp.ok) {
+        const body = (await resp.json()) as { comments_supported?: boolean };
+        relayComments = !!body.comments_supported;
+      }
+    } catch {
+      relayComments = false;
+    }
+
+    if (!relayComments || collab.commentsEnabled === false) {
+      this._commentsAvailable = false;
+      this._suggestAvailable = false;
+      return;
+    }
+
+    // Fetch comments-provider capabilities.
+    let caps: CommentsCapabilities | null = null;
+    try {
+      const resp = await fetch(
+        `${relayUrl}/api/documents/comments/capabilities`,
+        { credentials: 'include' },
+      );
+      if (resp.ok) caps = (await resp.json()) as CommentsCapabilities;
+    } catch {
+      caps = null;
+    }
+    if (!caps) {
+      this._commentsAvailable = false;
+      this._suggestAvailable = false;
+      return;
+    }
+    this._commentCapabilities = caps;
+
+    const sharedText = this._collabProvider.sharedText;
+    this._commentEngine = new CommentEngine(
+      this._collabProvider.ydoc,
+      sharedText,
+      {
+        relayUrl,
+        documentId: docId,
+        user: {
+          userId: collab.user.name,
+          userName: collab.user.name,
+          userColor: collab.user.color,
+        },
+        capabilities: caps,
+        pollIntervalMs: collab.commentsPollInterval ?? 30_000,
+      },
+    );
+    this._suggestEngine = new SuggestEngine(
+      this._collabProvider.ydoc,
+      sharedText,
+      { user: {
+        userId: collab.user.name,
+        userName: collab.user.name,
+        userColor: collab.user.color,
+      } },
+    );
+
+    this._commentCoordinator.onThreadsChange(() => {
+      if (this._activeCommentThread) {
+        const fresh = this._commentEngine
+          ?.getThreads()
+          .find((t) => t.id === this._activeCommentThread!.id);
+        this._activeCommentThread = fresh ?? null;
+      }
+    });
+    this._commentCoordinator.attach(
+      this._commentEngine,
+      this._binding,
+      this._collabProvider.ydoc,
+      this._collabProvider.awareness,
+      {
+        commentsEnabled: collab.commentsEnabled,
+        suggestEnabled: collab.suggestEnabled,
+      },
+    );
+    this._commentsAvailable = this._commentCoordinator.commentsAvailable;
+    this._suggestAvailable = this._commentCoordinator.suggestAvailable;
+
+    // Suggest buffer change -> update pending count + push pending overlay.
+    this._suggestEngine.onBufferChange(() => {
+      this._suggestPendingCount = this._suggestEngine?.hasPendingChanges() ? 1 : 0;
+    });
+
+    // Load persisted threads and start polling.
+    try {
+      await this._commentEngine.loadFromSPI();
+    } catch (e) {
+      console.warn('comments: initial load failed', e);
+    }
+    this._commentEngine.startPolling();
+  }
+
   private async _mountBinding(mode: EditorMode): Promise<void> {
     const root = this.renderRoot.querySelector('#editor-root') as HTMLElement;
     if (!root) return;
+
+    // Click on a comment anchor / suggestion widget surfaces a DOM event
+    // from the plugins (see comment-tiptap-plugin + comment-cm-extension).
+    // We attach once per mount — it's idempotent because the binding
+    // lifecycle resets the root on re-init.
+    root.addEventListener('comment-thread-activated', ((e: CustomEvent) => {
+      const threadId = e.detail?.threadId;
+      if (!threadId || !this._commentEngine) return;
+      const thread = this._commentEngine
+        .getThreads()
+        .find((t) => t.id === threadId);
+      if (thread) {
+        this._activeCommentThread = thread;
+        this._commentCoordinator.setActiveThread(threadId);
+      }
+    }) as EventListener);
 
     this._binding = this._factory.create(this.mimeType);
 
@@ -680,6 +880,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     // Let coordinators react to mode switch
     this._blameCoordinator.onModeSwitch();
+    if (this._binding) {
+      this._commentCoordinator.onModeSwitch(this._binding);
+    }
 
     // Update formatting state — available commands change with mode
     this._wireFormattingState();
@@ -777,6 +980,135 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   private _handleBlameToggle(e: CustomEvent): void {
     this._blameCoordinator.toggle(e.detail.active);
+  }
+
+  // --- Comments + Suggest Mode event handlers ---
+
+  private _handleCommentAdd(): void {
+    if (!this._commentEngine || !this._binding) return;
+    // Use the current browser selection to derive the anchor text. Works
+    // across WYSIWYG and source mode because both editors surface their
+    // selection as a standard DOM Selection inside the shared host.
+    const selText = readActiveSelectionText(this.renderRoot);
+    if (!selText || !this._collabProvider) return;
+    const doc = this._collabProvider.sharedText.toString();
+    const start = doc.indexOf(selText);
+    if (start < 0) return;
+    const end = start + selText.length;
+    const { anchor, startRel, endRel } = this._commentEngine.createAnchor(start, end);
+    const threadId = this._commentEngine.createThread(anchor, startRel, endRel, '', null);
+    const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
+    if (thread) {
+      this._activeCommentThread = thread;
+      this._commentCoordinator.setActiveThread(threadId);
+    }
+  }
+
+  private _handleSuggestToggle(e: CustomEvent): void {
+    if (!this._suggestEngine || !this._binding) return;
+    const active = !!e.detail.active;
+    if (active) {
+      this._suggestEngine.enable();
+      this._suggestActive = true;
+      this._commentCoordinator.setSuggestActive(true);
+    } else {
+      if (this._suggestEngine.hasPendingChanges()) {
+        const action = window.confirm(
+          'You have pending suggestions. Submit them before exiting Suggest Mode? ' +
+            '(Cancel to discard)',
+        );
+        if (action) this._commitPendingSuggestion();
+      }
+      this._suggestEngine.disable();
+      this._suggestActive = false;
+      this._suggestPendingCount = 0;
+      this._commentCoordinator.setSuggestActive(false);
+    }
+  }
+
+  private _handleSuggestSubmit(): void {
+    this._commitPendingSuggestion();
+  }
+
+  private _handleSuggestDiscard(): void {
+    this._suggestEngine?.clear();
+    this._suggestPendingCount = 0;
+  }
+
+  private _commitPendingSuggestion(): void {
+    if (!this._suggestEngine || !this._commentEngine) return;
+    if (!this._suggestEngine.hasPendingChanges()) return;
+    const note = window.prompt('Add a note (optional):') ?? null;
+    try {
+      const payload = this._suggestEngine.buildSuggestion(note);
+      this._commentEngine.commitSuggestion(payload);
+      this._suggestEngine.clear();
+      this._suggestPendingCount = 0;
+    } catch (err) {
+      console.error('commit suggestion failed', err);
+    }
+  }
+
+  private _handleCommentPanelClose(): void {
+    this._activeCommentThread = null;
+    this._commentCoordinator.setActiveThread(null);
+  }
+
+  private _handleCommentReply(e: CustomEvent): void {
+    this._commentEngine?.addReply(e.detail.threadId, e.detail.content);
+  }
+
+  private _handleCommentThreadResolve(e: CustomEvent): void {
+    this._commentEngine?.resolveThread(e.detail.threadId);
+  }
+
+  private _handleCommentThreadReopen(e: CustomEvent): void {
+    this._commentEngine?.reopenThread(e.detail.threadId);
+  }
+
+  private _handleCommentThreadDelete(e: CustomEvent): void {
+    this._commentEngine?.deleteThread(e.detail.threadId);
+    if (this._activeCommentThread?.id === e.detail.threadId) {
+      this._activeCommentThread = null;
+      this._commentCoordinator.setActiveThread(null);
+    }
+  }
+
+  private async _handleCommentSuggestionAccept(e: CustomEvent): Promise<void> {
+    if (!this._commentEngine || !this._collabProvider) return;
+    const threadId = e.detail.threadId;
+    const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
+    if (!thread?.suggestion) return;
+    try {
+      const payload = Uint8Array.from(atob(thread.suggestion.yjs_payload), (c) => c.charCodeAt(0));
+      // Apply the suggestion payload to the base Y.Doc. Normal y-websocket
+      // sync broadcasts the change to peers, identical to the reviewer
+      // having typed the edit by hand.
+      Y.applyUpdate(this._collabProvider.ydoc, payload);
+      this._commentEngine.decideSuggestion(threadId, 'accepted');
+    } catch (err) {
+      console.error('accept suggestion failed', err);
+      this._commentEngine.decideSuggestion(threadId, 'not_applicable');
+    }
+    this._activeCommentThread = null;
+    this._commentCoordinator.setActiveThread(null);
+  }
+
+  private _handleCommentSuggestionReject(e: CustomEvent): void {
+    this._commentEngine?.decideSuggestion(e.detail.threadId, 'rejected');
+    this._activeCommentThread = null;
+    this._commentCoordinator.setActiveThread(null);
+  }
+
+  private async _handleCommentMentionSearch(e: CustomEvent): Promise<void> {
+    if (!this._commentEngine) {
+      e.detail.resolve([]);
+      return;
+    }
+    const candidates: MentionCandidate[] = await this._commentEngine.searchMentions(
+      e.detail.query ?? '',
+    );
+    e.detail.resolve(candidates);
   }
 
   private _handleVersionClose(): void {
@@ -893,9 +1225,24 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     }
     this._blameCoordinator.detach();
     this._versionCoordinator.detach();
+    this._commentCoordinator.detach();
+    this._commentEngine?.destroy();
+    this._suggestEngine?.disable();
     this._binding?.destroy();
     this._collabProvider?.destroy();
   }
+}
+
+/**
+ * Read the current selection's plain text, preferring a selection that
+ * originates inside the given shadow/light root. Returns '' when no
+ * text is selected.
+ */
+function readActiveSelectionText(root: ParentNode): string {
+  const sel = (root as any).getSelection?.() ?? window.getSelection?.();
+  if (!sel || sel.isCollapsed) return '';
+  const text = sel.toString().trim();
+  return text;
 }
 
 declare global {
