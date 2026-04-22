@@ -32,17 +32,9 @@ func TestLoadRequestJSON(t *testing.T) {
 }
 
 func TestLoadResponseJSON(t *testing.T) {
-	ts := time.Date(2026, 4, 14, 10, 30, 0, 0, time.UTC)
 	resp := LoadResponse{
-		Snapshot: &SnapshotPayload{
-			Data:        "base64data",
-			StateVector: "base64sv",
-			CreatedAt:   ts,
-			UpdateCount: 847,
-		},
-		Updates: []UpdatePayload{
-			{Sequence: 848, Data: "upd1", ClientID: 123, CreatedAt: ts},
-		},
+		Content:  "# Hello World",
+		MimeType: "text/markdown",
 		Metadata: &DocumentMetadata{
 			Format:      "markdown",
 			Language:    "javascript",
@@ -61,14 +53,11 @@ func TestLoadResponseJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got.Snapshot.Data != "base64data" {
-		t.Errorf("snapshot data: got %q", got.Snapshot.Data)
+	if got.Content != "# Hello World" {
+		t.Errorf("content: got %q", got.Content)
 	}
-	if got.Snapshot.UpdateCount != 847 {
-		t.Errorf("update count: got %d", got.Snapshot.UpdateCount)
-	}
-	if len(got.Updates) != 1 || got.Updates[0].Sequence != 848 {
-		t.Errorf("updates: got %+v", got.Updates)
+	if got.MimeType != "text/markdown" {
+		t.Errorf("mime_type: got %q", got.MimeType)
 	}
 	if got.Metadata.Format != "markdown" {
 		t.Errorf("metadata format: got %q", got.Metadata.Format)
@@ -82,11 +71,14 @@ func TestLoadResponseNoContent(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Snapshot != nil {
-		t.Error("expected nil snapshot")
+	if got.Content != "" {
+		t.Error("expected empty content")
 	}
-	if got.Updates != nil {
-		t.Error("expected nil updates")
+	if got.MimeType != "" {
+		t.Error("expected empty mime_type")
+	}
+	if got.Metadata != nil {
+		t.Error("expected nil metadata")
 	}
 }
 

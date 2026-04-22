@@ -44,7 +44,7 @@ func TestLoad_NoContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Snapshot != nil || resp.Updates != nil {
+	if resp.Content != "" || resp.MimeType != "" {
 		t.Errorf("expected empty response for new doc")
 	}
 }
@@ -72,9 +72,11 @@ func TestStore_Accepted(t *testing.T) {
 
 	c := NewClient(ClientConfig{BaseURL: srv.URL, StoreTimeout: 5 * time.Second})
 	ts := time.Now().UTC()
-	resp, err := c.Store(context.Background(), "doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "d1", ClientID: 100, CreatedAt: ts},
-		{Sequence: 2, Data: "d2", ClientID: 200, CreatedAt: ts},
+	resp, err := c.Store(context.Background(), "doc-1", &spi.StoreRequest{
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "d1", ClientID: 100, CreatedAt: ts},
+			{Sequence: 2, Data: "d2", ClientID: 200, CreatedAt: ts},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,9 +98,11 @@ func TestStore_PartialFailure(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(ClientConfig{BaseURL: srv.URL, StoreTimeout: 5 * time.Second})
-	resp, err := c.Store(context.Background(), "doc-1", []spi.UpdatePayload{
-		{Sequence: 1, Data: "d1", CreatedAt: time.Now()},
-		{Sequence: 2, Data: "d2", CreatedAt: time.Now()},
+	resp, err := c.Store(context.Background(), "doc-1", &spi.StoreRequest{
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "d1", CreatedAt: time.Now()},
+			{Sequence: 2, Data: "d2", CreatedAt: time.Now()},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

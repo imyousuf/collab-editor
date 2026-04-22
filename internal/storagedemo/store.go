@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -114,6 +115,134 @@ func (fs *FileStore) resolveTopContributor(ctx context.Context, documentID strin
 	return "system"
 }
 
+// contentMatchesLatestVersionLocked checks if content is identical to the most recent version.
+// Must be called with fs.mu held.
+func (fs *FileStore) contentMatchesLatestVersionLocked(documentID string, content string) bool {
+	dir := fs.versionsDir(documentID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+
+	var versions []spi.VersionListEntry
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var entry spi.VersionEntry
+		if err := json.Unmarshal(data, &entry); err != nil {
+			continue
+		}
+		versions = append(versions, spi.VersionListEntry{
+			ID:        entry.ID,
+			CreatedAt: entry.CreatedAt,
+		})
+	}
+	if len(versions) == 0 {
+		return false
+	}
+
+	sort.Slice(versions, func(i, j int) bool {
+		return versions[i].CreatedAt.After(versions[j].CreatedAt)
+	})
+
+	path := filepath.Join(dir, versions[0].ID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var latest spi.VersionEntry
+	if err := json.Unmarshal(data, &latest); err != nil {
+		return false
+	}
+	return latest.Content == content
+}
+
+// resolveTopContributorLocked finds the user who contributed the most updates.
+// Must be called with fs.mu held.
+func (fs *FileStore) resolveTopContributorLocked(documentID string, updates []spi.UpdatePayload) string {
+	counts := make(map[uint64]int)
+	for _, u := range updates {
+		counts[u.ClientID]++
+	}
+
+	var topClient uint64
+	var topCount int
+	for clientID, count := range counts {
+		if count > topCount {
+			topClient = clientID
+			topCount = count
+		}
+	}
+
+	// Read client mappings file directly (no lock needed, already held)
+	path := fs.clientMappingsPath(documentID)
+	if data, err := os.ReadFile(path); err == nil {
+		var mappings []spi.ClientUserMapping
+		if err := json.Unmarshal(data, &mappings); err == nil {
+			for _, m := range mappings {
+				if m.ClientID == topClient {
+					return m.UserName
+				}
+			}
+		}
+	}
+
+	if topClient != 0 {
+		return fmt.Sprintf("client-%d", topClient)
+	}
+	return "system"
+}
+
+// createVersionLocked creates a version entry without acquiring locks.
+// Must be called with fs.mu held.
+func (fs *FileStore) createVersionLocked(documentID string, req *spi.CreateVersionRequest) (*spi.VersionListEntry, error) {
+	dir := fs.versionsDir(documentID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("creating versions dir: %w", err)
+	}
+
+	id := uuid.New().String()
+	now := time.Now().UTC()
+	vType := req.Type
+	if vType == "" {
+		vType = "manual"
+	}
+
+	entry := spi.VersionEntry{
+		ID:        id,
+		CreatedAt: now,
+		Type:      vType,
+		Label:     req.Label,
+		Creator:   req.Creator,
+		Content:   req.Content,
+		MimeType:  req.MimeType,
+		Blame:     req.Blame,
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling version: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, id+".json"), data, 0o644); err != nil {
+		return nil, fmt.Errorf("writing version file: %w", err)
+	}
+
+	return &spi.VersionListEntry{
+		ID:        id,
+		CreatedAt: now,
+		Type:      vType,
+		Label:     req.Label,
+		Creator:   req.Creator,
+		MimeType:  req.MimeType,
+	}, nil
+}
+
 func (fs *FileStore) filePath(docID string) string {
 	return filepath.Join(fs.baseDir, docID)
 }
@@ -141,31 +270,32 @@ func (fs *FileStore) LoadDocument(docID string) (*spi.LoadResponse, error) {
 		return nil, fmt.Errorf("reading document: %w", err)
 	}
 
-	resp := &spi.LoadResponse{
-		Content: string(data),
-	}
-
-	// Load stored Y.js updates if they exist
-	yjsFile := fs.yjsPath(docID)
-	if f, err := os.Open(yjsFile); err == nil {
+	// Check journal for the latest versioned content pointer.
+	// If found, return the versioned file's content instead of the seed.
+	content := string(data)
+	journalFile := fs.yjsPath(docID)
+	if f, err := os.Open(journalFile); err == nil {
 		defer f.Close()
 		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024) // up to 1MB per line
-		var seq uint64
+		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+		var lastVersionPath string
 		for scanner.Scan() {
 			line := scanner.Text()
-			if line == "" {
-				continue
+			if strings.HasPrefix(line, "VERSION:") {
+				lastVersionPath = strings.TrimPrefix(line, "VERSION:")
 			}
-			seq++
-			resp.Updates = append(resp.Updates, spi.UpdatePayload{
-				Sequence: seq,
-				Data:     line, // base64-encoded Y.js message
-			})
+		}
+		if lastVersionPath != "" {
+			versionData, vErr := os.ReadFile(filepath.Join(fs.baseDir, lastVersionPath))
+			if vErr == nil {
+				content = string(versionData)
+			}
 		}
 	}
 
-	return resp, nil
+	return &spi.LoadResponse{
+		Content: content,
+	}, nil
 }
 
 // StoreUpdates appends Y.js update data to the document's .yjs journal file.
@@ -237,22 +367,59 @@ func (fs *FileStore) Load(_ context.Context, documentID string) (*spi.LoadRespon
 }
 
 // Store implements spi.Provider.
-func (fs *FileStore) Store(ctx context.Context, documentID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
-	resp, err := fs.StoreUpdates(documentID, updates)
-	if err != nil {
+// Receives resolved content and raw Y.js updates. Writes the resolved content
+// to a versioned file and appends a VERSION pointer to the journal.
+func (fs *FileStore) Store(ctx context.Context, documentID string, req *spi.StoreRequest) (*spi.StoreResponse, error) {
+	if err := validateDocID(documentID); err != nil {
 		return nil, err
 	}
 
-	// Auto-version: create a version from current document state after storing updates.
-	// Skip if content hasn't changed since the latest version.
-	if fs.AutoVersion() && resp.Stored > 0 {
-		loadResp, loadErr := fs.Load(ctx, documentID)
-		if loadErr == nil && loadResp != nil && loadResp.Content != "" {
-			if !fs.contentMatchesLatestVersion(ctx, documentID, loadResp.Content) {
-				creator := fs.resolveTopContributor(ctx, documentID, updates)
-				versionEntry, vErr := fs.CreateVersion(ctx, documentID, &spi.CreateVersionRequest{
-					Content:  loadResp.Content,
-					MimeType: loadResp.MimeType,
+	content := req.Content
+	mimeType := req.MimeType
+	if mimeType == "" {
+		mimeType = detectMimeType(documentID)
+	}
+
+	resp := &spi.StoreResponse{Stored: len(req.Updates)}
+
+	// Write resolved content to a versioned file
+	if content != "" {
+		versionID := uuid.New().String()
+		versionDir := filepath.Join(fs.baseDir, ".versions", documentID, versionID)
+
+		fs.mu.Lock()
+		defer fs.mu.Unlock()
+
+		if err := os.MkdirAll(versionDir, 0o755); err != nil {
+			return nil, fmt.Errorf("creating version directory: %w", err)
+		}
+
+		versionFile := filepath.Join(versionDir, documentID)
+		if err := os.WriteFile(versionFile, []byte(content), 0o644); err != nil {
+			return nil, fmt.Errorf("writing versioned content: %w", err)
+		}
+
+		// Append VERSION pointer to journal
+		relPath := filepath.Join(".versions", documentID, versionID, documentID)
+		journalFile := fs.yjsPath(documentID)
+		if err := os.MkdirAll(filepath.Dir(journalFile), 0o755); err != nil {
+			return nil, fmt.Errorf("creating journal directory: %w", err)
+		}
+		jf, err := os.OpenFile(journalFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("opening journal: %w", err)
+		}
+		fmt.Fprintf(jf, "VERSION:%s\n", relPath)
+		jf.Close()
+
+		// Auto-version: create a formal version entry if enabled and content changed.
+		// Read fs.autoVersion directly since we already hold the write lock.
+		if fs.autoVersion {
+			if !fs.contentMatchesLatestVersionLocked(documentID, content) {
+				creator := fs.resolveTopContributorLocked(documentID, req.Updates)
+				versionEntry, vErr := fs.createVersionLocked(documentID, &spi.CreateVersionRequest{
+					Content:  content,
+					MimeType: mimeType,
 					Type:     "auto",
 					Creator:  creator,
 				})

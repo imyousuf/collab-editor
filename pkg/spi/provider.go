@@ -14,13 +14,14 @@ import (
 //  1. Framework handler: use NewHTTPHandler() or GinHandler() to get a ready-made router
 //  2. Manual: call ProcessLoadRequest() / ProcessStoreRequest() from your own controller
 type Provider interface {
-	// Load returns the document content and any stored Yjs updates.
+	// Load returns the latest resolved document content.
 	// Called when a new room is created and needs to bootstrap state.
 	Load(ctx context.Context, documentID string) (*LoadResponse, error)
 
-	// Store persists a batch of incremental Yjs updates.
-	// Called periodically by the relay's flush loop.
-	Store(ctx context.Context, documentID string, updates []UpdatePayload) (*StoreResponse, error)
+	// Store persists the document state. Receives the resolved content
+	// (latest full text) and optionally raw Y.js updates.
+	// Called periodically by the relay's flush loop via the SDK processor.
+	Store(ctx context.Context, documentID string, req *StoreRequest) (*StoreResponse, error)
 
 	// Health returns the provider's health status.
 	Health(ctx context.Context) (*HealthResponse, error)
@@ -65,7 +66,7 @@ func ProcessStoreRequest(ctx context.Context, p Provider, documentID string, bod
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, err
 	}
-	return p.Store(ctx, documentID, req.Updates)
+	return p.Store(ctx, documentID, &req)
 }
 
 // --- Framework integration: ready-made HTTP handler ---
@@ -124,7 +125,7 @@ func NewHTTPHandler(p Provider) http.Handler {
 			writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 			return
 		}
-		resp, err := p.Store(r.Context(), documentID, req.Updates)
+		resp, err := p.Store(r.Context(), documentID, &req)
 		if err != nil {
 			slog.Error("provider store failed", "doc", documentID, "err", err)
 			writeError(w, http.StatusInternalServerError, err.Error())

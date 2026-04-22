@@ -105,7 +105,8 @@ func (f *Flusher) storeWithRetry(ctx context.Context, documentID string, payload
 
 	for attempt := 0; attempt < f.maxRetries; attempt++ {
 		storeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		resp, err := f.client.Store(storeCtx, documentID, payloads)
+		req := &spi.StoreRequest{Updates: payloads}
+		resp, err := f.client.Store(storeCtx, documentID, req)
 		cancel()
 
 		if err != nil {

@@ -27,9 +27,9 @@ func (p *testProvider) Load(_ context.Context, documentID string) (*LoadResponse
 	return p.loadResp, p.loadErr
 }
 
-func (p *testProvider) Store(_ context.Context, documentID string, updates []UpdatePayload) (*StoreResponse, error) {
+func (p *testProvider) Store(_ context.Context, documentID string, req *StoreRequest) (*StoreResponse, error) {
 	p.lastStoreDocID = documentID
-	p.lastStoreUpdates = updates
+	p.lastStoreUpdates = req.Updates
 	return p.storeResp, p.storeErr
 }
 
@@ -61,9 +61,6 @@ func TestHTTPHandler_Load(t *testing.T) {
 		loadResp: &LoadResponse{
 			Content:  "# Hello",
 			MimeType: "text/markdown",
-			Updates: []UpdatePayload{
-				{Sequence: 1, Data: "AQEHA3NvdXJjZQ=="},
-			},
 		},
 	}
 	handler := NewHTTPHandler(p)
@@ -81,8 +78,8 @@ func TestHTTPHandler_Load(t *testing.T) {
 	if resp.Content != "# Hello" {
 		t.Errorf("content: got %q", resp.Content)
 	}
-	if len(resp.Updates) != 1 {
-		t.Errorf("updates: got %d, want 1", len(resp.Updates))
+	if resp.MimeType != "text/markdown" {
+		t.Errorf("mime_type: got %q, want %q", resp.MimeType, "text/markdown")
 	}
 }
 

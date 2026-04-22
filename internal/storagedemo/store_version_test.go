@@ -313,9 +313,12 @@ func TestAutoVersion_StoreCreatesVersion(t *testing.T) {
 	// Enable auto-version
 	store.SetAutoVersion(true)
 
-	// Store some updates
-	resp, err := store.Store(ctx, "doc.md", []spi.UpdatePayload{
-		{Sequence: 1, Data: "AQID", ClientID: 100},
+	// Store some updates with resolved content
+	resp, err := store.Store(ctx, "doc.md", &spi.StoreRequest{
+		Content: "# Hello World",
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "AQID", ClientID: 100},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -351,8 +354,11 @@ func TestAutoVersion_StoreResolvesCreatorFromMappings(t *testing.T) {
 
 	store.SetAutoVersion(true)
 
-	resp, err := store.Store(ctx, "doc.md", []spi.UpdatePayload{
-		{Sequence: 1, Data: "AQID", ClientID: 100},
+	resp, err := store.Store(ctx, "doc.md", &spi.StoreRequest{
+		Content: "# Hello World",
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "AQID", ClientID: 100},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -373,16 +379,22 @@ func TestAutoVersion_SkipsWhenContentUnchanged(t *testing.T) {
 	store.SetAutoVersion(true)
 
 	// First store — should create a version
-	resp1, _ := store.Store(ctx, "doc.md", []spi.UpdatePayload{
-		{Sequence: 1, Data: "AQID", ClientID: 100},
+	resp1, _ := store.Store(ctx, "doc.md", &spi.StoreRequest{
+		Content: "# Hello World",
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "AQID", ClientID: 100},
+		},
 	})
 	if resp1.VersionCreated == nil {
 		t.Fatal("first store should create a version")
 	}
 
 	// Second store with same content — should NOT create a version
-	resp2, _ := store.Store(ctx, "doc.md", []spi.UpdatePayload{
-		{Sequence: 2, Data: "BAUB", ClientID: 100},
+	resp2, _ := store.Store(ctx, "doc.md", &spi.StoreRequest{
+		Content: "# Hello World",
+		Updates: []spi.UpdatePayload{
+			{Sequence: 2, Data: "BAUB", ClientID: 100},
+		},
 	})
 	if resp2.VersionCreated != nil {
 		t.Error("second store with same content should skip version creation")
@@ -402,8 +414,11 @@ func TestAutoVersion_DisabledNoVersion(t *testing.T) {
 	os.WriteFile(filepath.Join(store.baseDir, "doc.md"), []byte("# Hello"), 0o644)
 
 	// Auto-version is off by default
-	resp, err := store.Store(ctx, "doc.md", []spi.UpdatePayload{
-		{Sequence: 1, Data: "AQID", ClientID: 100},
+	resp, err := store.Store(ctx, "doc.md", &spi.StoreRequest{
+		Content: "# Hello World",
+		Updates: []spi.UpdatePayload{
+			{Sequence: 1, Data: "AQID", ClientID: 100},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

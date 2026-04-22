@@ -69,8 +69,8 @@ func (c *Client) Load(ctx context.Context, documentID string, stateVector string
 	}
 }
 
-func (c *Client) Store(ctx context.Context, documentID string, updates []spi.UpdatePayload) (*spi.StoreResponse, error) {
-	body := spi.StoreRequest{Updates: updates}
+func (c *Client) Store(ctx context.Context, documentID string, req *spi.StoreRequest) (*spi.StoreResponse, error) {
+	body := req
 
 	resp, err := c.doJSON(ctx, http.MethodPost,
 		"/documents/updates?path="+url.QueryEscape(documentID),

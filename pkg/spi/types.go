@@ -8,12 +8,11 @@ type LoadRequest struct {
 }
 
 // LoadResponse is returned by the storage provider on document load.
+// Providers return the latest resolved document content. No Y.js concepts.
 type LoadResponse struct {
-	Snapshot *SnapshotPayload  `json:"snapshot,omitempty"`
-	Updates  []UpdatePayload   `json:"updates,omitempty"`
-	Metadata *DocumentMetadata `json:"metadata,omitempty"`
-	Content  string            `json:"content,omitempty"`   // plain text content of the document
+	Content  string            `json:"content,omitempty"`   // latest resolved document text
 	MimeType string            `json:"mime_type,omitempty"` // MIME type of the document
+	Metadata *DocumentMetadata `json:"metadata,omitempty"`
 }
 
 // SnapshotPayload represents a compacted document snapshot.
@@ -41,8 +40,13 @@ type DocumentMetadata struct {
 }
 
 // StoreRequest is the body sent to POST /documents/{documentId}/updates.
+// The SDK resolves Y.js diffs and populates Content with the latest document text.
+// Providers receive both the resolved content and the raw updates — they can store
+// however they see fit, but Load must always return the resolved content.
 type StoreRequest struct {
-	Updates []UpdatePayload `json:"updates"`
+	Updates  []UpdatePayload `json:"updates"`
+	Content  string          `json:"content,omitempty"`   // resolved document text (populated by SDK)
+	MimeType string          `json:"mime_type,omitempty"` // document MIME type
 }
 
 // StoreResponse is returned after persisting updates.
