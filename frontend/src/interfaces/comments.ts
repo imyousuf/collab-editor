@@ -155,11 +155,18 @@ export interface SuggestionOverlayRegion {
 export interface ICommentCapability {
   enableComments(): void;
   disableComments(): void;
-  /** Push fresh thread + overlay state to the editor's decoration plugin. */
+  /**
+   * Push fresh thread + overlay state to the editor's decoration plugin.
+   *
+   * @param pending — the author's local Suggest-Mode buffer overlay (layer 3).
+   *                  null when not in Suggest Mode or buffer is empty.
+   *                  Optional with default null for backwards compatibility.
+   */
   updateComments(
     threads: CommentThread[],
     overlays: SuggestionOverlayRegion[],
     activeThreadId: string | null,
+    pending?: import('./suggest.js').PendingSuggestOverlay | null,
   ): void;
 }
 

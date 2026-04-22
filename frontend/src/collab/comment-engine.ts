@@ -506,7 +506,12 @@ export class CommentEngine {
       );
       if (!detail.ok) continue;
       const thread = (await detail.json()) as CommentThread;
-      this._insertThreadFromWire(thread, /* markDirty */ false);
+      // Tag the mutation with POLL_ORIGIN so the observeDeep handler
+      // skips it — the thread is already persisted upstream, re-POSTing
+      // it via the debounced loop would be an echo.
+      this._ydoc.transact(() => {
+        this._insertThreadFromWire(thread, /* markDirty */ false);
+      }, POLL_ORIGIN);
     }
   }
 
@@ -619,61 +624,80 @@ export class CommentEngine {
 
   private async _persist(): Promise<void> {
     if (this._dirty.size === 0) return;
+    // Snapshot + drain, then re-queue on failure. Avoids losing writes
+    // when a transient network error interrupts the loop — without this
+    // the clear() at the top would orphan the unsent IDs forever.
     const ids = Array.from(this._dirty);
     this._dirty.clear();
+    const failed: string[] = [];
 
     for (const key of ids) {
-      if (key.startsWith('__deleted__:')) {
-        const threadId = key.slice('__deleted__:'.length);
-        await this._doFetch(
-          `/api/documents/comments/${encodeURIComponent(threadId)}?path=${encodeURIComponent(this._config.documentId)}`,
-          { method: 'DELETE' },
-        );
-        this._lastPersisted.delete(threadId);
-        continue;
-      }
-
-      const stored = this._readThread(key);
-      if (!stored) continue;
-      const snapshot = JSON.stringify(stored);
-      if (this._lastPersisted.get(key) === snapshot) continue;
-
-      const url = `/api/documents/comments?path=${encodeURIComponent(this._config.documentId)}`;
-      const existingOnServer = this._lastPersisted.has(key);
-      if (!existingOnServer) {
-        // Thread-level create (may carry an initial comment + suggestion).
-        const body: any = {
-          anchor: stored.anchor,
-          suggestion: stored.suggestion,
-        };
-        if (stored.comments[0]) {
-          body.comment = {
-            author_id: stored.comments[0].author_id,
-            author_name: stored.comments[0].author_name,
-            content: stored.comments[0].content,
-            mentions: stored.comments[0].mentions ?? [],
-          };
+      try {
+        if (key.startsWith('__deleted__:')) {
+          const threadId = key.slice('__deleted__:'.length);
+          const resp = await this._doFetch(
+            `/api/documents/comments/${encodeURIComponent(threadId)}?path=${encodeURIComponent(this._config.documentId)}`,
+            { method: 'DELETE' },
+          );
+          if (!resp.ok) throw new Error(`delete ${threadId}: ${resp.status}`);
+          this._lastPersisted.delete(threadId);
+          continue;
         }
-        await this._doFetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      } else {
-        // Status patch covers the simple "resolved/reopened" case.
-        await this._doFetch(
-          `/api/documents/comments/${encodeURIComponent(key)}?path=${encodeURIComponent(this._config.documentId)}`,
-          {
-            method: 'PATCH',
+
+        const stored = this._readThread(key);
+        if (!stored) continue;
+        const snapshot = JSON.stringify(stored);
+        if (this._lastPersisted.get(key) === snapshot) continue;
+
+        const url = `/api/documents/comments?path=${encodeURIComponent(this._config.documentId)}`;
+        const existingOnServer = this._lastPersisted.has(key);
+        let resp: Response;
+        if (!existingOnServer) {
+          // Thread-level create (may carry an initial comment + suggestion).
+          const body: any = {
+            anchor: stored.anchor,
+            suggestion: stored.suggestion,
+          };
+          if (stored.comments[0]) {
+            body.comment = {
+              author_id: stored.comments[0].author_id,
+              author_name: stored.comments[0].author_name,
+              content: stored.comments[0].content,
+              mentions: stored.comments[0].mentions ?? [],
+            };
+          }
+          resp = await this._doFetch(url, {
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              status: stored.status,
-              resolved_by: stored.resolvedBy,
-            }),
-          },
-        );
+            body: JSON.stringify(body),
+          });
+        } else {
+          // Status patch covers the simple "resolved/reopened" case.
+          resp = await this._doFetch(
+            `/api/documents/comments/${encodeURIComponent(key)}?path=${encodeURIComponent(this._config.documentId)}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                status: stored.status,
+                resolved_by: stored.resolvedBy,
+              }),
+            },
+          );
+        }
+        if (!resp.ok) throw new Error(`persist ${key}: ${resp.status}`);
+        this._lastPersisted.set(key, snapshot);
+      } catch (err) {
+        // Re-queue on failure so the next debounce retries. Network
+        // errors and 5xx both land here.
+        console.warn('comment-engine: persist failed, will retry', key, err);
+        failed.push(key);
       }
-      this._lastPersisted.set(key, snapshot);
+    }
+
+    if (failed.length > 0) {
+      for (const key of failed) this._dirty.add(key);
+      this._schedulePersist();
     }
   }
 

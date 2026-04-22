@@ -14,6 +14,23 @@ import (
 // router. When ``client`` is nil the routes reply with 503 so the frontend
 // can tell "configured but failing" from "not configured".
 func registerCommentsProxy(r chi.Router, client *provider.CommentsClient) {
+	// Comments provider capabilities probe. Mounted at
+	// /api/documents/comments/capabilities so the frontend can discover
+	// what the provider supports without touching the storage path.
+	r.Get("/documents/comments/capabilities", func(w http.ResponseWriter, req *http.Request) {
+		if client == nil {
+			writeProxyError(w, http.StatusServiceUnavailable, "comments not configured")
+			return
+		}
+		caps, err := client.Capabilities(req.Context())
+		if err != nil {
+			writeProxyError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(caps)
+	})
+
 	r.Route("/documents/comments", func(r chi.Router) {
 		// Mentions search lives at /documents/comments/mentions/search, so
 		// it must be registered before {threadId} routes to avoid capturing

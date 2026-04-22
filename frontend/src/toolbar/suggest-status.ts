@@ -31,7 +31,7 @@ export class SuggestStatus extends LitElement {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--suggest-color, #1f77b4);
+      background: var(--me-suggest-color, #1f77b4);
     }
     .label { font-weight: 600; color: #333; }
     .count { color: #666; }
@@ -53,7 +53,7 @@ export class SuggestStatus extends LitElement {
 
   override render(): TemplateResult {
     return html`
-      <span class="dot" style="--suggest-color: ${this.userColor}"></span>
+      <span class="dot" style="--me-suggest-color: ${this.userColor}"></span>
       <span class="label">Suggesting</span>
       <span class="count">
         ${this.pendingChanges === 0

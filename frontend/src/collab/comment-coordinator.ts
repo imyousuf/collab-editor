@@ -16,6 +16,7 @@ import type {
   SuggestionOverlayRegion,
 } from '../interfaces/comments.js';
 import { isCommentCapable } from '../interfaces/comments.js';
+import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
 import type { IEditorBinding } from '../interfaces/editor-binding.js';
 
 export interface CommentCoordinatorConfig {
@@ -52,6 +53,7 @@ export class CommentCoordinator {
   private _activeThreadId: string | null = null;
   private _commentsActive = false;
   private _suggestActive = false;
+  private _pendingOverlay: PendingSuggestOverlay | null = null;
   private _onThreadsChange: ((threads: CommentThread[]) => void) | null = null;
   private _onActiveThreadChange: ((threadId: string | null) => void) | null = null;
 
@@ -136,6 +138,7 @@ export class CommentCoordinator {
     this._commentsActive = false;
     this._suggestActive = false;
     this._activeThreadId = null;
+    this._pendingOverlay = null;
   }
 
   /**
@@ -161,6 +164,16 @@ export class CommentCoordinator {
     this._pushDecorations();
   }
 
+  /**
+   * Push the author's local Suggest-Mode overlay to the binding so the
+   * pending diff is rendered while the user is editing in Suggest Mode.
+   * Pass null to clear.
+   */
+  setPendingOverlay(overlay: PendingSuggestOverlay | null): void {
+    this._pendingOverlay = overlay;
+    this._pushDecorations();
+  }
+
   // --- Availability ---
 
   get commentsAvailable(): boolean {
@@ -183,7 +196,12 @@ export class CommentCoordinator {
     const overlays = this._engine.getSuggestionOverlays(
       this._config.userColor ?? paletteColor,
     );
-    this._binding.updateComments(threads, overlays, this._activeThreadId);
+    this._binding.updateComments(
+      threads,
+      overlays,
+      this._activeThreadId,
+      this._pendingOverlay,
+    );
   }
 
   // Suggest Mode toggling is owned here but the SuggestEngine itself is

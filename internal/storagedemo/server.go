@@ -61,11 +61,27 @@ func NewServer(store *FileStore, commentStore *CommentStore, authToken string) h
 		// Extra endpoint not in the SDK.
 		r.Post("/documents/compact", compactHandler(store))
 
-		// Comments SPI (Comments SDK-handled). All /comments routes and
-		// /capabilities are registered via the SDK; we just delegate.
+		// Comments SPI (Comments SDK-handled). Each route is delegated
+		// individually to avoid chi.Mount's prefix-stripping — the SDK's
+		// http.ServeMux registers full-path patterns, so stripping would
+		// cause every pattern to miss.
 		if commentsHandler != nil {
 			r.Get("/capabilities", commentsHandler.ServeHTTP)
-			r.Mount("/documents/comments", commentsHandler)
+			r.Get("/documents/comments", commentsHandler.ServeHTTP)
+			r.Post("/documents/comments", commentsHandler.ServeHTTP)
+			// Mentions search + poll share the /documents/comments/* prefix,
+			// so they are registered BEFORE the {threadId} routes below.
+			r.Get("/documents/comments/mentions/search", commentsHandler.ServeHTTP)
+			r.Get("/documents/comments/poll", commentsHandler.ServeHTTP)
+			r.Get("/documents/comments/{threadId}", commentsHandler.ServeHTTP)
+			r.Post("/documents/comments/{threadId}/replies", commentsHandler.ServeHTTP)
+			r.Patch("/documents/comments/{threadId}", commentsHandler.ServeHTTP)
+			r.Delete("/documents/comments/{threadId}", commentsHandler.ServeHTTP)
+			r.Patch("/documents/comments/{threadId}/comments/{commentId}", commentsHandler.ServeHTTP)
+			r.Delete("/documents/comments/{threadId}/comments/{commentId}", commentsHandler.ServeHTTP)
+			r.Post("/documents/comments/{threadId}/reactions", commentsHandler.ServeHTTP)
+			r.Delete("/documents/comments/{threadId}/reactions", commentsHandler.ServeHTTP)
+			r.Post("/documents/comments/{threadId}/suggestion/decision", commentsHandler.ServeHTTP)
 		}
 	})
 

@@ -94,6 +94,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
   private _collabProvider: CollaborationProvider | null = null;
+  private _commentThreadActivatedHandler: EventListener | null = null;
   private _readyResolve: (() => void) | null = null;
   private _readyPromise: Promise<void>;
   private _lastCollabConfig: CollaborationConfig | null = null;
@@ -807,10 +808,18 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     // Click on a comment anchor / suggestion widget surfaces a DOM event
     // from the plugins (see comment-tiptap-plugin + comment-cm-extension).
-    // We attach once per mount — it's idempotent because the binding
-    // lifecycle resets the root on re-init.
-    root.addEventListener('comment-thread-activated', ((e: CustomEvent) => {
-      const threadId = e.detail?.threadId;
+    // _mountBinding is called on every mode switch, so we MUST remove the
+    // previous listener first — otherwise each mode switch adds a new one
+    // and a single click fires the handler N+1 times.
+    if (this._commentThreadActivatedHandler) {
+      root.removeEventListener(
+        'comment-thread-activated',
+        this._commentThreadActivatedHandler,
+      );
+    }
+    const handler: EventListener = ((e: Event) => {
+      const ce = e as CustomEvent;
+      const threadId = ce.detail?.threadId;
       if (!threadId || !this._commentEngine) return;
       const thread = this._commentEngine
         .getThreads()
@@ -819,7 +828,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         this._activeCommentThread = thread;
         this._commentCoordinator.setActiveThread(threadId);
       }
-    }) as EventListener);
+    }) as EventListener;
+    root.addEventListener('comment-thread-activated', handler);
+    this._commentThreadActivatedHandler = handler;
 
     this._binding = this._factory.create(this.mimeType);
 
@@ -985,16 +996,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   // --- Comments + Suggest Mode event handlers ---
 
   private _handleCommentAdd(): void {
-    if (!this._commentEngine || !this._binding) return;
-    // Use the current browser selection to derive the anchor text. Works
-    // across WYSIWYG and source mode because both editors surface their
-    // selection as a standard DOM Selection inside the shared host.
-    const selText = readActiveSelectionText(this.renderRoot);
-    if (!selText || !this._collabProvider) return;
-    const doc = this._collabProvider.sharedText.toString();
-    const start = doc.indexOf(selText);
-    if (start < 0) return;
-    const end = start + selText.length;
+    if (!this._commentEngine || !this._binding || !this._collabProvider) return;
+    // Prefer a binding-native selection range so non-unique selected text
+    // (e.g., the word "the" appearing many times) anchors at the actual
+    // clicked position rather than the first occurrence.
+    const range = readSelectionRange(this.renderRoot, this._binding);
+    if (!range) return;
+    const { start, end } = range;
     const { anchor, startRel, endRel } = this._commentEngine.createAnchor(start, end);
     const threadId = this._commentEngine.createThread(anchor, startRel, endRel, '', null);
     const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
@@ -1228,21 +1236,77 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentCoordinator.detach();
     this._commentEngine?.destroy();
     this._suggestEngine?.disable();
+    if (this._commentThreadActivatedHandler) {
+      const root = this.renderRoot.querySelector('#editor-root') as HTMLElement | null;
+      root?.removeEventListener(
+        'comment-thread-activated',
+        this._commentThreadActivatedHandler,
+      );
+      this._commentThreadActivatedHandler = null;
+    }
     this._binding?.destroy();
     this._collabProvider?.destroy();
   }
 }
 
 /**
- * Read the current selection's plain text, preferring a selection that
- * originates inside the given shadow/light root. Returns '' when no
- * text is selected.
+ * Resolve the editor's current selection to a character range in the
+ * shared Y.Text. Tries binding-native APIs first (CodeMirror EditorView,
+ * Tiptap editor.state.selection) to get accurate offsets; falls back to
+ * substring matching against the DOM selection when those aren't
+ * accessible (e.g., detached binding).
  */
-function readActiveSelectionText(root: ParentNode): string {
+function readSelectionRange(
+  root: ParentNode,
+  binding: any,
+): { start: number; end: number } | null {
+  // CodeMirror path — DualModeBinding / SourceOnlyBinding / PreviewSourceBinding
+  // all expose the underlying SourceEditorInstance through a `_sourceEditor`
+  // or `_editor` private field. Peek gently and fall back on anything missing.
+  const srcEditor = binding?._sourceEditor?.view ?? binding?._editor?.view;
+  if (srcEditor && typeof srcEditor.state?.selection?.main === 'object') {
+    // Only trust the CM selection when the CM root owns focus — otherwise
+    // the user is selecting in WYSIWYG and the CM selection is stale.
+    const active = (root as any).activeElement ?? (document as any).activeElement;
+    if (
+      !active ||
+      (srcEditor.dom && (srcEditor.dom === active || srcEditor.dom.contains(active)))
+    ) {
+      const { from, to } = srcEditor.state.selection.main;
+      if (to > from) return { start: from, end: to };
+    }
+  }
+
+  // Tiptap path — binding._wysiwygEditor.editor.state.selection.
+  const tiptap = binding?._wysiwygEditor?.editor;
+  if (tiptap?.state?.selection) {
+    const sel = tiptap.state.selection;
+    if (!sel.empty) {
+      // ProseMirror positions need translation to Y.Text char offsets.
+      // A close-enough approximation is to read the selected plain text
+      // and find it; binding-native sync at commit time preserves the
+      // anchor via Y.RelativePosition, so this fallback is acceptable.
+      const text = tiptap.state.doc.textBetween(sel.from, sel.to, '\n');
+      if (text) {
+        const doc = tiptap.getText?.() ?? tiptap.state.doc.textContent;
+        const start = (doc as string).indexOf(text);
+        if (start >= 0) return { start, end: start + text.length };
+      }
+    }
+  }
+
+  // Last-resort: DOM selection text + substring match. Only kicks in when
+  // the two paths above didn't fire; non-unique text will anchor at the
+  // first occurrence but that's better than refusing to create the thread.
   const sel = (root as any).getSelection?.() ?? window.getSelection?.();
-  if (!sel || sel.isCollapsed) return '';
-  const text = sel.toString().trim();
-  return text;
+  if (!sel || sel.isCollapsed) return null;
+  const selText = sel.toString();
+  if (!selText) return null;
+  const baseText: string | undefined = binding?._collabContext?.sharedText?.toString?.();
+  if (!baseText) return null;
+  const idx = baseText.indexOf(selText);
+  if (idx < 0) return null;
+  return { start: idx, end: idx + selText.length };
 }
 
 declare global {

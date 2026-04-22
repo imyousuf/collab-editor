@@ -257,6 +257,23 @@ describe('CommentEngine — persistence', () => {
     );
     expect(del).toBeDefined();
   });
+
+  test('failed POST is re-queued so the next flush retries it', async () => {
+    const { engine, fetchMock } = setup();
+    // First attempt: 500. Second attempt: 201.
+    fetchMock
+      .mockImplementationOnce(async () => new Response('boom', { status: 500 }))
+      .mockImplementationOnce(async () => new Response('{}', { status: 201 }));
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    engine.createThread(anchor, startRel, endRel, 'hi', null);
+    await engine.flushNow(); // first attempt fails
+    await engine.flushNow(); // retry picks up the re-queued id
+
+    const posts = fetchMock.mock.calls.filter(
+      (c) => typeof c[1]?.method === 'string' && c[1]!.method === 'POST',
+    );
+    expect(posts.length).toBe(2);
+  });
 });
 
 describe('CommentEngine — mentions', () => {
