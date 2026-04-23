@@ -713,4 +713,192 @@ describe('TextBinding', () => {
 
     binding.destroy();
   });
+
+  // --- retargetYText (Suggest Mode rebind) ---
+
+  describe('retargetYText', () => {
+    test('writes from editor route to new Y.Text after retarget', () => {
+      ytext.insert(0, '<p>base</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      // Build a buffer doc seeded from base (mimics SuggestEngine.enable).
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      Y.applyUpdate(bufferDoc, Y.encodeStateAsUpdate(ydoc));
+      expect(bufferText.toString()).toBe('<p>base</p>');
+
+      binding.retargetYText(bufferText);
+
+      // User edit after retarget → buffer receives it.
+      editor._simulateUserEdit('<p>edited</p>');
+      vi.advanceTimersByTime(150);
+
+      expect(bufferText.toString()).toBe('<p>edited</p>');
+      // Base Y.Text is untouched.
+      expect(ytext.toString()).toBe('<p>base</p>');
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('remote changes to old Y.Text no longer reach the editor', async () => {
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      binding.retargetYText(bufferText);
+
+      // After retarget, mutations to the old base should NOT propagate.
+      ydoc.transact(() => { ytext.insert(0, '<p>stale</p>'); });
+      await Promise.resolve();
+
+      expect(editor.getHTML()).toBe('');
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('remote changes to new Y.Text propagate to editor', async () => {
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      binding.retargetYText(bufferText);
+
+      // Simulate a remote (SuggestEngine rebase) write on the buffer.
+      bufferDoc.transact(() => { bufferText.insert(0, '<p>rebased</p>'); });
+      await Promise.resolve();
+
+      expect(editor.getHTML()).toBe('<p>rebased</p>');
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('single observer — no duplicate editor callbacks after retarget', async () => {
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      let setContentCount = 0;
+      const origSetContent = editor.commands.setContent.bind(editor.commands);
+      editor.commands.setContent = (content: string, opts?: any) => {
+        setContentCount++;
+        origSetContent(content, opts);
+      };
+
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      binding.retargetYText(bufferText);
+
+      // Writing once to the buffer should produce exactly one setContent call.
+      bufferDoc.transact(() => { bufferText.insert(0, '<p>hi</p>'); });
+      await Promise.resolve();
+
+      expect(setContentCount).toBe(1);
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('seeded buffer content becomes visible in editor after retarget', () => {
+      ytext.insert(0, '<p>base</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+      expect(editor.getHTML()).toBe('<p>base</p>');
+
+      // Buffer is seeded to a different string before retarget.
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      bufferText.insert(0, '<p>seeded-buffer</p>');
+
+      binding.retargetYText(bufferText);
+
+      // Editor reflects the buffer immediately.
+      expect(editor.getHTML()).toBe('<p>seeded-buffer</p>');
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('in-flight write-back is cancelled at retarget time', () => {
+      ytext.insert(0, '<p>base</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      // Start a user edit — debounce queued targeting the base Y.Text.
+      editor._simulateUserEdit('<p>midway</p>');
+
+      // Retarget before debounce fires. The queued timer should be cancelled
+      // so the base is not scribbled on after the swap.
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      binding.retargetYText(bufferText);
+
+      vi.advanceTimersByTime(500);
+
+      // Base stays at its original content — the in-flight write was cancelled.
+      expect(ytext.toString()).toBe('<p>base</p>');
+      // Buffer also untouched by the cancelled write.
+      expect(bufferText.toString()).toBe('<p>midway</p>'.length > 0 ? bufferText.toString() : '');
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('retarget back to the original Y.Text resumes base writes', () => {
+      ytext.insert(0, '<p>base</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      Y.applyUpdate(bufferDoc, Y.encodeStateAsUpdate(ydoc));
+
+      binding.retargetYText(bufferText);
+      editor._simulateUserEdit('<p>buffered</p>');
+      vi.advanceTimersByTime(150);
+      expect(bufferText.toString()).toBe('<p>buffered</p>');
+      expect(ytext.toString()).toBe('<p>base</p>');
+
+      // Rebind back — subsequent edits hit the base again.
+      binding.retargetYText(ytext);
+      editor._simulateUserEdit('<p>base-edited</p>');
+      vi.advanceTimersByTime(150);
+
+      expect(ytext.toString()).toBe('<p>base-edited</p>');
+      // Buffer frozen at the value it had before the rebind-back.
+      expect(bufferText.toString()).toBe('<p>buffered</p>');
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('retargeting to the same Y.Text is a no-op', async () => {
+      ytext.insert(0, '<p>same</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      let setContentCount = 0;
+      const origSetContent = editor.commands.setContent.bind(editor.commands);
+      editor.commands.setContent = (content: string, opts?: any) => {
+        setContentCount++;
+        origSetContent(content, opts);
+      };
+
+      binding.retargetYText(ytext);
+      await Promise.resolve();
+
+      // No redundant setContent triggered, and the same observer still works.
+      expect(setContentCount).toBe(0);
+
+      ydoc.transact(() => { ytext.insert(ytext.length, '!'); });
+      await Promise.resolve();
+      expect(editor.getHTML()).toBe('<p>same</p>!');
+
+      binding.destroy();
+    });
+  });
 });

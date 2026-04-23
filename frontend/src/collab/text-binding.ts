@@ -133,6 +133,43 @@ export class TextBinding {
     }
   }
 
+  /**
+   * Swap the Y.Text this binding is attached to. Used by Suggest Mode to
+   * redirect editor writes into a per-user buffer Y.Doc while leaving the
+   * shared base Y.Doc untouched. The buffer is typically seeded to match
+   * the base, so no visible content change is expected after the swap.
+   *
+   * Teardown contract: the OLD Y.Text is unobserved exactly once, a
+   * pending write-back (if any) is cancelled, and the NEW Y.Text is
+   * observed with the same observer instance. We then re-apply the new
+   * Y.Text's content to Tiptap so the editor reflects the swap target.
+   */
+  retargetYText(newYText: Y.Text): void {
+    if (newYText === this._ytext) return;
+    // Cancel any in-flight Tiptap→old-Y.Text write-back — it would land
+    // on the stale target after the swap.
+    if (this._syncTimer) {
+      clearTimeout(this._syncTimer);
+      this._syncTimer = null;
+    }
+    if (this._ytextObserver) {
+      this._ytext.unobserve(this._ytextObserver);
+    }
+    this._ytext = newYText;
+    if (this._ytextObserver) {
+      newYText.observe(this._ytextObserver);
+    }
+    // Reflect the new target's content in Tiptap. If it matches the base
+    // (the common case for Suggest-enable), this is a visible no-op; the
+    // editor just continues where it was.
+    this._applyYTextToEditor();
+  }
+
+  /** Current Y.Text target — exposed for tests and downstream plugins. */
+  get ytext(): Y.Text {
+    return this._ytext;
+  }
+
   private _applyEditorToYText(): void {
     const serialized = this._getSerializedContent();
     const current = this._ytext.toString();
