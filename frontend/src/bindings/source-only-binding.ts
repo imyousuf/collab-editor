@@ -113,16 +113,16 @@ export class SourceOnlyBinding
 
   // --- IBlameCapability ---
 
-  enableBlame(segments: BlameSegment[]): void {
-    this._editor?.enableBlame(segments);
+  enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
+    this._editor?.enableBlame(segments, ctx);
   }
 
   disableBlame(): void {
     this._editor?.disableBlame();
   }
 
-  updateBlame(segments: BlameSegment[]): void {
-    this._editor?.updateBlame(segments);
+  updateBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
+    this._editor?.updateBlame(segments, ctx);
   }
 
   // --- ICommentCapability ---

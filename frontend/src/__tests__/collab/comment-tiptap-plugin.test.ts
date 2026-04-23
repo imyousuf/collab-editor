@@ -221,4 +221,74 @@ describe('comment-tiptap-plugin', () => {
     expect(() => editor.view.dispatch(tr)).not.toThrow();
     editor.destroy();
   });
+
+  describe('regression: markdown syntax-char anchor shift', () => {
+    function createMarkdownEditor(md: string): Editor {
+      const el = document.createElement('div');
+      document.body.appendChild(el);
+      // @ts-expect-error — Markdown extension isn't typed
+      const { Markdown } = require('@tiptap/markdown');
+      const editor = new Editor({ element: el, extensions: [StarterKit, Markdown] });
+      editor.commands.setContent(md, { contentType: 'markdown' } as any);
+      return editor;
+    }
+
+    test('anchor on a heading word lands on the word, not shifted onto `# `', () => {
+      const editor = createMarkdownEditor('# Hello');
+      editor.registerPlugin(createCommentPlugin());
+      const yText = '# Hello';
+      const thread = makeThread({
+        id: 't-heading',
+        anchor: { start: 2, end: 7, quoted_text: 'Hello' },
+      });
+      const tr = editor.state.tr;
+      tr.setMeta(
+        commentPluginKey,
+        buildCommentMeta([thread], [], null, null, { toString: () => yText } as any),
+      );
+      editor.view.dispatch(tr);
+
+      const decoSet = (commentPluginKey.getState(editor.state) as any).decorations;
+      const decorations: any[] = [];
+      decoSet.find().forEach((d: any) => decorations.push(d));
+      // One inline mark on the heading's `Hello`.
+      const anchor = decorations.find((d: any) => d.type?.attrs?.class === 'me-comment-anchor');
+      expect(anchor).toBeDefined();
+      expect(anchor.from).toBe(1); // PM pos of 'H'
+      expect(anchor.to).toBe(6); // PM pos after 'o'
+      editor.destroy();
+    });
+
+    test('suggestion overlay across block boundary does not spill into body', () => {
+      const editor = createMarkdownEditor('# H\n\nbody');
+      editor.registerPlugin(createCommentPlugin());
+      const yText = '# H\n\nbody';
+      const overlay = {
+        threadId: 't-cross-block',
+        start: 2,
+        end: 3,
+        afterText: 'HI',
+        operations: [],
+        authorColor: '#123456',
+        status: 'pending' as const,
+      };
+      const tr = editor.state.tr;
+      tr.setMeta(
+        commentPluginKey,
+        buildCommentMeta([], [overlay], null, null, { toString: () => yText } as any),
+      );
+      editor.view.dispatch(tr);
+
+      const decoSet = (commentPluginKey.getState(editor.state) as any).decorations;
+      const strikethrough: any[] = [];
+      decoSet.find().forEach((d: any) => {
+        if (d.type?.attrs?.class === 'me-suggest-before') strikethrough.push(d);
+      });
+      expect(strikethrough).toHaveLength(1);
+      // Must be exactly 1 PM char wide (the `H`) — not spilling into
+      // body via the old undercounted block separator.
+      expect(strikethrough[0].to - strikethrough[0].from).toBe(1);
+      editor.destroy();
+    });
+  });
 });

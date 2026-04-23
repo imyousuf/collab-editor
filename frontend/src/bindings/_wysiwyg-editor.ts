@@ -8,6 +8,8 @@ import { Markdown } from '@tiptap/markdown';
 import type { IContentHandler } from '../interfaces/content-handler.js';
 import { createBlamePlugin, blamePluginKey } from '../collab/blame-tiptap-plugin.js';
 import type { BlameSegment } from '../collab/blame-engine.js';
+import { findFormattingOverrides } from '../collab/pm-position-map.js';
+import type { BlameContext } from '../interfaces/blame.js';
 import {
   buildCommentMeta,
   commentPluginKey,
@@ -107,16 +109,13 @@ export class WysiwygEditorInstance {
     return () => this._updateCallbacks.delete(callback);
   }
 
-  enableBlame(segments: BlameSegment[]): void {
+  enableBlame(segments: BlameSegment[], ctx?: BlameContext): void {
     if (!this._blameActive) {
       // Register the blame ProseMirror plugin
       this._editor.registerPlugin(createBlamePlugin());
       this._blameActive = true;
     }
-    // Push segments via transaction meta
-    const { tr } = this._editor.state;
-    tr.setMeta(blamePluginKey, segments);
-    this._editor.view.dispatch(tr);
+    this._pushBlame(segments, ctx);
   }
 
   disableBlame(): void {
@@ -130,12 +129,30 @@ export class WysiwygEditorInstance {
     }
   }
 
-  updateBlame(segments: BlameSegment[]): void {
+  updateBlame(segments: BlameSegment[], ctx?: BlameContext): void {
     if (this._blameActive) {
-      const { tr } = this._editor.state;
-      tr.setMeta(blamePluginKey, segments);
-      this._editor.view.dispatch(tr);
+      this._pushBlame(segments, ctx);
     }
+  }
+
+  /**
+   * Compute formatting-authorship overrides (when a different user
+   * wrapped someone else's text in a mark) and dispatch a meta
+   * transaction that carries segments + overrides + ytext so the
+   * plugin can build an accurate posMap for Markdown/HTML.
+   */
+  private _pushBlame(segments: BlameSegment[], ctx?: BlameContext): void {
+    const overrides =
+      ctx?.ytext && ctx?.clientToUser
+        ? findFormattingOverrides(this._editor.state.doc, ctx.ytext, ctx.clientToUser)
+        : [];
+    const { tr } = this._editor.state;
+    tr.setMeta(blamePluginKey, {
+      segments,
+      overrides,
+      ytext: ctx?.ytext,
+    });
+    this._editor.view.dispatch(tr);
   }
 
   enableComments(): void {

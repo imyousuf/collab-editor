@@ -157,16 +157,16 @@ export class PreviewSourceBinding
 
   // --- IBlameCapability ---
 
-  enableBlame(segments: BlameSegment[]): void {
-    this._sourceEditor?.enableBlame(segments);
+  enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
+    this._sourceEditor?.enableBlame(segments, ctx);
   }
 
   disableBlame(): void {
     this._sourceEditor?.disableBlame();
   }
 
-  updateBlame(segments: BlameSegment[]): void {
-    this._sourceEditor?.updateBlame(segments);
+  updateBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
+    this._sourceEditor?.updateBlame(segments, ctx);
   }
 
   // --- ICommentCapability ---

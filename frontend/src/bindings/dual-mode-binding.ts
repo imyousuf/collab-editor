@@ -263,9 +263,9 @@ export class DualModeBinding
 
   // --- IBlameCapability ---
 
-  enableBlame(segments: BlameSegment[]): void {
-    this._sourceEditor?.enableBlame(segments);
-    this._wysiwygEditor?.enableBlame(segments);
+  enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
+    this._sourceEditor?.enableBlame(segments, ctx);
+    this._wysiwygEditor?.enableBlame(segments, ctx);
   }
 
   disableBlame(): void {
@@ -273,9 +273,9 @@ export class DualModeBinding
     this._wysiwygEditor?.disableBlame();
   }
 
-  updateBlame(segments: BlameSegment[]): void {
-    this._sourceEditor?.updateBlame(segments);
-    this._wysiwygEditor?.updateBlame(segments);
+  updateBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
+    this._sourceEditor?.updateBlame(segments, ctx);
+    this._wysiwygEditor?.updateBlame(segments, ctx);
   }
 
   // --- ICommentCapability ---
