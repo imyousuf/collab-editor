@@ -701,6 +701,137 @@ func (r *recordingStateStore) WriteSnapshot(_ context.Context, docID string, sta
 
 func (r *recordingStateStore) Close() error { return nil }
 
+func TestRoom_Update_TwoPeers_BidirectionalFanout(t *testing.T) {
+	// Gap #2: previously we only tested peer A → peer B. Now both
+	// directions AND verify that each peer's OWN update is not echoed
+	// back (which would create a feedback loop in y-websocket clients).
+	room, _ := newTestRoom(t)
+
+	connA := newMockConn()
+	peerA := newPeer(connA, room)
+	room.AddPeer(peerA)
+	connB := newMockConn()
+	peerB := newPeer(connB, room)
+	room.AddPeer(peerB)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peerA.writeLoop(ctx)
+	go peerB.writeLoop(ctx)
+
+	clientA := newYDocPeerForTest(t)
+	clientA.InsertText("from-A")
+	room.handleMessage(peerA, append([]byte{msgTypeSync}, clientA.EncodeUpdate()...))
+
+	clientB := newYDocPeerForTest(t)
+	clientB.InsertText("from-B")
+	room.handleMessage(peerB, append([]byte{msgTypeSync}, clientB.EncodeUpdate()...))
+
+	// Peer B sees A's update. Peer A sees B's update.
+	readWithin := func(conn *mockConn) ([]byte, bool) {
+		select {
+		case got := <-conn.writeCh:
+			return got, true
+		case <-time.After(time.Second):
+			return nil, false
+		}
+	}
+	if _, ok := readWithin(connB); !ok {
+		t.Error("peer B did not receive A's update")
+	}
+	if _, ok := readWithin(connA); !ok {
+		t.Error("peer A did not receive B's update")
+	}
+	// Neither peer should receive a second message (no echo).
+	select {
+	case got := <-connA.writeCh:
+		t.Errorf("peer A got a second (echoed?) frame: % x", got[:min(16, len(got))])
+	case <-time.After(50 * time.Millisecond):
+	}
+	select {
+	case got := <-connB.writeCh:
+		t.Errorf("peer B got a second frame: % x", got[:min(16, len(got))])
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRoom_SyncStep2FromPeer_AppliesToYDoc(t *testing.T) {
+	// Gap #5: symmetric catch-up case — a peer sends SYNC_STEP_2
+	// (typically the reply to a server-initiated SYNC_STEP_1, or an
+	// out-of-band catch-up push). The server must APPLY it to its
+	// Y.Doc but NOT broadcast it (session-specific handshake frame).
+	room, _ := newTestRoom(t)
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+	other := newMockConn()
+	otherPeer := newPeer(other, room)
+	room.AddPeer(otherPeer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer.writeLoop(ctx)
+	go otherPeer.writeLoop(ctx)
+
+	// Construct a SyncStep2 by having the client play server for a
+	// moment: it encodes its state as the reply to a blank SyncStep1.
+	client := newYDocPeerForTest(t)
+	client.InsertText("peer has extra content")
+	// EncodeSyncStep2 from ygo/sync takes the step1 frame the client
+	// would have received; easiest way to get one is from the empty
+	// room itself.
+	step1 := ysync.EncodeSyncStep1(crdt.New())
+	step2, err := ysync.EncodeSyncStep2(client.doc, step1)
+	if err != nil {
+		t.Fatalf("EncodeSyncStep2: %v", err)
+	}
+	frame := append([]byte{msgTypeSync}, step2...)
+
+	room.handleMessage(peer, frame)
+
+	// Room.ydoc should now carry the client's content.
+	if got := extractText(t, room); got != "peer has extra content" {
+		t.Errorf("room state after SyncStep2 apply: got %q, want %q", got, "peer has extra content")
+	}
+	// The frame must NOT be broadcast to the other peer (SyncStep1/2
+	// are session-specific).
+	select {
+	case got := <-other.writeCh:
+		t.Errorf("SyncStep2 must not be broadcast; other peer got: % x", got[:min(16, len(got))])
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRoom_ConcurrentUpdates_NoDataRace(t *testing.T) {
+	// Gap #7: parallel handleSyncMessage calls exercise ydocMu. Under
+	// `go test -race` this will flag any unguarded write to the Y.Doc.
+	room, _ := newTestRoom(t)
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer.writeLoop(ctx)
+
+	const n = 50
+	done := make(chan struct{}, n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer func() { done <- struct{}{} }()
+			client := newYDocPeerForTest(t)
+			client.InsertText("x")
+			frame := append([]byte{msgTypeSync}, client.EncodeUpdate()...)
+			room.handleMessage(peer, frame)
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		<-done
+	}
+	// If the mutex isn't doing its job, -race will panic above; here
+	// we just check the Y.Doc is still readable.
+	if state := room.YDocState(); len(state) == 0 {
+		t.Error("YDocState is empty after parallel updates")
+	}
+}
+
 func TestRoom_Awareness_BroadcastsButDoesNotBuffer(t *testing.T) {
 	room, _ := newTestRoom(t)
 	connA := newMockConn()

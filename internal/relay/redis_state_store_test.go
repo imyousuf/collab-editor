@@ -294,6 +294,105 @@ func extractText(t *testing.T, room *Room) string {
 	return room.ydoc.GetText(sharedTextName).ToString()
 }
 
+// recordingBroker captures Publish calls for side-effect tests.
+type recordingBroker struct {
+	published map[string][][]byte
+	subscribe func()
+}
+
+func (b *recordingBroker) Publish(_ context.Context, documentID string, data []byte) error {
+	if b.published == nil {
+		b.published = map[string][][]byte{}
+	}
+	cp := make([]byte, len(data))
+	copy(cp, data)
+	b.published[documentID] = append(b.published[documentID], cp)
+	return nil
+}
+
+func (b *recordingBroker) Subscribe(_ context.Context, _ string) (<-chan []byte, func(), error) {
+	ch := make(chan []byte)
+	close(ch)
+	return ch, func() {}, nil
+}
+
+func (b *recordingBroker) Close() error { return nil }
+
+func TestRedisStateStore_AppendUpdate_AlsoPublishesForLiveFanout(t *testing.T) {
+	// Regression: dropping the broker.Publish call would silently break
+	// cross-pod LIVE updates — edits on pod A would only reach pod B on
+	// cold-start (via the log) but never during a shared-room session.
+	// Tests that AppendUpdate triggers both the durable RPUSH AND the
+	// fire-and-forget pub/sub broadcast.
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	broker := &recordingBroker{}
+	store := NewRedisStateStore(client, broker)
+
+	ctx := context.Background()
+	payload := []byte("update-bytes")
+	if err := store.AppendUpdate(ctx, "doc-1", payload); err != nil {
+		t.Fatal(err)
+	}
+
+	got := broker.published["doc-1"]
+	if len(got) != 1 {
+		t.Fatalf("expected 1 broker publish, got %d", len(got))
+	}
+	if string(got[0]) != string(payload) {
+		t.Errorf("broker got %q, want %q", got[0], payload)
+	}
+	// And it's also in the durable log.
+	tail, _, err := store.ReadLogTail(ctx, "doc-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) != 1 || string(tail[0]) != string(payload) {
+		t.Errorf("log tail = %v, want [%q]", tail, payload)
+	}
+}
+
+func TestRedisStateStore_AppendUpdate_WithoutBroker_IsLogOnly(t *testing.T) {
+	// When the store is constructed without a broker (single-pod dev
+	// or a test harness), AppendUpdate still persists — it just
+	// doesn't publish. Regression guard against nil-deref if someone
+	// forgets to wire broker.
+	store, _ := newTestRedisStateStore(t)
+	ctx := context.Background()
+	if err := store.AppendUpdate(ctx, "doc-1", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	tail, _, err := store.ReadLogTail(ctx, "doc-1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) != 1 {
+		t.Errorf("expected 1 log entry even without broker, got %d", len(tail))
+	}
+}
+
+func TestRedisStateStore_AppendUpdate_SetsExpireOnKeys(t *testing.T) {
+	// Regression guard for the TTL bump. Without EXPIRE on every append,
+	// abandoned rooms would leak forever; without the bump, an active
+	// room's log could expire mid-session. Both keys involved in the
+	// append pipeline (log + counter) must carry a refreshed TTL.
+	store, mr := newTestRedisStateStore(t)
+	ctx := context.Background()
+	if err := store.AppendUpdate(ctx, "doc-1", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		redisStateKeyPrefix + "doc-1" + redisLogSuffix,
+		redisStateKeyPrefix + "doc-1" + redisCounterSuffix,
+	} {
+		ttl := mr.TTL(key)
+		if ttl <= 0 {
+			t.Errorf("key %q has no TTL after AppendUpdate (ttl=%v)", key, ttl)
+		}
+	}
+}
+
 func TestNoopStateStore_IsCompletelyInert(t *testing.T) {
 	// The single-pod fallback MUST be a true no-op so the relay works
 	// without Redis. Regression guard: any future change that makes
