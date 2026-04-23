@@ -258,6 +258,72 @@ describe('CommentEngine — persistence', () => {
     expect(del).toBeDefined();
   });
 
+  test('POST body carries the client thread id + initial comment id', async () => {
+    // Regression: the provider used to generate its own UUID, so the
+    // Y.Map key (frontend-authoritative) never matched what was on disk.
+    // Resolve PATCHes then hit 404 and the thread diverged. Client IDs
+    // must ride the create payload.
+    const { engine, fetchMock } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    const tid = engine.createThread(anchor, startRel, endRel, 'hi', null);
+    await engine.flushNow();
+
+    const post = fetchMock.mock.calls.find(
+      (c) => c[1]?.method === 'POST' && /\/comments\?path=/.test(c[0] as string),
+    );
+    expect(post).toBeDefined();
+    const body = JSON.parse(post![1]!.body as string);
+    expect(body.id).toBe(tid);
+    expect(body.comment.id).toBeDefined();
+    expect(typeof body.comment.id).toBe('string');
+
+    // The comment id in the wire body must match what's in the Y.Map,
+    // otherwise the Y.Map and server-side comments diverge after a
+    // subsequent GET replaces the Y.Map entry with server state.
+    const local = engine.getThreads().find((t) => t.id === tid)!;
+    expect(body.comment.id).toBe(local.comments[0].id);
+  });
+
+  test('409 conflict on create is treated as success (another peer beat us)', async () => {
+    // Multi-tab scenario: tab A creates thread T and POSTs, tab B
+    // receives T via Y-sync and also tries to POST. The second POST
+    // returns 409. The second client should NOT retry forever — the
+    // thread is already persisted under the same id.
+    const { engine, fetchMock } = setup();
+    fetchMock.mockImplementationOnce(
+      async () => new Response('conflict', { status: 409 }),
+    );
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    engine.createThread(anchor, startRel, endRel, 'hi', null);
+    await engine.flushNow();
+
+    // Would have re-queued on 500 and retried; must NOT on 409.
+    const posts = fetchMock.mock.calls.filter(
+      (c) => c[1]?.method === 'POST',
+    );
+    expect(posts.length).toBe(1);
+  });
+
+  test('reply POST body carries the client comment id', async () => {
+    const { engine, fetchMock } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    const tid = engine.createThread(anchor, startRel, endRel, 'hi', null);
+    await engine.flushNow();
+    fetchMock.mockClear();
+
+    engine.addReply(tid, 'follow-up');
+    await engine.flushNow();
+
+    const replyPost = fetchMock.mock.calls.find(
+      (c) => c[1]?.method === 'POST' && /\/replies\?path=/.test(c[0] as string),
+    );
+    expect(replyPost).toBeDefined();
+    const body = JSON.parse(replyPost![1]!.body as string);
+    expect(body.id).toBeDefined();
+    const reply = engine.getThreads().find((t) => t.id === tid)!.comments[1];
+    expect(body.id).toBe(reply.id);
+  });
+
   test('failed POST is re-queued so the next flush retries it', async () => {
     const { engine, fetchMock } = setup();
     // First attempt: 500. Second attempt: 201.

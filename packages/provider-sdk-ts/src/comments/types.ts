@@ -137,7 +137,15 @@ export interface CommentPollResponse {
 
 // --- Request bodies ---
 
+/**
+ * `id` is the client-supplied identifier and is REQUIRED. The
+ * collaborative editor pins Y.Map keys, RelativePosition anchors, and
+ * resolve PATCHes to this ID; providers MUST store the thread/comment
+ * under the given ID (no server-side generation) and return 409 on
+ * collision.
+ */
 export interface NewComment {
+  id: string;
   author_id: string;
   author_name: string;
   content: string;
@@ -145,12 +153,14 @@ export interface NewComment {
 }
 
 export interface CreateCommentThreadRequest {
+  id: string;
   anchor: CommentAnchor;
   comment?: NewComment;
   suggestion?: Suggestion;
 }
 
 export interface AddReplyRequest {
+  id: string;
   author_id: string;
   author_name: string;
   content: string;

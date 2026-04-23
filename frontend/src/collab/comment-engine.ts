@@ -516,6 +516,18 @@ export class CommentEngine {
         this._insertThreadFromWire(thread, /* markDirty */ false);
       }, POLL_ORIGIN);
     }
+    // One-time garbage collection: historical bug created threads up front
+    // (empty, no first comment) and left them forever when the user closed
+    // the draft panel without typing. Sweep them here so they don't linger
+    // as ghost anchors. New thread creation uses a draft-first flow, so
+    // once all legacy empty threads are swept this is a no-op.
+    for (const [id, raw] of this._ymap.entries()) {
+      const t = asStoredThread(raw);
+      if (!t) continue;
+      if (t.comments.length === 0 && !t.suggestion) {
+        this.deleteThread(id);
+      }
+    }
   }
 
   // --- Public: polling ---
@@ -661,43 +673,91 @@ export class CommentEngine {
           continue;
         }
 
-        const url = `/api/documents/comments?path=${encodeURIComponent(this._config.documentId)}`;
         const existingOnServer = this._lastPersisted.has(key);
-        let resp: Response;
         if (!existingOnServer) {
           // Thread-level create (may carry an initial comment + suggestion).
+          // The client's Y.Map key is the authoritative thread ID: anchors
+          // are stored in Y.RelativePosition relative to it, and resolve
+          // PATCHes target /comments/{key}. If the provider generated its
+          // own ID the two layers would diverge — resolves would hit 404
+          // and the thread would stay "open" on the server while the
+          // client considered it resolved. Ship the IDs explicitly.
+          const url = `/api/documents/comments?path=${encodeURIComponent(this._config.documentId)}`;
           const body: any = {
+            id: key,
             anchor: stored.anchor,
             suggestion: stored.suggestion,
           };
           if (stored.comments[0]) {
             body.comment = {
+              id: stored.comments[0].id,
               author_id: stored.comments[0].author_id,
               author_name: stored.comments[0].author_name,
               content: stored.comments[0].content,
               mentions: stored.comments[0].mentions ?? [],
             };
           }
-          resp = await this._doFetch(url, {
+          const resp = await this._doFetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           });
+          // 409 means another peer already persisted the same ID via
+          // CRDT sync. That's the expected multi-tab case — treat it as
+          // success so we don't retry-loop.
+          if (!resp.ok && resp.status !== 409) {
+            throw new Error(`persist ${key}: ${resp.status}`);
+          }
         } else {
-          // Status patch covers the simple "resolved/reopened" case.
-          resp = await this._doFetch(
-            `/api/documents/comments/${encodeURIComponent(key)}?path=${encodeURIComponent(this._config.documentId)}`,
-            {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                status: stored.status,
-                resolved_by: stored.resolvedBy,
-              }),
-            },
+          // Thread already on server. Diff the in-memory snapshot against
+          // what we last successfully persisted, then emit the individual
+          // endpoint calls that cover the deltas. Without this, replies
+          // added after thread creation never reach the SPI — they live
+          // only in the local Y.Map until a poll reconcile overwrites the
+          // thread with server state, at which point the replies vanish.
+          const prev = this._lastPersisted.get(key);
+          const prevThread = prev
+            ? (JSON.parse(prev) as StoredThread)
+            : null;
+          const prevCommentIds = new Set(
+            (prevThread?.comments ?? []).map((c) => c.id),
           );
+          const newComments = stored.comments.filter(
+            (c) => !prevCommentIds.has(c.id) && !c.deleted_at,
+          );
+          for (const c of newComments) {
+            const resp = await this._doFetch(
+              `/api/documents/comments/${encodeURIComponent(key)}/replies?path=${encodeURIComponent(this._config.documentId)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: c.id,
+                  author_id: c.author_id,
+                  author_name: c.author_name,
+                  content: c.content,
+                  mentions: c.mentions ?? [],
+                }),
+              },
+            );
+            if (!resp.ok) throw new Error(`reply ${key}:${c.id}: ${resp.status}`);
+          }
+
+          if (!prevThread || prevThread.status !== stored.status) {
+            const resp = await this._doFetch(
+              `/api/documents/comments/${encodeURIComponent(key)}?path=${encodeURIComponent(this._config.documentId)}`,
+              {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  status: stored.status,
+                  resolved_by: stored.resolvedBy,
+                }),
+              },
+            );
+            if (!resp.ok) throw new Error(`status ${key}: ${resp.status}`);
+          }
         }
-        if (!resp.ok) throw new Error(`persist ${key}: ${resp.status}`);
         this._lastPersisted.set(key, snapshot);
         succeeded = true;
       } catch (err) {

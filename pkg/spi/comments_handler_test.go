@@ -205,6 +205,118 @@ func TestCommentsHandler_CreateThread_WithSuggestion(t *testing.T) {
 	}
 }
 
+func TestCommentsHandler_CreateThread_ClientProvidedIDs(t *testing.T) {
+	// Frontend owns the canonical thread + comment IDs (Y.Map keys and
+	// RelativePosition anchors are pinned to them). The handler must
+	// forward req.ID and req.Comment.ID to the provider verbatim.
+	p := &commentsCoreProvider{
+		createResp: &CommentThread{ID: "tid-from-client"},
+	}
+	h := NewCommentsHTTPHandler(p)
+
+	body := CreateCommentThreadRequest{
+		ID:     "tid-from-client",
+		Anchor: CommentAnchor{Start: 0, End: 3, QuotedText: "abc"},
+		Comment: &NewComment{
+			ID:         "cid-from-client",
+			AuthorID:   "u1",
+			AuthorName: "Alice",
+			Content:    "hello",
+		},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/documents/comments?path=doc.md", bytes.NewReader(buf))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	if p.lastCreateReq == nil {
+		t.Fatalf("create req not captured")
+	}
+	if p.lastCreateReq.ID != "tid-from-client" {
+		t.Errorf("thread id dropped: got %q", p.lastCreateReq.ID)
+	}
+	if p.lastCreateReq.Comment == nil || p.lastCreateReq.Comment.ID != "cid-from-client" {
+		t.Errorf("comment id dropped: %+v", p.lastCreateReq.Comment)
+	}
+}
+
+// errorProvider simulates a provider that rejects duplicate IDs.
+type errorProvider struct {
+	commentsCoreProvider
+	createErr error
+}
+
+func (p *errorProvider) CreateCommentThread(_ context.Context, _ string, req *CreateCommentThreadRequest) (*CommentThread, error) {
+	p.lastCreateReq = req
+	if p.createErr != nil {
+		return nil, p.createErr
+	}
+	return p.createResp, nil
+}
+
+func TestCommentsHandler_CreateThread_ConflictMapsTo409(t *testing.T) {
+	p := &errorProvider{createErr: ErrCommentThreadExists}
+	h := NewCommentsHTTPHandler(p)
+
+	body := CreateCommentThreadRequest{
+		ID:     "duplicate-id",
+		Anchor: CommentAnchor{Start: 0, End: 3, QuotedText: "abc"},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/documents/comments?path=doc.md", bytes.NewReader(buf))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for ErrCommentThreadExists, got %d", w.Code)
+	}
+}
+
+func TestCommentsHandler_CreateThread_MissingIDReturns400(t *testing.T) {
+	// Client IDs are mandatory: the Y.Map key IS the canonical thread
+	// id, so omitting it is a client bug the server must surface.
+	p := &errorProvider{createErr: ErrCommentIDRequired}
+	h := NewCommentsHTTPHandler(p)
+
+	body := CreateCommentThreadRequest{
+		Anchor: CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/documents/comments?path=doc.md", bytes.NewReader(buf))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for ErrCommentIDRequired, got %d", w.Code)
+	}
+}
+
+func TestCommentsHandler_AddReply_ClientProvidedID(t *testing.T) {
+	p := &commentsCoreProvider{replyResp: &Comment{ID: "cid-from-client"}}
+	h := NewCommentsHTTPHandler(p)
+
+	body := AddReplyRequest{
+		ID:         "cid-from-client",
+		AuthorID:   "u1",
+		AuthorName: "Alice",
+		Content:    "reply",
+	}
+	buf, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/documents/comments/t1/replies?path=doc.md", bytes.NewReader(buf))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, body %s", w.Code, w.Body.String())
+	}
+	if p.lastReplyReq == nil || p.lastReplyReq.ID != "cid-from-client" {
+		t.Errorf("reply id dropped: %+v", p.lastReplyReq)
+	}
+}
+
 func TestCommentsHandler_GetThread(t *testing.T) {
 	now := time.Now()
 	p := &commentsCoreProvider{

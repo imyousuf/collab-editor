@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/imyousuf/collab-editor/pkg/spi"
 )
 
@@ -166,7 +165,23 @@ func (cs *CommentStore) CreateCommentThread(
 	}
 
 	now := cs.now().UTC()
-	threadID := uuid.NewString()
+	// The client (Y.Map) owns the canonical thread ID. Reject creates
+	// without one — letting the server fabricate would diverge from the
+	// client's key and silently drop resolve PATCHes at the wrong id.
+	threadID := req.ID
+	if threadID == "" {
+		return nil, spi.ErrCommentIDRequired
+	}
+	if !validUUID.MatchString(threadID) {
+		return nil, errors.New("invalid thread id")
+	}
+	existing, err := cs.readThreadLocked(documentID, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, spi.ErrCommentThreadExists
+	}
 	thread := &spi.CommentThread{
 		ID:         threadID,
 		DocumentID: documentID,
@@ -176,8 +191,14 @@ func (cs *CommentStore) CreateCommentThread(
 		Comments:   []spi.Comment{},
 	}
 	if req.Comment != nil {
+		if req.Comment.ID == "" {
+			return nil, spi.ErrCommentIDRequired
+		}
+		if !validUUID.MatchString(req.Comment.ID) {
+			return nil, errors.New("invalid comment id")
+		}
 		c := spi.Comment{
-			ID:         uuid.NewString(),
+			ID:         req.Comment.ID,
 			ThreadID:   threadID,
 			AuthorID:   req.Comment.AuthorID,
 			AuthorName: req.Comment.AuthorName,
@@ -233,9 +254,15 @@ func (cs *CommentStore) AddReply(
 		return nil, errors.New("thread not found")
 	}
 
+	if req.ID == "" {
+		return nil, spi.ErrCommentIDRequired
+	}
+	if !validUUID.MatchString(req.ID) {
+		return nil, errors.New("invalid comment id")
+	}
 	now := cs.now().UTC()
 	comment := spi.Comment{
-		ID:         uuid.NewString(),
+		ID:         req.ID,
 		ThreadID:   threadID,
 		AuthorID:   req.AuthorID,
 		AuthorName: req.AuthorName,

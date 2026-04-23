@@ -2,12 +2,19 @@ package storagedemo
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/imyousuf/collab-editor/pkg/spi"
 )
+
+// newID generates a UUID for tests. Every CreateCommentThreadRequest /
+// AddReplyRequest now requires an ID — the collaborative frontend owns
+// Y.Map keys and the provider must persist under exactly those keys.
+func newID() string { return uuid.NewString() }
 
 func newTestCommentStore(t *testing.T) *CommentStore {
 	t.Helper()
@@ -61,8 +68,10 @@ func TestCommentStore_CreateThread_Basic(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	thread, err := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 5, QuotedText: "hello"},
 		Comment: &spi.NewComment{
+			ID: newID(),
 			AuthorID: "alice", AuthorName: "Alice", Content: "Should we rephrase?",
 		},
 	})
@@ -83,11 +92,107 @@ func TestCommentStore_CreateThread_Basic(t *testing.T) {
 	}
 }
 
+func TestCommentStore_CreateThread_ClientProvidedIDsPersisted(t *testing.T) {
+	// When the client supplies a thread ID and initial-comment ID, the
+	// store must persist under those exact IDs. Without this the client
+	// (Y.Map keyed by local UUIDs) and the server (storing under a fresh
+	// UUID) diverge — resolve PATCHes at the client ID hit 404 and the
+	// thread stays open on the server. Regression test for that bug.
+	cs := newTestCommentStore(t)
+	ctx := context.Background()
+	threadID := "11111111-1111-4111-8111-111111111111"
+	commentID := "22222222-2222-4222-8222-222222222222"
+	thread, err := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID:     threadID,
+		Anchor: spi.CommentAnchor{Start: 0, End: 5, QuotedText: "hello"},
+		Comment: &spi.NewComment{
+			ID:         commentID,
+			AuthorID:   "alice",
+			AuthorName: "Alice",
+			Content:    "Hi!",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.ID != threadID {
+		t.Errorf("thread id overwritten: got %q, want %q", thread.ID, threadID)
+	}
+	if len(thread.Comments) != 1 || thread.Comments[0].ID != commentID {
+		t.Errorf("comment id overwritten: %+v", thread.Comments)
+	}
+
+	// Reads must return the same IDs.
+	got, err := cs.GetCommentThread(ctx, "doc.md", threadID)
+	if err != nil || got == nil {
+		t.Fatalf("get failed: %v, %+v", err, got)
+	}
+	if got.ID != threadID || got.Comments[0].ID != commentID {
+		t.Errorf("round-trip mutated ids: %+v", got)
+	}
+
+	// Resolve-by-client-id must work (this is the flow that breaks when
+	// the store ignores client IDs).
+	resolved, err := cs.UpdateThreadStatus(ctx, "doc.md", threadID, &spi.UpdateThreadStatusRequest{
+		Status: "resolved", ResolvedBy: "alice",
+	})
+	if err != nil {
+		t.Fatalf("resolve at client id failed: %v", err)
+	}
+	if resolved.Status != "resolved" {
+		t.Errorf("status not resolved: %+v", resolved)
+	}
+}
+
+func TestCommentStore_CreateThread_DuplicateIDReturnsErrExists(t *testing.T) {
+	cs := newTestCommentStore(t)
+	ctx := context.Background()
+	id := "33333333-3333-4333-8333-333333333333"
+	req := &spi.CreateCommentThreadRequest{
+		ID:     id,
+		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
+	}
+	if _, err := cs.CreateCommentThread(ctx, "doc.md", req); err != nil {
+		t.Fatal(err)
+	}
+	_, err := cs.CreateCommentThread(ctx, "doc.md", req)
+	if !errors.Is(err, spi.ErrCommentThreadExists) {
+		t.Errorf("expected ErrCommentThreadExists, got %v", err)
+	}
+}
+
+func TestCommentStore_AddReply_ClientProvidedID(t *testing.T) {
+	cs := newTestCommentStore(t)
+	ctx := context.Background()
+	threadID := "44444444-4444-4444-8444-444444444444"
+	_, err := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID:     threadID,
+		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replyID := "55555555-5555-4555-8555-555555555555"
+	reply, err := cs.AddReply(ctx, "doc.md", threadID, &spi.AddReplyRequest{
+		ID:         replyID,
+		AuthorID:   "alice",
+		AuthorName: "Alice",
+		Content:    "Reply!",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.ID != replyID {
+		t.Errorf("reply id overwritten: got %q, want %q", reply.ID, replyID)
+	}
+}
+
 func TestCommentStore_CreateThread_WithSuggestion_OpacityPreserved(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	want := "Vz8AAAEBAgMEBQYHCAkKCwwNDg8Q"
 	thread, err := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 5, QuotedText: "hello"},
 		Suggestion: &spi.Suggestion{
 			YjsPayload: want,
@@ -120,10 +225,12 @@ func TestCommentStore_AddReply_AppendsComment(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
-		Comment: &spi.NewComment{AuthorID: "alice", AuthorName: "Alice", Content: "first"},
+		Comment: &spi.NewComment{ID: newID(), AuthorID: "alice", AuthorName: "Alice", Content: "first"},
 	})
 	reply, err := cs.AddReply(ctx, "doc.md", t1.ID, &spi.AddReplyRequest{
+		ID: newID(),
 		AuthorID: "bob", AuthorName: "Bob", Content: "second",
 	})
 	if err != nil {
@@ -142,6 +249,7 @@ func TestCommentStore_ResolveAndReopen(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	resolved, err := cs.UpdateThreadStatus(ctx, "doc.md", t1.ID, &spi.UpdateThreadStatusRequest{
@@ -170,10 +278,12 @@ func TestCommentStore_ListSortsByCreationDesc(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	cs.now = func() time.Time { return base }
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	cs.now = func() time.Time { return base.Add(time.Minute) }
 	t2, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 1, End: 2, QuotedText: "b"},
 	})
 
@@ -194,6 +304,7 @@ func TestCommentStore_DeleteThread(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	if err := cs.DeleteCommentThread(ctx, "doc.md", t1.ID); err != nil {
@@ -209,8 +320,9 @@ func TestCommentStore_Edit_And_SoftDeleteComment(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
-		Comment: &spi.NewComment{AuthorID: "alice", AuthorName: "Alice", Content: "orig"},
+		Comment: &spi.NewComment{ID: newID(), AuthorID: "alice", AuthorName: "Alice", Content: "orig"},
 	})
 	commentID := t1.Comments[0].ID
 
@@ -237,6 +349,7 @@ func TestCommentStore_Reactions_Idempotent(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	req := &spi.ReactionRequest{UserID: "alice", UserName: "Alice", Emoji: "thumbsup"}
@@ -265,6 +378,7 @@ func TestCommentStore_Reactions_RejectsUnknownEmoji(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	err := cs.AddReaction(ctx, "doc.md", t1.ID, &spi.ReactionRequest{
@@ -279,6 +393,7 @@ func TestCommentStore_DecideSuggestion_AcceptResolvesThread(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 		Suggestion: &spi.Suggestion{
 			YjsPayload: "AAA=", HumanReadable: spi.SuggestionView{Summary: "x"},
@@ -305,6 +420,7 @@ func TestCommentStore_DecideSuggestion_RejectsInvalidDecision(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 		Suggestion: &spi.Suggestion{
 			YjsPayload: "AAA=", AuthorID: "alice", AuthorName: "Alice",
@@ -322,6 +438,7 @@ func TestCommentStore_DecideSuggestion_ErrorsOnMissingSuggestion(t *testing.T) {
 	cs := newTestCommentStore(t)
 	ctx := context.Background()
 	t1, _ := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	_, err := cs.DecideSuggestion(ctx, "doc.md", t1.ID, &spi.SuggestionDecisionRequest{
@@ -359,10 +476,12 @@ func TestCommentStore_Poll_FiltersBySince(t *testing.T) {
 
 	cs.now = func() time.Time { return time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC) }
 	_, _ = cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 	})
 	cs.now = func() time.Time { return time.Date(2026, 1, 1, 13, 0, 0, 0, time.UTC) }
 	_, _ = cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 1, End: 2, QuotedText: "b"},
 	})
 
@@ -384,8 +503,10 @@ func TestCommentStore_RejectsOversizedComment(t *testing.T) {
 	ctx := context.Background()
 	oversize := strings.Repeat("a", maxCommentBytes+1)
 	_, err := cs.CreateCommentThread(ctx, "doc.md", &spi.CreateCommentThreadRequest{
+		ID: newID(),
 		Anchor: spi.CommentAnchor{Start: 0, End: 1, QuotedText: "a"},
 		Comment: &spi.NewComment{
+			ID: newID(),
 			AuthorID: "alice", AuthorName: "Alice", Content: oversize,
 		},
 	})

@@ -2,6 +2,7 @@ package spi
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 )
@@ -67,7 +68,14 @@ func NewCommentsHTTPHandler(p CommentsProvider) http.Handler {
 		}
 		thread, err := p.CreateCommentThread(r.Context(), documentID, &req)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			switch {
+			case errors.Is(err, ErrCommentThreadExists):
+				writeError(w, http.StatusConflict, err.Error())
+			case errors.Is(err, ErrCommentIDRequired):
+				writeError(w, http.StatusBadRequest, err.Error())
+			default:
+				writeError(w, http.StatusInternalServerError, err.Error())
+			}
 			return
 		}
 		writeJSON(w, http.StatusCreated, thread)
@@ -156,6 +164,10 @@ func NewCommentsHTTPHandler(p CommentsProvider) http.Handler {
 		}
 		comment, err := p.AddReply(r.Context(), documentID, threadID, &req)
 		if err != nil {
+			if errors.Is(err, ErrCommentIDRequired) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

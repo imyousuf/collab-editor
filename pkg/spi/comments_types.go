@@ -1,6 +1,22 @@
 package spi
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrCommentThreadExists is returned by CreateCommentThread when the
+// client-supplied ID already exists. The HTTP handler maps it to 409
+// Conflict so the client can decide whether to retry with a fresh ID or
+// reconcile against the existing thread.
+var ErrCommentThreadExists = errors.New("comment thread id already exists")
+
+// ErrCommentIDRequired is returned when a create or reply request omits
+// its required client-supplied ID (CreateCommentThreadRequest.ID,
+// NewComment.ID, AddReplyRequest.ID). The HTTP handler maps it to 400
+// Bad Request. Clients MUST always send IDs so the server persists
+// under the same key the client tracks in its Y.Map.
+var ErrCommentIDRequired = errors.New("id is required")
 
 // --- Comments core types ---
 
@@ -150,7 +166,16 @@ type CommentPollResponse struct {
 // CreateCommentThreadRequest is the body sent to create a new thread.
 // A single comment (or initial author note for suggestion-carrying threads)
 // can be included with the thread creation request.
+//
+// ID is the authoritative identifier for the thread and is REQUIRED. The
+// collaborative frontend tracks threads in a Y.Map keyed by this ID;
+// RelativePosition anchors, resolve/reopen PATCHes, and decoration
+// lookups all depend on it being stable across the wire. A provider-
+// generated ID would diverge from the Y.Map key and silently drop
+// resolve PATCHes (historic bug). Providers MUST store the thread under
+// the client-supplied ID and return 409 if the ID is already in use.
 type CreateCommentThreadRequest struct {
+	ID         string        `json:"id"`
 	Anchor     CommentAnchor `json:"anchor"`
 	Comment    *NewComment   `json:"comment,omitempty"`    // optional initial comment
 	Suggestion *Suggestion   `json:"suggestion,omitempty"` // optional suggested edit
@@ -158,8 +183,10 @@ type CreateCommentThreadRequest struct {
 
 // NewComment carries the content + authorship for a new comment or reply.
 // Mentions are extracted from content by the SDK but may be supplied by the
-// caller to avoid re-parsing.
+// caller to avoid re-parsing. ID is REQUIRED for the same reason as
+// CreateCommentThreadRequest.ID: Y.Map keys are authoritative.
 type NewComment struct {
+	ID         string    `json:"id"`
 	AuthorID   string    `json:"author_id"`
 	AuthorName string    `json:"author_name"`
 	Content    string    `json:"content"`
@@ -167,7 +194,9 @@ type NewComment struct {
 }
 
 // AddReplyRequest is the body sent to POST /documents/comments/{threadId}/replies.
+// ID is the client-supplied comment identifier; REQUIRED.
 type AddReplyRequest struct {
+	ID         string    `json:"id"`
 	AuthorID   string    `json:"author_id"`
 	AuthorName string    `json:"author_name"`
 	Content    string    `json:"content"`

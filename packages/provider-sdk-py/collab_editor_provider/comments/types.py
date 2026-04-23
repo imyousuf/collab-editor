@@ -144,6 +144,11 @@ class CommentPollResponse:
 
 @dataclass
 class NewComment:
+    # Client-supplied identifier. REQUIRED: the collaborative editor
+    # treats its local Y.Map IDs as authoritative; providers must persist
+    # under the given ID (no server-side generation) and return 409 on
+    # collision.
+    id: str
     author_id: str
     author_name: str
     content: str
@@ -152,6 +157,7 @@ class NewComment:
 
 @dataclass
 class CreateCommentThreadRequest:
+    id: str
     anchor: CommentAnchor
     comment: Optional[NewComment] = None
     suggestion: Optional[Suggestion] = None
@@ -159,6 +165,7 @@ class CreateCommentThreadRequest:
 
 @dataclass
 class AddReplyRequest:
+    id: str
     author_id: str
     author_name: str
     content: str
