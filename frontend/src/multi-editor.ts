@@ -599,6 +599,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentCoordinator.detach();
     this._commentEngine?.destroy();
     this._commentEngine = null;
+    // If Suggest Mode is still active, rebind the editor back to the
+    // shared Y.Text before destroying the buffer — otherwise yCollab's
+    // observer would briefly point at a destroyed Y.Text.
+    if (this._suggestActive && this._binding && this._collabProvider) {
+      this._binding.rebindSharedText(this._collabProvider.sharedText);
+    }
     this._suggestEngine?.disable();
     this._suggestEngine = null;
     this._activeCommentThread = null;
@@ -1188,10 +1194,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleSuggestToggle(e: CustomEvent): void {
-    if (!this._suggestEngine || !this._binding) return;
+    if (!this._suggestEngine || !this._binding || !this._collabProvider) return;
     const active = !!e.detail.active;
     if (active) {
-      this._suggestEngine.enable();
+      // Capture the buffer Y.Text from enable() and route the editor's
+      // writes into it. Without this rebind, keystrokes would bypass the
+      // buffer and land on the shared Y.Text — i.e., no Suggest Mode.
+      const { bufferText } = this._suggestEngine.enable();
+      this._binding.rebindSharedText(bufferText);
       this._suggestActive = true;
       this._commentCoordinator.setSuggestActive(true);
     } else {
@@ -1202,6 +1212,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         );
         if (action) this._commitPendingSuggestion();
       }
+      // Rebind the editor back to the shared Y.Text BEFORE disabling the
+      // buffer — otherwise the editor would be briefly bound to a
+      // destroyed Y.Text.
+      this._binding.rebindSharedText(this._collabProvider.sharedText);
       this._suggestEngine.disable();
       this._suggestActive = false;
       this._suggestPendingCount = 0;
@@ -1214,18 +1228,30 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleSuggestDiscard(): void {
-    this._suggestEngine?.clear();
+    if (!this._suggestEngine || !this._binding || !this._collabProvider) return;
+    // clear() = disable() + enable(); the editor must be bound to a
+    // stable anchor during that window, so rebind to the base, clear,
+    // then rebind to the freshly-created buffer.
+    this._binding.rebindSharedText(this._collabProvider.sharedText);
+    this._suggestEngine.clear();
+    const fresh = this._suggestEngine.getBufferText();
+    if (fresh) this._binding.rebindSharedText(fresh);
     this._suggestPendingCount = 0;
   }
 
   private _commitPendingSuggestion(): void {
-    if (!this._suggestEngine || !this._commentEngine) return;
+    if (!this._suggestEngine || !this._commentEngine || !this._binding || !this._collabProvider) return;
     if (!this._suggestEngine.hasPendingChanges()) return;
     const note = window.prompt('Add a note (optional):') ?? null;
     try {
       const payload = this._suggestEngine.buildSuggestion(note);
       this._commentEngine.commitSuggestion(payload);
+      // Same dance as discard: rebind to base, swap the buffer, rebind
+      // to the fresh buffer so the user can continue suggesting.
+      this._binding.rebindSharedText(this._collabProvider.sharedText);
       this._suggestEngine.clear();
+      const fresh = this._suggestEngine.getBufferText();
+      if (fresh) this._binding.rebindSharedText(fresh);
       this._suggestPendingCount = 0;
     } catch (err) {
       console.error('commit suggestion failed', err);
