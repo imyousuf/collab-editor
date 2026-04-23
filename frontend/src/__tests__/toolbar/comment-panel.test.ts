@@ -114,7 +114,11 @@ describe('comment-panel', () => {
     }
   });
 
-  test('suggestion section renders before/after + Accept/Reject', async () => {
+  test('suggestion section renders summary + author + Accept/Reject (diff body lives in multi-editor)', async () => {
+    // The side-by-side diff used to be rendered inside this 360px popover,
+    // which was too cramped for a document-wide diff. It now lives in
+    // multi-editor's full-width suggestion-diff-bar, so the panel only
+    // shows summary + metadata + actions.
     const panel = await mountPanel({
       thread: makeThread({
         suggestion: {
@@ -141,10 +145,17 @@ describe('comment-panel', () => {
       },
     });
 
-    const diff = panel.shadowRoot!.querySelectorAll('.suggestion-diff .col');
-    expect(diff[0].textContent).toContain('hello');
-    expect(diff[1].textContent).toContain('HELLO');
+    // Summary + author metadata are in the panel.
+    const summary = panel.shadowRoot!.querySelector('.suggestion-summary');
+    expect(summary?.textContent).toContain('Change "hello" to "HELLO"');
+    const meta = panel.shadowRoot!.querySelector('.suggestion .comment-meta');
+    expect(meta?.textContent).toContain('Alice');
 
+    // The old side-by-side columns are no longer rendered in this panel.
+    const diffCols = panel.shadowRoot!.querySelectorAll('.suggestion-diff .col');
+    expect(diffCols.length).toBe(0);
+
+    // Accept / Reject still fire.
     let acceptReceived: any = null;
     panel.addEventListener('comment-suggestion-accept', (e: any) => {
       acceptReceived = e.detail;

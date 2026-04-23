@@ -46,6 +46,7 @@ import { pmRangeToYText } from './collab/pm-position-map.js';
 import { CommentCoordinator } from './collab/comment-coordinator.js';
 import { CommentEngine } from './collab/comment-engine.js';
 import { SuggestEngine } from './collab/suggest-engine.js';
+import { computeLineDiff } from './collab/diff-engine.js';
 import type { VersionListEntry, VersionEntry, DiffLine } from './collab/version-manager.js';
 import type {
   CommentThread,
@@ -475,6 +476,71 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     .suggest-note-modal button.primary:hover {
       filter: brightness(1.05);
     }
+
+    /* ── Suggestion diff bar (full width, inline diff) ── */
+    .suggestion-diff-bar {
+      position: relative;
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 6px;
+      background: var(--me-bg, #fff);
+      margin: 6px 8px;
+      font-family: var(--me-source-font-family, ui-monospace, monospace);
+      font-size: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    }
+    .suggestion-diff-bar .sdb-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 12px;
+      background: var(--me-toolbar-bg, #f6f8fa);
+      border-bottom: 1px solid var(--me-toolbar-border, #d0d7de);
+      font-weight: 600;
+      font-size: 11px;
+      color: var(--me-status-color, #444);
+    }
+    .suggestion-diff-bar .sdb-header .sdb-meta {
+      font-weight: 400;
+      color: var(--me-comment-meta-color, #666);
+    }
+    .suggestion-diff-bar .sdb-close {
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0 4px;
+      font-size: 14px;
+      color: var(--me-comment-meta-color, #666);
+    }
+    .suggestion-diff-bar .sdb-close:hover { color: var(--me-color, #000); }
+    .suggestion-diff-bar .sdb-body {
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    .suggestion-diff-bar .sdb-line {
+      padding: 1px 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .suggestion-diff-bar .sdb-line.added {
+      background: var(--me-diff-added-bg, #dcfce7);
+      color: var(--me-diff-added-color, #166534);
+    }
+    .suggestion-diff-bar .sdb-line.removed {
+      background: var(--me-diff-removed-bg, #fce7e7);
+      color: var(--me-diff-removed-color, #991b1b);
+      text-decoration: line-through;
+    }
+    .suggestion-diff-bar .sdb-line.unchanged {
+      color: var(--me-status-color, #666);
+    }
+    .suggestion-diff-bar .sdb-empty {
+      padding: 12px;
+      text-align: center;
+      color: var(--me-comment-meta-color, #999);
+      font-size: 12px;
+    }
   `;
 
   render() {
@@ -484,6 +550,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     return html`
       ${toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
+      ${this._activeCommentThread?.suggestion ? this._renderSuggestionDiffBar() : nothing}
       <div class="editor-wrapper" style="position: relative;">
         <div id="editor-root" class="editor-root" part="editor-area"></div>
         ${statusBarVisible ? this._renderStatusBarSlot() : nothing}
@@ -507,6 +574,49 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @suggest-discard=${this._handleSuggestDiscard}
           @suggest-toggle-off=${() => this._handleSuggestToggle({ detail: { active: false } } as any)}
         ></suggest-status>
+      </div>
+    `;
+  }
+
+  private _renderSuggestionDiffBar() {
+    const thread = this._activeCommentThread;
+    const s = thread?.suggestion;
+    if (!s) return nothing;
+    const before = s.human_readable.before_text ?? '';
+    const after = s.human_readable.after_text ?? '';
+    const lines = computeLineDiff(before, after);
+    const allUnchanged = lines.every((l) => l.type === 'unchanged');
+    const statusLabel = s.status === 'pending'
+      ? 'Pending'
+      : s.status === 'accepted'
+        ? `Accepted by ${s.decided_by_name ?? s.decided_by ?? 'unknown'}`
+        : s.status === 'rejected'
+          ? `Rejected by ${s.decided_by_name ?? s.decided_by ?? 'unknown'}`
+          : s.status;
+    return html`
+      <div class="suggestion-diff-bar" part="suggestion-diff-bar">
+        <div class="sdb-header">
+          <span>
+            Suggestion by ${s.author_name || s.author_id || 'unknown'}
+            <span class="sdb-meta">· ${statusLabel}</span>
+          </span>
+          <button
+            class="sdb-close"
+            title="Close diff"
+            @click=${this._handleCommentPanelClose}
+          >×</button>
+        </div>
+        ${allUnchanged
+          ? html`<div class="sdb-empty">No textual changes.</div>`
+          : html`
+              <div class="sdb-body">
+                ${lines.map((l) => html`
+                  <div class="sdb-line ${l.type}">${
+                    l.type === 'added' ? '+ ' : l.type === 'removed' ? '- ' : '  '
+                  }${l.content}</div>
+                `)}
+              </div>
+            `}
       </div>
     `;
   }

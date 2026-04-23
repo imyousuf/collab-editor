@@ -296,6 +296,9 @@ export class CommentPanel extends LitElement {
       s.status === 'accepted' || s.status === 'rejected'
         ? `${s.status} by ${s.decided_by_name ?? s.decided_by ?? 'unknown'}`
         : null;
+    // Diff body is rendered elsewhere (multi-editor's full-width
+    // suggestion-diff-bar) to avoid cramming a diff into this 360px
+    // popover. Here we show just the summary + metadata + actions.
     return html`
       <div class="suggestion">
         <div class="suggestion-summary">
@@ -305,10 +308,6 @@ export class CommentPanel extends LitElement {
         <div class="comment-meta" style="margin-bottom: 6px;">
           suggested by ${s.author_name || s.author_id || 'unknown'}
           ${decidedLabel ? html` · ${decidedLabel}` : nothing}
-        </div>
-        <div class="suggestion-diff">
-          <div class="col before" title="Before">${s.human_readable.before_text || '(empty)'}</div>
-          <div class="col after" title="After">${s.human_readable.after_text || '(empty)'}</div>
         </div>
         ${s.status === 'pending' && canDecide
           ? html`
