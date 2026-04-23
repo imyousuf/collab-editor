@@ -15,6 +15,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import {
   buildPositionMap,
+  pmRangeToYText,
   snapRange,
   findFormattingOverrides,
   collectClientsInRange,
@@ -160,6 +161,41 @@ describe('buildPositionMap', () => {
     // The helper should skip the node without throwing.
     const editor = makeTiptapFromMarkdown('hello');
     expect(() => buildPositionMap(editor.state.doc, 'goodbye')).not.toThrow();
+    editor.destroy();
+  });
+});
+
+describe('pmRangeToYText', () => {
+  test('markdown heading: PM selection of `Hello` returns Y.Text [2, 7)', () => {
+    const editor = makeTiptapFromMarkdown('# Hello');
+    // PM positions for `Hello` inside <heading>: 1..6 — the char `H`
+    // sits between pos 1 and 2, `o` between 5 and 6.
+    const range = pmRangeToYText(editor.state.doc, '# Hello', 1, 6);
+    expect(range).toEqual({ start: 2, end: 7 });
+    editor.destroy();
+  });
+
+  test('inline bold: PM selection of `3` returns Y.Text [4, 5)', () => {
+    const editor = makeTiptapFromMarkdown('12**3**456');
+    // PM `3` lives at PM pos 3..4 inside the paragraph. Using a range
+    // that covers just that character.
+    const { state } = editor;
+    let threePos: number | undefined;
+    state.doc.descendants((node: any, pos: number) => {
+      if (node.isText && node.text === '3') threePos = pos;
+    });
+    expect(threePos).toBeDefined();
+    const range = pmRangeToYText(state.doc, '12**3**456', threePos!, threePos! + 1);
+    expect(range).toEqual({ start: 4, end: 5 });
+    editor.destroy();
+  });
+
+  test('returns null when selection has no visible characters', () => {
+    const editor = makeTiptapFromMarkdown('hello');
+    // Collapsed selection.
+    expect(pmRangeToYText(editor.state.doc, 'hello', 3, 3)).toBeNull();
+    // Inverted range.
+    expect(pmRangeToYText(editor.state.doc, 'hello', 5, 1)).toBeNull();
     editor.destroy();
   });
 });

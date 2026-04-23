@@ -60,6 +60,46 @@ export function buildPositionMap(
 }
 
 /**
+ * Inverse of {@link buildPositionMap}: project a ProseMirror selection
+ * range `[fromPM, toPM)` onto the corresponding Y.Text offset range.
+ *
+ * Used by the comment-creation flow, where the user's selection lives
+ * in PM positions but the anchor must be stored as Y.Text offsets into
+ * the raw source (Markdown / HTML). Without this inversion the old
+ * code reached for Tiptap's rendered plain text + `indexOf`, which
+ * returned a positional answer that was only valid in *rendered* space
+ * — the stored anchor then pointed at arbitrary source characters.
+ *
+ * Returns `null` when the selection has no visible characters to
+ * anchor (e.g., a user somehow selected only a mark delimiter).
+ */
+export function pmRangeToYText(
+  doc: any,
+  yText: string,
+  fromPM: number,
+  toPM: number,
+): { start: number; end: number } | null {
+  if (toPM <= fromPM) return null;
+  const map = buildPositionMap(doc, yText);
+  if (map.size === 0) return null;
+
+  const entries: [number, number][] = [];
+  map.forEach((pmPos, yOff) => entries.push([yOff, pmPos]));
+  entries.sort((a, b) => a[0] - b[0]);
+
+  let start: number | undefined;
+  let lastYOff: number | undefined;
+  for (const [yOff, pmPos] of entries) {
+    if (pmPos >= toPM) break;
+    if (pmPos < fromPM) continue;
+    if (start === undefined) start = yOff;
+    lastYOff = yOff;
+  }
+  if (start === undefined || lastYOff === undefined) return null;
+  return { start, end: lastYOff + 1 };
+}
+
+/**
  * Snap a half-open range `[start, end)` in Y.Text offset space onto PM
  * positions. `start` snaps forward to the next mapped offset; `end`
  * snaps backward to the previous mapped offset plus one (so the

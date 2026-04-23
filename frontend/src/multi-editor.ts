@@ -42,6 +42,7 @@ import { CollaborationProvider } from './collab/collab-provider.js';
 import { BlameCoordinator } from './collab/blame-coordinator.js';
 import { VersionCoordinator } from './collab/version-coordinator.js';
 import * as Y from 'yjs';
+import { pmRangeToYText } from './collab/pm-position-map.js';
 import { CommentCoordinator } from './collab/comment-coordinator.js';
 import { CommentEngine } from './collab/comment-engine.js';
 import { SuggestEngine } from './collab/suggest-engine.js';
@@ -997,10 +998,15 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   private _handleCommentAdd(): void {
     if (!this._commentEngine || !this._binding || !this._collabProvider) return;
-    // Prefer a binding-native selection range so non-unique selected text
-    // (e.g., the word "the" appearing many times) anchors at the actual
-    // clicked position rather than the first occurrence.
-    const range = readSelectionRange(this.renderRoot, this._binding);
+    // Selection → Y.Text offsets. Uses the shared pm-position-map so
+    // WYSIWYG's PM-positioned selection is correctly inverted onto the
+    // raw Markdown/HTML source offsets; CodeMirror and plain-text both
+    // fall through to their identity mapping.
+    const range = readSelectionRange(
+      this.renderRoot,
+      this._binding,
+      this._collabProvider.sharedText.toString(),
+    );
     if (!range) return;
     const { start, end } = range;
     const { anchor, startRel, endRel } = this._commentEngine.createAnchor(start, end);
@@ -1068,6 +1074,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   private _handleCommentThreadResolve(e: CustomEvent): void {
     this._commentEngine?.resolveThread(e.detail.threadId);
+    // Resolving means "I'm done with this thread" — close the panel so
+    // the user isn't left staring at the same thread with a Reopen
+    // button. If they want to reopen, they click the anchor again.
+    if (this._activeCommentThread?.id === e.detail.threadId) {
+      this._activeCommentThread = null;
+      this._commentCoordinator.setActiveThread(null);
+    }
   }
 
   private _handleCommentThreadReopen(e: CustomEvent): void {
@@ -1259,14 +1272,27 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 function readSelectionRange(
   root: ParentNode,
   binding: any,
+  yTextStr: string,
 ): { start: number; end: number } | null {
-  // CodeMirror path — DualModeBinding / SourceOnlyBinding / PreviewSourceBinding
-  // all expose the underlying SourceEditorInstance through a `_sourceEditor`
-  // or `_editor` private field. Peek gently and fall back on anything missing.
+  // WYSIWYG path FIRST — when Tiptap has a non-collapsed selection we
+  // trust it, because the user's click/drag landed in a visible PM
+  // position. This avoids accidentally reusing a stale CodeMirror
+  // selection when the user is actually editing in WYSIWYG.
+  const tiptap = binding?._wysiwygEditor?.editor;
+  if (tiptap?.state?.selection && !tiptap.state.selection.empty) {
+    const sel = tiptap.state.selection;
+    // pmRangeToYText inverts buildPositionMap: PM positions back to
+    // Y.Text offsets, skipping syntax chars. Much better than the old
+    // `indexOf(selectedText)` which searched in rendered plain text —
+    // that produced anchor offsets that were only valid in rendered
+    // space and pointed at wrong source characters when stored.
+    const range = pmRangeToYText(tiptap.state.doc, yTextStr, sel.from, sel.to);
+    if (range) return range;
+  }
+
+  // CodeMirror path — Y.Text offsets are identical to CM positions.
   const srcEditor = binding?._sourceEditor?.view ?? binding?._editor?.view;
   if (srcEditor && typeof srcEditor.state?.selection?.main === 'object') {
-    // Only trust the CM selection when the CM root owns focus — otherwise
-    // the user is selecting in WYSIWYG and the CM selection is stale.
     const active = (root as any).activeElement ?? (document as any).activeElement;
     if (
       !active ||
@@ -1277,34 +1303,14 @@ function readSelectionRange(
     }
   }
 
-  // Tiptap path — binding._wysiwygEditor.editor.state.selection.
-  const tiptap = binding?._wysiwygEditor?.editor;
-  if (tiptap?.state?.selection) {
-    const sel = tiptap.state.selection;
-    if (!sel.empty) {
-      // ProseMirror positions need translation to Y.Text char offsets.
-      // A close-enough approximation is to read the selected plain text
-      // and find it; binding-native sync at commit time preserves the
-      // anchor via Y.RelativePosition, so this fallback is acceptable.
-      const text = tiptap.state.doc.textBetween(sel.from, sel.to, '\n');
-      if (text) {
-        const doc = tiptap.getText?.() ?? tiptap.state.doc.textContent;
-        const start = (doc as string).indexOf(text);
-        if (start >= 0) return { start, end: start + text.length };
-      }
-    }
-  }
-
-  // Last-resort: DOM selection text + substring match. Only kicks in when
-  // the two paths above didn't fire; non-unique text will anchor at the
-  // first occurrence but that's better than refusing to create the thread.
-  const sel = (root as any).getSelection?.() ?? window.getSelection?.();
-  if (!sel || sel.isCollapsed) return null;
-  const selText = sel.toString();
+  // Last-resort: DOM selection text + substring match. Non-unique text
+  // anchors at the first occurrence, but that's better than refusing
+  // to create the thread entirely.
+  const domSel = (root as any).getSelection?.() ?? window.getSelection?.();
+  if (!domSel || domSel.isCollapsed) return null;
+  const selText = domSel.toString();
   if (!selText) return null;
-  const baseText: string | undefined = binding?._collabContext?.sharedText?.toString?.();
-  if (!baseText) return null;
-  const idx = baseText.indexOf(selText);
+  const idx = yTextStr.indexOf(selText);
   if (idx < 0) return null;
   return { start: idx, end: idx + selText.length };
 }
