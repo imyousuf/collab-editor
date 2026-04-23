@@ -31,6 +31,7 @@ function createMockBinding() {
     setReadonly: vi.fn(),
     onContentChange: vi.fn(() => () => {}),
     onRemoteChange: vi.fn(() => () => {}),
+    rebindSharedText: vi.fn(),
     destroy: vi.fn(),
   };
 }
@@ -237,6 +238,7 @@ describe('BlameCoordinator', () => {
       setReadonly: vi.fn(),
       onContentChange: vi.fn(() => () => {}),
       onRemoteChange: vi.fn(() => () => {}),
+      rebindSharedText: vi.fn(),
       destroy: vi.fn(),
       // No blame methods
     };

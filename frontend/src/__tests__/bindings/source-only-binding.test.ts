@@ -1,4 +1,6 @@
 import { describe, test, expect, vi } from 'vitest';
+import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness.js';
 import { editorBindingContractTests } from '../interfaces/editor-binding.contract.js';
 import { SourceOnlyBinding } from '../../bindings/source-only-binding.js';
 import { isBlameCapable } from '../../interfaces/blame.js';
@@ -123,5 +125,48 @@ describe('SourceOnlyBinding unit tests', () => {
     const binding = new SourceOnlyBinding('javascript');
     expect(() => binding.enableBlame([])).not.toThrow();
     expect(() => binding.disableBlame()).not.toThrow();
+  });
+
+  test('rebindSharedText routes writes to the buffer', async () => {
+    const baseDoc = new Y.Doc();
+    const baseText = baseDoc.getText('source');
+    const awareness = new Awareness(baseDoc);
+    const binding = new SourceOnlyBinding('javascript');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' }, {
+      sharedText: baseText,
+      awareness,
+      ydoc: baseDoc,
+    });
+
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    binding.rebindSharedText(bufferText);
+
+    // Drive the internal source editor directly.
+    const source = (binding as any)._editor;
+    source.view.dispatch({ changes: { from: 0, insert: 'Z' } });
+
+    expect(bufferText.toString()).toBe('Z');
+    expect(baseText.toString()).toBe('');
+
+    binding.destroy();
+    awareness.destroy();
+    baseDoc.destroy();
+    bufferDoc.destroy();
+  });
+
+  test('rebindSharedText is a no-op without collab context', async () => {
+    const binding = new SourceOnlyBinding('javascript');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    // Should not throw.
+    binding.rebindSharedText(bufferText);
+
+    binding.destroy();
+    bufferDoc.destroy();
   });
 });

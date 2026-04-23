@@ -200,6 +200,12 @@ export class DualModeBinding
     return () => this._remoteCallbacks.delete(callback);
   }
 
+  rebindSharedText(yText: import('yjs').Text): void {
+    if (!this._collab) return;
+    this._sourceEditor?.rebindSharedText(yText);
+    this._textBinding?.retargetYText(yText);
+  }
+
   // --- IFormattingCapability ---
 
   executeCommand(command: FormattingCommand, params?: LinkParams): void {

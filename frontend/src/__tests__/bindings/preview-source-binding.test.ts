@@ -242,4 +242,49 @@ describe('PreviewSourceBinding unit tests', () => {
     expect(() => binding.enableBlame(segments)).not.toThrow();
     expect(() => binding.disableBlame()).not.toThrow();
   });
+
+  test('rebindSharedText routes writes to the buffer when mounted with collab', async () => {
+    const Y = await import('yjs');
+    const { Awareness } = await import('y-protocols/awareness.js');
+    const baseDoc = new Y.Doc();
+    const baseText = baseDoc.getText('source');
+    const awareness = new Awareness(baseDoc);
+    const binding = new PreviewSourceBinding('jsx');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' }, {
+      sharedText: baseText,
+      awareness,
+      ydoc: baseDoc,
+    });
+
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    binding.rebindSharedText(bufferText);
+
+    // Drive the internal source editor to force an edit through yCollab.
+    const source = (binding as any)._sourceEditor;
+    source.view.dispatch({ changes: { from: 0, insert: 'Q' } });
+
+    expect(bufferText.toString()).toBe('Q');
+    expect(baseText.toString()).toBe('');
+
+    binding.destroy();
+    awareness.destroy();
+    baseDoc.destroy();
+    bufferDoc.destroy();
+  });
+
+  test('rebindSharedText is a no-op without collab', async () => {
+    const Y = await import('yjs');
+    const binding = new PreviewSourceBinding('jsx');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    binding.rebindSharedText(bufferText);
+
+    binding.destroy();
+    bufferDoc.destroy();
+  });
 });

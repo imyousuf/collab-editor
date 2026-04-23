@@ -35,6 +35,7 @@ function createMockBinding() {
     setReadonly: vi.fn(),
     onContentChange: vi.fn(() => () => {}),
     onRemoteChange: vi.fn(() => () => {}),
+    rebindSharedText: vi.fn(),
     destroy: vi.fn(),
   };
 }

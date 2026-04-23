@@ -90,6 +90,17 @@ export interface IEditorBinding {
    */
   onRemoteChange(callback: RemoteChangeCallback): () => void;
 
+  /**
+   * Swap the Y.Text this binding's editors are bound to. Used by
+   * Suggest Mode to redirect editor writes into a per-user buffer
+   * Y.Doc without reconstructing the editor. Implementations must
+   * propagate the swap to both the CodeMirror (yCollab) and Tiptap
+   * (TextBinding) sides when both are in play.
+   *
+   * No-op when the binding was mounted without collaboration.
+   */
+  rebindSharedText(yText: Y.Text): void;
+
   /** Permanently destroy this binding and release all resources. */
   destroy(): void;
 }

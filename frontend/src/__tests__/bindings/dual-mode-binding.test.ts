@@ -143,6 +143,82 @@ describe('DualModeBinding unit tests', () => {
     binding.destroy();
     ydoc.destroy();
   });
+
+  test('rebindSharedText routes writes from CodeMirror to the buffer', async () => {
+    const Y = await import('yjs');
+    const { Awareness } = await import('y-protocols/awareness.js');
+    const baseDoc = new Y.Doc();
+    const baseText = baseDoc.getText('source');
+    const awareness = new Awareness(baseDoc);
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' }, {
+      sharedText: baseText,
+      awareness,
+      ydoc: baseDoc,
+    });
+
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    binding.rebindSharedText(bufferText);
+
+    // Drive the source editor directly — dispatch an insert through the
+    // underlying CodeMirror view. With the rebind, the insert must land
+    // on the buffer, not the base.
+    const source = (binding as any)._sourceEditor;
+    source.view.dispatch({ changes: { from: 0, insert: 'X' } });
+
+    expect(bufferText.toString()).toBe('X');
+    expect(baseText.toString()).toBe('');
+
+    binding.destroy();
+    awareness.destroy();
+    baseDoc.destroy();
+    bufferDoc.destroy();
+  });
+
+  test('rebindSharedText retargets TextBinding alongside the source editor', async () => {
+    const Y = await import('yjs');
+    const { Awareness } = await import('y-protocols/awareness.js');
+    const baseDoc = new Y.Doc();
+    const baseText = baseDoc.getText('source');
+    const awareness = new Awareness(baseDoc);
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'wysiwyg', { readonly: false, theme: 'light' }, {
+      sharedText: baseText,
+      awareness,
+      ydoc: baseDoc,
+    });
+
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    binding.rebindSharedText(bufferText);
+
+    // TextBinding's exposed ytext getter confirms the swap.
+    const tb = (binding as any)._textBinding;
+    expect(tb.ytext).toBe(bufferText);
+
+    binding.destroy();
+    awareness.destroy();
+    baseDoc.destroy();
+    bufferDoc.destroy();
+  });
+
+  test('rebindSharedText is a no-op without a collab context', async () => {
+    const Y = await import('yjs');
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    // Without collab, rebind does nothing — no throw.
+    const bufferDoc = new Y.Doc();
+    const bufferText = bufferDoc.getText('source');
+    binding.rebindSharedText(bufferText);
+
+    binding.destroy();
+    bufferDoc.destroy();
+  });
 });
 
 describe('DualModeBinding IFormattingCapability', () => {

@@ -28,6 +28,7 @@ class MockBinding implements IEditorBinding {
   }
   onContentChange(callback: ContentChangeCallback): () => void { return () => {}; }
   onRemoteChange(callback: RemoteChangeCallback): () => void { return () => {}; }
+  rebindSharedText(_yText: any): void {}
   destroy(): void { this.unmount(); }
 }
 

@@ -111,6 +111,11 @@ export class SourceOnlyBinding
     return () => this._remoteCallbacks.delete(callback);
   }
 
+  rebindSharedText(yText: import('yjs').Text): void {
+    if (!this._collab) return;
+    this._editor?.rebindSharedText(yText);
+  }
+
   // --- IBlameCapability ---
 
   enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {

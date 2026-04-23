@@ -155,6 +155,14 @@ export class PreviewSourceBinding
     return () => this._remoteCallbacks.delete(callback);
   }
 
+  rebindSharedText(yText: import('yjs').Text): void {
+    if (!this._collab) return;
+    this._sourceEditor?.rebindSharedText(yText);
+    // Preview re-renders automatically via the onUpdate callback wired in
+    // mount(): once yCollab's new plugin populates the source editor from
+    // the new Y.Text, the update fires and refreshes the preview.
+  }
+
   // --- IBlameCapability ---
 
   enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {
