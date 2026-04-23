@@ -136,22 +136,28 @@ export class TextBinding {
   /**
    * Swap the Y.Text this binding is attached to. Used by Suggest Mode to
    * redirect editor writes into a per-user buffer Y.Doc while leaving the
-   * shared base Y.Doc untouched. The buffer is typically seeded to match
-   * the base, so no visible content change is expected after the swap.
+   * shared base Y.Doc untouched.
    *
    * Teardown contract: the OLD Y.Text is unobserved exactly once, a
    * pending write-back (if any) is cancelled, and the NEW Y.Text is
-   * observed with the same observer instance. We then re-apply the new
-   * Y.Text's content to Tiptap so the editor reflects the swap target.
+   * observed with the same observer instance.
+   *
+   * Important: we only re-run `_applyYTextToEditor` when the NEW target's
+   * raw string actually differs from the OLD target's raw string. In the
+   * Suggest-enable path the buffer is seeded byte-for-byte from the base
+   * via `Y.applyUpdate`, so the two match and a setContent would be a
+   * pointless re-parse. Tiptap's markdown round-trip isn't perfectly
+   * idempotent with raw Y.Text markdown, so forcing an unnecessary
+   * re-parse would collapse structure (headings/lists/paragraphs get
+   * inlined), which then shows up on submit as a whole-document diff.
    */
   retargetYText(newYText: Y.Text): void {
     if (newYText === this._ytext) return;
-    // Cancel any in-flight Tiptap→old-Y.Text write-back — it would land
-    // on the stale target after the swap.
     if (this._syncTimer) {
       clearTimeout(this._syncTimer);
       this._syncTimer = null;
     }
+    const contentChanged = this._ytext.toString() !== newYText.toString();
     if (this._ytextObserver) {
       this._ytext.unobserve(this._ytextObserver);
     }
@@ -159,10 +165,9 @@ export class TextBinding {
     if (this._ytextObserver) {
       newYText.observe(this._ytextObserver);
     }
-    // Reflect the new target's content in Tiptap. If it matches the base
-    // (the common case for Suggest-enable), this is a visible no-op; the
-    // editor just continues where it was.
-    this._applyYTextToEditor();
+    if (contentChanged) {
+      this._applyYTextToEditor();
+    }
   }
 
   /** Current Y.Text target — exposed for tests and downstream plugins. */

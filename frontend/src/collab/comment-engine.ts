@@ -426,6 +426,7 @@ export class CommentEngine {
           ...t.suggestion,
           status: decision,
           decided_by: this._config.user.userId,
+          decided_by_name: this._config.user.userName,
           decided_at: now,
           applied_version_id: appliedVersionId,
         },

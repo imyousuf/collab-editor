@@ -69,6 +69,10 @@ export interface Suggestion {
   author_note?: string;
   status: SuggestionStatus;
   decided_by?: string;
+  /** Display name of the reviewer who accepted/rejected. Optional for
+   * backwards compatibility with threads decided before this field was
+   * added. */
+  decided_by_name?: string;
   decided_at?: string;
   applied_version_id?: string;
 }

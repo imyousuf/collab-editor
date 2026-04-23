@@ -116,8 +116,15 @@ export class CommentListPanel extends LitElement {
 
   private _renderItem(t: CommentThread): TemplateResult {
     const first = t.comments[0];
-    const author = first?.author_name ?? 'Unknown';
-    const when = t.resolved_at ?? first?.created_at ?? '';
+    // Suggestion-only threads may have no textual comments; fall back to
+    // the suggestion's author. Without this, the panel shows "Unknown"
+    // for every accepted/rejected suggestion that was submitted without
+    // a note.
+    const author =
+      first?.author_name ??
+      t.suggestion?.author_name ??
+      'Unknown';
+    const when = t.resolved_at ?? first?.created_at ?? t.suggestion?.decided_at ?? '';
     const replyCount = Math.max(0, t.comments.length - 1);
     const quoted = t.anchor.quoted_text || '(orphaned)';
     return html`

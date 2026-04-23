@@ -89,6 +89,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _suggestAvailable = false;
   @state() private _suggestActive = false;
   @state() private _suggestPendingCount = 0;
+  /** When set, renders the submit-suggestion modal with a note field. */
+  @state() private _suggestNoteModalOpen = false;
+  @state() private _suggestNoteDraft = '';
   @state() private _activeCommentThread: CommentThread | null = null;
   @state() private _commentPanelPos: { x: number; y: number } | null = null;
   @state() private _commentCapabilities: CommentsCapabilities | null = null;
@@ -392,6 +395,86 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       border-radius: 4px;
     }
     .editor-root ::-webkit-scrollbar-thumb:hover { background: var(--me-scrollbar-thumb-hover); }
+
+    /* ── Suggest-note modal ── */
+    .suggest-note-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      z-index: 1100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .suggest-note-modal {
+      background: var(--me-bg, #fff);
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      width: 420px;
+      max-width: 100%;
+      font-size: 13px;
+      overflow: hidden;
+    }
+    .suggest-note-modal h3 {
+      margin: 0;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--me-toolbar-border, #eee);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .suggest-note-modal .body {
+      padding: 14px 16px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .suggest-note-modal label {
+      font-size: 12px;
+      color: var(--me-comment-meta-color, #666);
+    }
+    .suggest-note-modal textarea {
+      width: 100%;
+      min-height: 72px;
+      resize: vertical;
+      padding: 6px 8px;
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    .suggest-note-modal textarea:focus {
+      outline: none;
+      border-color: var(--me-wysiwyg-link-color, #2563eb);
+      box-shadow: 0 0 0 2px var(--me-focus-ring-color, rgba(59, 130, 246, 0.25));
+    }
+    .suggest-note-modal .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 16px 14px;
+    }
+    .suggest-note-modal button {
+      padding: 6px 14px;
+      border-radius: 4px;
+      border: 1px solid var(--me-toolbar-border, #d0d7de);
+      background: var(--me-bg, #fff);
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .suggest-note-modal button:hover {
+      background: var(--me-toolbar-button-hover-bg, #f0f0f0);
+    }
+    .suggest-note-modal button.primary {
+      background: var(--me-wysiwyg-link-color, #2563eb);
+      color: #fff;
+      border-color: var(--me-wysiwyg-link-color, #2563eb);
+    }
+    .suggest-note-modal button.primary:hover {
+      filter: brightness(1.05);
+    }
   `;
 
   render() {
@@ -406,6 +489,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         ${statusBarVisible ? this._renderStatusBarSlot() : nothing}
         ${this._suggestActive ? this._renderSuggestStatus() : nothing}
         ${this._activeCommentThread || this._draftAnchor ? this._renderCommentPanel() : nothing}
+        ${this._suggestNoteModalOpen ? this._renderSuggestNoteModal() : nothing}
       </div>
       ${!toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
     `;
@@ -423,6 +507,45 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @suggest-discard=${this._handleSuggestDiscard}
           @suggest-toggle-off=${() => this._handleSuggestToggle({ detail: { active: false } } as any)}
         ></suggest-status>
+      </div>
+    `;
+  }
+
+  private _renderSuggestNoteModal() {
+    return html`
+      <div
+        class="suggest-note-backdrop"
+        @click=${(e: MouseEvent) => {
+          if (e.target === e.currentTarget) this._handleSuggestNoteCancel();
+        }}
+      >
+        <div class="suggest-note-modal" role="dialog" aria-labelledby="suggest-note-title">
+          <h3 id="suggest-note-title">Submit suggestion</h3>
+          <div class="body">
+            <label for="suggest-note-input">Add a note (optional)</label>
+            <textarea
+              id="suggest-note-input"
+              .value=${this._suggestNoteDraft}
+              placeholder="Explain your change so reviewers have context…"
+              autofocus
+              @input=${(e: Event) =>
+                (this._suggestNoteDraft = (e.target as HTMLTextAreaElement).value)}
+              @keydown=${(e: KeyboardEvent) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  e.preventDefault();
+                  this._handleSuggestNoteConfirm();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  this._handleSuggestNoteCancel();
+                }
+              }}
+            ></textarea>
+          </div>
+          <div class="actions">
+            <button @click=${this._handleSuggestNoteCancel}>Cancel</button>
+            <button class="primary" @click=${this._handleSuggestNoteConfirm}>Submit</button>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -1224,7 +1347,21 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleSuggestSubmit(): void {
-    this._commitPendingSuggestion();
+    if (!this._suggestEngine || !this._suggestEngine.hasPendingChanges()) return;
+    this._suggestNoteDraft = '';
+    this._suggestNoteModalOpen = true;
+  }
+
+  private _handleSuggestNoteConfirm(): void {
+    const note = this._suggestNoteDraft.trim();
+    this._suggestNoteModalOpen = false;
+    this._commitPendingSuggestion(note.length > 0 ? note : null);
+    this._suggestNoteDraft = '';
+  }
+
+  private _handleSuggestNoteCancel(): void {
+    this._suggestNoteModalOpen = false;
+    this._suggestNoteDraft = '';
   }
 
   private _handleSuggestDiscard(): void {
@@ -1239,10 +1376,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._suggestPendingCount = 0;
   }
 
-  private _commitPendingSuggestion(): void {
+  private _commitPendingSuggestion(note: string | null = null): void {
     if (!this._suggestEngine || !this._commentEngine || !this._binding || !this._collabProvider) return;
     if (!this._suggestEngine.hasPendingChanges()) return;
-    const note = window.prompt('Add a note (optional):') ?? null;
     try {
       const payload = this._suggestEngine.buildSuggestion(note);
       this._commentEngine.commitSuggestion(payload);

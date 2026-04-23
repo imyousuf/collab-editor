@@ -876,6 +876,66 @@ describe('TextBinding', () => {
       bufferDoc.destroy();
     });
 
+    test('retarget does NOT re-setContent when new Y.Text matches old byte-for-byte', () => {
+      // Regression guard: in Suggest Mode, the buffer Y.Doc is seeded
+      // from base via Y.applyUpdate, producing bufferText that equals
+      // baseText byte-for-byte. Calling setContent(bufferText) through
+      // Tiptap's markdown parser isn't perfectly idempotent — structure
+      // (headings, lists, paragraphs) can collapse on the re-parse. So
+      // retargetYText must skip the re-apply whenever the two targets
+      // already agree on their raw string.
+      ytext.insert(0, '<h1>Title</h1><p>Body</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      let setContentCount = 0;
+      const origSetContent = editor.commands.setContent.bind(editor.commands);
+      editor.commands.setContent = (content: string, opts?: any) => {
+        setContentCount++;
+        origSetContent(content, opts);
+      };
+
+      const bufferDoc = new Y.Doc();
+      const bufferText = bufferDoc.getText('source');
+      Y.applyUpdate(bufferDoc, Y.encodeStateAsUpdate(ydoc));
+      expect(bufferText.toString()).toBe(ytext.toString());
+
+      binding.retargetYText(bufferText);
+
+      expect(setContentCount).toBe(0);
+
+      binding.destroy();
+      bufferDoc.destroy();
+    });
+
+    test('retarget DOES re-setContent when the new Y.Text differs', () => {
+      // When the new Y.Text has different content (e.g., rebinding back
+      // to base after the user has typed into the buffer), setContent
+      // must run so Tiptap's visible content matches the new target.
+      ytext.insert(0, '<p>buffered</p>');
+      const editor = createMockEditor();
+      const binding = new TextBinding(editor as any, ytext, htmlHandler);
+
+      let setContentCount = 0;
+      const origSetContent = editor.commands.setContent.bind(editor.commands);
+      editor.commands.setContent = (content: string, opts?: any) => {
+        setContentCount++;
+        origSetContent(content, opts);
+      };
+
+      const altDoc = new Y.Doc();
+      const altText = altDoc.getText('source');
+      altText.insert(0, '<p>base</p>');
+
+      binding.retargetYText(altText);
+
+      expect(setContentCount).toBe(1);
+      expect(editor.getHTML()).toBe('<p>base</p>');
+
+      binding.destroy();
+      altDoc.destroy();
+    });
+
     test('retargeting to the same Y.Text is a no-op', async () => {
       ytext.insert(0, '<p>same</p>');
       const editor = createMockEditor();

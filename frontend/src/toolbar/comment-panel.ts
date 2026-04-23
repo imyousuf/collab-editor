@@ -292,11 +292,19 @@ export class CommentPanel extends LitElement {
 
   private _renderSuggestion(s: NonNullable<CommentThread['suggestion']>): TemplateResult {
     const canDecide = this.capabilities?.suggestions ?? false;
+    const decidedLabel =
+      s.status === 'accepted' || s.status === 'rejected'
+        ? `${s.status} by ${s.decided_by_name ?? s.decided_by ?? 'unknown'}`
+        : null;
     return html`
       <div class="suggestion">
         <div class="suggestion-summary">
           <span>🔸 ${s.human_readable.summary}</span>
           <span class="badge">${s.status}</span>
+        </div>
+        <div class="comment-meta" style="margin-bottom: 6px;">
+          suggested by ${s.author_name || s.author_id || 'unknown'}
+          ${decidedLabel ? html` · ${decidedLabel}` : nothing}
         </div>
         <div class="suggestion-diff">
           <div class="col before" title="Before">${s.human_readable.before_text || '(empty)'}</div>
