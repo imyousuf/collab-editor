@@ -23,6 +23,8 @@ import type {
   SuggestionOverlayRegion,
 } from '../interfaces/comments.js';
 import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
+import { buildPositionMap, snapRange } from './pm-position-map.js';
+import type * as Y from 'yjs';
 
 export const commentPluginKey = new PluginKey('comments');
 
@@ -31,6 +33,12 @@ export interface CommentPluginState {
   overlays: SuggestionOverlayRegion[];
   pending: PendingSuggestOverlay | null;
   activeThreadId: string | null;
+  /**
+   * Y.Text handle used by the shared position map to know the true
+   * source content (Markdown/HTML). Optional for backward compatibility
+   * — absence falls back to serializing the PM doc.
+   */
+  ytext?: Y.Text;
 }
 
 const EMPTY_STATE: CommentPluginState = {
@@ -102,16 +110,19 @@ export function buildCommentMeta(
   overlays: SuggestionOverlayRegion[],
   activeThreadId: string | null,
   pending: PendingSuggestOverlay | null = null,
+  ytext?: Y.Text,
 ): Partial<CommentPluginState> {
-  return { threads, overlays, pending, activeThreadId };
+  return { threads, overlays, pending, activeThreadId, ytext };
 }
 
 // --- Decoration builder ---
 
 function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
-  const posMap = buildPositionMap(doc);
-  if (posMap.size === 0) return DecorationSet.empty;
-  const maxOffset = Math.max(...posMap.keys());
+  const yTextStr = state.ytext ? state.ytext.toString() : pmToString(doc);
+  const posMap = buildPositionMap(doc, yTextStr);
+  if (posMap.size === 0 && state.threads.length === 0 && state.overlays.length === 0 && !state.pending) {
+    return DecorationSet.empty;
+  }
   const decorations: Decoration[] = [];
 
   // 1) Comment anchor highlights. Threads with no suggestion get a soft
@@ -120,11 +131,12 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
   for (const thread of state.threads) {
     if (thread.status === 'resolved') continue;
     if (thread.suggestion && thread.suggestion.status === 'pending') continue;
-    const { from, to } = mapRange(thread.anchor.start, thread.anchor.end, posMap, maxOffset);
-    if (from === null || to === null || from >= to) continue;
+    const snapped = snapRange(thread.anchor.start, thread.anchor.end, posMap);
+    if (snapped.from === undefined || snapped.to === undefined) continue;
+    if (snapped.from >= snapped.to) continue;
     const isActive = thread.id === state.activeThreadId;
     decorations.push(
-      Decoration.inline(from, to, {
+      Decoration.inline(snapped.from, snapped.to, {
         class: isActive ? 'me-comment-anchor me-comment-anchor--active' : 'me-comment-anchor',
         'data-comment-thread-id': thread.id,
         style: isActive
@@ -136,12 +148,12 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
 
   // 2) Committed pending suggestion overlays.
   for (const overlay of state.overlays) {
-    decorateSuggestion(decorations, posMap, maxOffset, overlay);
+    decorateSuggestion(decorations, posMap, overlay);
   }
 
   // 3) Author's own pending Suggest-Mode buffer.
   if (state.pending) {
-    decorateSuggestion(decorations, posMap, maxOffset, {
+    decorateSuggestion(decorations, posMap, {
       threadId: '__pending__',
       ...state.pending,
       status: 'pending',
@@ -151,18 +163,34 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
   return DecorationSet.create(doc, decorations);
 }
 
+function pmToString(doc: any): string {
+  const parts: string[] = [];
+  doc.descendants((node: any) => {
+    if (node.isText) {
+      parts.push(node.text ?? '');
+      return false;
+    }
+    if (node.isBlock && node !== doc && parts.length > 0) {
+      parts.push('\n');
+    }
+    return true;
+  });
+  return parts.join('');
+}
+
 function decorateSuggestion(
   out: Decoration[],
   posMap: Map<number, number>,
-  maxOffset: number,
   overlay: SuggestionOverlayRegion,
 ): void {
-  const { from, to } = mapRange(overlay.start, overlay.end, posMap, maxOffset);
-  if (from === null) return;
+  const snapped = snapRange(overlay.start, overlay.end, posMap);
+  const from = snapped.from;
+  const to = snapped.to;
+  if (from === undefined) return;
   const color = overlay.authorColor;
 
   // Strikethrough on the "before" range when it exists in the live doc.
-  if (to !== null && to > from) {
+  if (to !== undefined && to > from) {
     out.push(
       Decoration.inline(from, to, {
         class: 'me-suggest-before',
@@ -173,7 +201,7 @@ function decorateSuggestion(
   }
 
   // Inline widget with the "after" text immediately after the range.
-  const insertAt = to ?? from;
+  const insertAt: number = to !== undefined ? to : from;
   if (overlay.afterText) {
     out.push(
       Decoration.widget(insertAt, () => {
@@ -215,40 +243,3 @@ function decorateSuggestion(
   );
 }
 
-/** Map a [start, end) character range to PM positions, with clamping. */
-function mapRange(
-  start: number,
-  end: number,
-  posMap: Map<number, number>,
-  maxOffset: number,
-): { from: number | null; to: number | null } {
-  const from = posMap.get(Math.min(start, maxOffset));
-  const clampedEnd = Math.min(end, maxOffset);
-  const to = posMap.get(clampedEnd);
-  return {
-    from: from ?? null,
-    to: to ?? null,
-  };
-}
-
-/** Walk the PM doc once to build char-offset -> PM-position lookup. */
-function buildPositionMap(doc: any): Map<number, number> {
-  const map = new Map<number, number>();
-  let charOffset = 0;
-  doc.descendants((node: any, pos: number) => {
-    if (node.isText) {
-      for (let i = 0; i < node.text!.length; i++) {
-        map.set(charOffset + i, pos + i);
-      }
-      charOffset += node.text!.length;
-      return false;
-    }
-    if (node.isBlock && node !== doc && charOffset > 0) {
-      map.set(charOffset, pos);
-      charOffset++;
-    }
-    return true;
-  });
-  map.set(charOffset, doc.content.size);
-  return map;
-}
