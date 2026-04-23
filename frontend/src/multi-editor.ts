@@ -1323,7 +1323,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       // Capture the buffer Y.Text from enable() and route the editor's
       // writes into it. Without this rebind, keystrokes would bypass the
       // buffer and land on the shared Y.Text — i.e., no Suggest Mode.
-      const { bufferText } = this._suggestEngine.enable();
+      // Pass the editor's current serialized form as the enable-time
+      // "before" snapshot so submit's diff is computed against what the
+      // user actually sees, not the raw Y.Text underneath.
+      const currentText = this._binding.getCurrentSerialized();
+      const { bufferText } = this._suggestEngine.enable(currentText);
       this._binding.rebindSharedText(bufferText);
       this._suggestActive = true;
       this._commentCoordinator.setSuggestActive(true);
@@ -1380,7 +1384,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!this._suggestEngine || !this._commentEngine || !this._binding || !this._collabProvider) return;
     if (!this._suggestEngine.hasPendingChanges()) return;
     try {
-      const payload = this._suggestEngine.buildSuggestion(note);
+      // Pair the "after" snapshot with the same serializer used at enable.
+      const afterText = this._binding.getCurrentSerialized();
+      const payload = this._suggestEngine.buildSuggestion(note, afterText);
       this._commentEngine.commitSuggestion(payload);
       // Same dance as discard: rebind to base, swap the buffer, rebind
       // to the fresh buffer so the user can continue suggesting.

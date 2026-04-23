@@ -36,6 +36,7 @@ function createMockBinding() {
     onContentChange: vi.fn(() => () => {}),
     onRemoteChange: vi.fn(() => () => {}),
     rebindSharedText: vi.fn(),
+    getCurrentSerialized: vi.fn(() => ''),
     destroy: vi.fn(),
   };
 }

@@ -89,6 +89,28 @@ describe('SuggestEngine + rebind routing (DualModeBinding + Markdown)', () => {
     expect(engine.hasPendingChanges()).toBe(true);
   });
 
+  test('symmetric capture: before/after differ by exactly the user edit', () => {
+    // Regression guard for the whole-doc-corruption bug. When `enable`
+    // and `buildSuggestion` both receive the editor-native serialized
+    // form, normalization drift between raw Y.Text and Tiptap's output
+    // can't leak into the diff. The `view.before_text`/`view.after_text`
+    // must differ by exactly what the user inserted — not by the whole
+    // document. With no user edit, `hasPendingChanges` is false, so we
+    // simulate the edit directly on the buffer and use the
+    // buffer-matches-base shortcut to exercise the symmetric path.
+    const { bufferText } = engine.enable('# Hello\n');
+    // Mutate buffer to simulate the user typing ' - 123' at the end of
+    // the heading line. This matches what a real-editor write-back
+    // would produce when Tiptap's serializer is idempotent.
+    bufferText.insert(7, ' - 123');
+    expect(engine.hasPendingChanges()).toBe(true);
+
+    const payload = engine.buildSuggestion(null, '# Hello - 123\n');
+    expect(payload.view.before_text).toBe('');
+    expect(payload.view.after_text).toBe(' - 123');
+    expect(payload.view.summary).toContain('- 123');
+  });
+
   test('onBufferChange fires on editor-driven buffer edits', () => {
     const { bufferText } = engine.enable();
     binding.rebindSharedText(bufferText);

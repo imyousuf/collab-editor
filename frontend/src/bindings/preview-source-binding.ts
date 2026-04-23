@@ -163,6 +163,10 @@ export class PreviewSourceBinding
     // the new Y.Text, the update fires and refreshes the preview.
   }
 
+  getCurrentSerialized(): string {
+    return this._sourceEditor?.getContent() ?? '';
+  }
+
   // --- IBlameCapability ---
 
   enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {

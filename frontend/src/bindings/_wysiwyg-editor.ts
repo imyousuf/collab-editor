@@ -92,6 +92,17 @@ export class WysiwygEditorInstance {
     return this._editor.getHTML();
   }
 
+  /**
+   * Tiptap's current serialized output in the content-handler's canonical
+   * format. Suggest Mode captures this at enable-time and submit-time so
+   * the diff is symmetric (both sides go through the same serializer),
+   * avoiding the raw-Y.Text-vs-Tiptap-normalized asymmetry that would
+   * otherwise make the diff view show the whole document as changed.
+   */
+  getSerialized(): string {
+    return this.getContent();
+  }
+
   setContent(text: string): void {
     const parsed = this._contentHandler.parse(text);
     if (parsed.type === 'markdown') {

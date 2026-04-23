@@ -219,6 +219,31 @@ describe('DualModeBinding unit tests', () => {
     binding.destroy();
     bufferDoc.destroy();
   });
+
+  test('getCurrentSerialized returns source content in source mode', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'source', { readonly: false, theme: 'light' });
+
+    binding.setContent('<p>abc</p>');
+    expect(binding.getCurrentSerialized()).toBe('<p>abc</p>');
+
+    binding.destroy();
+  });
+
+  test('getCurrentSerialized reads from Tiptap in wysiwyg mode', async () => {
+    const binding = new DualModeBinding(htmlHandler, 'html');
+    const container = document.createElement('div');
+    await binding.mount(container, 'wysiwyg', { readonly: false, theme: 'light' });
+
+    binding.setContent('<p>hello</p>');
+    // getCurrentSerialized should go through the Tiptap wrapper's
+    // getSerialized() and return a content-handler-canonical string.
+    const out = binding.getCurrentSerialized();
+    expect(out).toContain('hello');
+
+    binding.destroy();
+  });
 });
 
 describe('DualModeBinding IFormattingCapability', () => {

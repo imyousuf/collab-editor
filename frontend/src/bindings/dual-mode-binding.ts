@@ -206,6 +206,20 @@ export class DualModeBinding
     this._textBinding?.retargetYText(yText);
   }
 
+  /**
+   * Editor-native serialized form of the current content. In WYSIWYG
+   * mode this comes from Tiptap's markdown/HTML serializer; in source
+   * mode it's the CodeMirror doc. Used by Suggest Mode to capture
+   * symmetric before/after snapshots so the diff view doesn't pick up
+   * normalization drift between raw Y.Text and Tiptap's serialization.
+   */
+  getCurrentSerialized(): string {
+    if (this._activeMode === 'wysiwyg' && this._wysiwygEditor) {
+      return this._wysiwygEditor.getSerialized();
+    }
+    return this._sourceEditor?.getContent() ?? '';
+  }
+
   // --- IFormattingCapability ---
 
   executeCommand(command: FormattingCommand, params?: LinkParams): void {

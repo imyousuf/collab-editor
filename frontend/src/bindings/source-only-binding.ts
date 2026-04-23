@@ -116,6 +116,10 @@ export class SourceOnlyBinding
     this._editor?.rebindSharedText(yText);
   }
 
+  getCurrentSerialized(): string {
+    return this._editor?.getContent() ?? '';
+  }
+
   // --- IBlameCapability ---
 
   enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {

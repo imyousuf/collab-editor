@@ -57,8 +57,17 @@ export class SuggestEngine {
   /**
    * Turn Suggest Mode on. Creates a private Y.Doc + Y.Text seeded from
    * the base state, and starts forwarding base updates onto the buffer.
+   *
+   * `currentText` is the editor-native serialized form (e.g. Tiptap's
+   * markdown output) captured at enable-time. It's stored as the
+   * "before" snapshot for the diff view. Capturing it here — rather
+   * than reading `baseText.toString()` — keeps the diff symmetric with
+   * the "after" snapshot we capture at submit time: both go through
+   * the same serializer, so normalization drift between raw Y.Text and
+   * Tiptap's output doesn't show up as a spurious whole-document
+   * change in the comment panel.
    */
-  enable(): { bufferDoc: Y.Doc; bufferText: Y.Text } {
+  enable(currentText?: string): { bufferDoc: Y.Doc; bufferText: Y.Text } {
     if (this._bufferDoc && this._bufferText) {
       return { bufferDoc: this._bufferDoc, bufferText: this._bufferText };
     }
@@ -75,7 +84,7 @@ export class SuggestEngine {
     const baseUpdate = Y.encodeStateAsUpdate(this._baseDoc);
     Y.applyUpdate(bufferDoc, baseUpdate, REBASE_ORIGIN);
 
-    this._baseSnapshotAtEnable = this._baseText.toString();
+    this._baseSnapshotAtEnable = currentText ?? this._baseText.toString();
     this._bufferStateAtEnable = Y.encodeStateVector(bufferDoc);
 
     // Rebase observer — pipe base updates onto the buffer so local
@@ -164,9 +173,12 @@ export class SuggestEngine {
   /**
    * Build a commit payload from the current buffer state. Throws if
    * there are no pending changes. The caller provides an optional
-   * author note (max 10 KB).
+   * author note (max 10 KB) and, critically, `currentText` — the
+   * editor-native serialized form at submit-time. This pairs with the
+   * `currentText` captured at `enable()` to make the diff symmetric
+   * (both sides go through the same serializer).
    */
-  buildSuggestion(authorNote: string | null): SuggestionPayload {
+  buildSuggestion(authorNote: string | null, currentText?: string): SuggestionPayload {
     if (!this._bufferDoc || !this._bufferText || !this._bufferStateAtEnable) {
       throw new Error('Suggest Mode is not active');
     }
@@ -174,18 +186,22 @@ export class SuggestEngine {
       throw new Error('no pending changes to commit');
     }
 
-    const baseText = this._baseText.toString();
-    const bufferText = this._bufferText.toString();
-    const anchor = computeAnchor(baseText, bufferText);
+    // Diff view inputs: use the serialized snapshots captured via the
+    // editor's native serializer. Falling back to Y.Text content only
+    // when the caller didn't supply the current text, for backwards
+    // compatibility with older call sites.
+    const beforeText = this._baseSnapshotAtEnable;
+    const afterText = currentText ?? this._bufferText.toString();
+    const anchor = computeAnchor(beforeText, afterText);
 
     const yjsUpdate = Y.encodeStateAsUpdate(this._bufferDoc, this._bufferStateAtEnable);
-    const operations = toOperationSummaries(baseText, bufferText, anchor);
+    const operations = toOperationSummaries(beforeText, afterText, anchor);
     const view: SuggestionView = {
-      summary: generateSummary(operations, anchor, baseText, bufferText),
-      before_text: baseText.slice(anchor.start, anchor.end),
-      after_text: bufferText.slice(
+      summary: generateSummary(operations, anchor, beforeText, afterText),
+      before_text: beforeText.slice(anchor.start, anchor.end),
+      after_text: afterText.slice(
         anchor.start,
-        anchor.end + (bufferText.length - baseText.length),
+        anchor.end + (afterText.length - beforeText.length),
       ),
       operations,
     };

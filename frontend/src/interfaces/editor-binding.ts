@@ -101,6 +101,16 @@ export interface IEditorBinding {
    */
   rebindSharedText(yText: Y.Text): void;
 
+  /**
+   * Editor-native serialized form of the current content. In WYSIWYG
+   * mode this returns Tiptap's markdown (or HTML) serialization; in
+   * source mode it returns the raw CodeMirror doc. Suggest Mode uses
+   * this at enable- and submit-time to capture symmetric before/after
+   * snapshots, so the diff view doesn't pick up normalization drift
+   * between raw Y.Text and Tiptap's serialized form.
+   */
+  getCurrentSerialized(): string;
+
   /** Permanently destroy this binding and release all resources. */
   destroy(): void;
 }
