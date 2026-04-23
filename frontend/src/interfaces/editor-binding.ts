@@ -111,6 +111,15 @@ export interface IEditorBinding {
    */
   getCurrentSerialized(): string;
 
+  /**
+   * Move keyboard focus into the active editor. Called after actions
+   * that take focus away from the content — e.g., clicking the Suggest
+   * Mode toggle button transfers focus to the toolbar, and without
+   * restoring focus the user's first keystroke lands on the body
+   * instead of the editor and is silently dropped.
+   */
+  focusEditor(): void;
+
   /** Permanently destroy this binding and release all resources. */
   destroy(): void;
 }

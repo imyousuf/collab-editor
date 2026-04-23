@@ -1441,6 +1441,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       this._binding.rebindSharedText(bufferText);
       this._suggestActive = true;
       this._commentCoordinator.setSuggestActive(true);
+      // Clicking the Suggest-Mode toggle button transferred focus to
+      // the toolbar. Without restoring it, the user's first keystroke
+      // would land on the body and be silently dropped — making it
+      // look like Suggest Mode isn't capturing edits at all.
+      this._binding.focusEditor();
     } else {
       if (this._suggestEngine.hasPendingChanges()) {
         const action = window.confirm(

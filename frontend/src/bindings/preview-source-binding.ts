@@ -167,6 +167,13 @@ export class PreviewSourceBinding
     return this._sourceEditor?.getContent() ?? '';
   }
 
+  focusEditor(): void {
+    // Preview mode has no editable surface; only source has focus target.
+    if (this._activeMode === 'source') {
+      this._sourceEditor?.view.focus();
+    }
+  }
+
   // --- IBlameCapability ---
 
   enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {

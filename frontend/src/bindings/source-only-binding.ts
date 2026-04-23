@@ -120,6 +120,10 @@ export class SourceOnlyBinding
     return this._editor?.getContent() ?? '';
   }
 
+  focusEditor(): void {
+    this._editor?.view.focus();
+  }
+
   // --- IBlameCapability ---
 
   enableBlame(segments: BlameSegment[], ctx?: import('../interfaces/blame.js').BlameContext): void {

@@ -33,6 +33,7 @@ function createMockBinding() {
     onRemoteChange: vi.fn(() => () => {}),
     rebindSharedText: vi.fn(),
     getCurrentSerialized: vi.fn(() => ''),
+    focusEditor: vi.fn(),
     destroy: vi.fn(),
   };
 }
@@ -241,6 +242,7 @@ describe('BlameCoordinator', () => {
       onRemoteChange: vi.fn(() => () => {}),
       rebindSharedText: vi.fn(),
     getCurrentSerialized: vi.fn(() => ''),
+    focusEditor: vi.fn(),
       destroy: vi.fn(),
       // No blame methods
     };

@@ -220,6 +220,14 @@ export class DualModeBinding
     return this._sourceEditor?.getContent() ?? '';
   }
 
+  focusEditor(): void {
+    if (this._activeMode === 'wysiwyg' && this._wysiwygEditor) {
+      this._wysiwygEditor.editor.commands.focus();
+      return;
+    }
+    this._sourceEditor?.view.focus();
+  }
+
   // --- IFormattingCapability ---
 
   executeCommand(command: FormattingCommand, params?: LinkParams): void {
