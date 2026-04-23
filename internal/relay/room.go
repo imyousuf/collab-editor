@@ -50,6 +50,12 @@ type Room struct {
 	ydoc   *crdt.Doc
 	ydocMu sync.Mutex
 
+	// Phase 2: durable event log for multi-pod cold-start. Every Update
+	// applied to ydoc is also appended via stateStore.AppendUpdate.
+	// Nil when Redis isn't configured (single-pod mode); behaves as a
+	// noop in that case.
+	stateStore StateStore
+
 	// Persistence: buffer raw y-websocket messages for flushing to storage
 	buffer  *UpdateBuffer
 	flusher *Flusher
@@ -64,10 +70,21 @@ func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metri
 		metrics:    metrics,
 		closeCh:    make(chan struct{}),
 		ydoc:       crdt.New(crdt.WithClientID(serverClientID)),
+		stateStore: NewNoopStateStore(),
 		buffer:     NewUpdateBuffer(),
 		flusher:    flusher,
 		flushCh:    make(chan struct{}, 1),
 	}
+}
+
+// SetStateStore installs a StateStore for durable event log + snapshot
+// operations. Called by Server wiring when Redis is configured; left as
+// the noop default for single-pod deployments.
+func (r *Room) SetStateStore(store StateStore) {
+	if store == nil {
+		store = NewNoopStateStore()
+	}
+	r.stateStore = store
 }
 
 // BootstrapContent seeds the room's Y.Doc with plain text returned from
@@ -87,6 +104,36 @@ func (r *Room) BootstrapContent(content string) {
 	r.ydoc.Transact(func(txn *crdt.Transaction) {
 		text.Insert(txn, 0, content, nil)
 	})
+}
+
+// BootstrapFromSnapshot applies a Yjs-encoded state to the room's
+// Y.Doc. Used during Phase-2 cold-start: a fresh pod reads a snapshot
+// from the StateStore and replays the log tail on top, arriving at the
+// same state its sibling pods hold in memory. No-op on empty input or
+// if the Y.Doc already has content.
+func (r *Room) BootstrapFromSnapshot(state []byte) error {
+	if len(state) == 0 {
+		return nil
+	}
+	r.ydocMu.Lock()
+	defer r.ydocMu.Unlock()
+	if r.ydoc.GetText(sharedTextName).Len() > 0 {
+		return nil
+	}
+	return r.ydoc.ApplyUpdate(state)
+}
+
+// ApplyLogEntry applies a single Yjs Update (a log-tail entry) to the
+// room's Y.Doc. Used during Phase-2 cold-start after a snapshot apply.
+// YATA guarantees idempotency — re-applying an entry already folded
+// into the snapshot is safe.
+func (r *Room) ApplyLogEntry(update []byte) error {
+	if len(update) == 0 {
+		return nil
+	}
+	r.ydocMu.Lock()
+	defer r.ydocMu.Unlock()
+	return r.ydoc.ApplyUpdate(update)
 }
 
 // YDocState returns the current Y.Doc state encoded as a Yjs V1 update,
@@ -223,6 +270,23 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 			default: // already signaled
 			}
 		}
+
+		// Phase 2: append the raw Yjs Update payload (not the wrapped
+		// sync frame) to the durable event log. That way any pod
+		// cold-starting the same room can rebuild the Y.Doc without
+		// needing live pub/sub or sibling memory. We fire-and-forget
+		// with a short timeout so a slow or flapping Redis can't block
+		// the hot path — the room's in-memory Y.Doc is authoritative;
+		// the log is the durability tail.
+		if _, payload, err := ysync.ReadSyncMessage(frame[1:]); err == nil && len(payload) > 0 {
+			appendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			go func(update []byte) {
+				defer cancel()
+				if err := r.stateStore.AppendUpdate(appendCtx, r.documentID, update); err != nil {
+					slog.Warn("state store append failed", "doc", r.documentID, "err", err)
+				}
+			}(payload)
+		}
 	}
 }
 
@@ -267,6 +331,18 @@ func (r *Room) flushBuffer(storeTimeout time.Duration) {
 		msg := encodeVersionCreatedMessage(result.VersionCreated)
 		if msg != nil {
 			r.BroadcastAll(msg)
+		}
+	}
+
+	// Phase 2: piggyback snapshot compaction onto the flush tick.
+	// Only the pod that won the Flusher's distributed lock (or ran a
+	// local flush in single-pod mode) reaches this point, so snapshots
+	// are written at most once per flush window across the cluster.
+	// Snapshot replaces the Redis snapshot key and LTRIMs the log.
+	state := r.YDocState()
+	if len(state) > 0 {
+		if err := r.stateStore.WriteSnapshot(ctx, r.documentID, state); err != nil {
+			slog.Warn("state store write snapshot failed", "doc", r.documentID, "err", err)
 		}
 	}
 }

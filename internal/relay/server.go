@@ -15,12 +15,13 @@ import (
 
 // Server is the main relay server.
 type Server struct {
-	config   *Config
-	rooms    *RoomManager
-	provider *provider.Client
-	breaker  *CircuitBreaker
-	metrics  *Metrics
-	broker   MessageBroker // optional: for cross-instance scaling
+	config     *Config
+	rooms      *RoomManager
+	provider   *provider.Client
+	breaker    *CircuitBreaker
+	metrics    *Metrics
+	broker     MessageBroker // optional: for cross-instance pub/sub
+	stateStore StateStore    // optional: durable event log + snapshot for multi-pod
 }
 
 func NewServer(cfg *Config, providerClient *provider.Client, breaker *CircuitBreaker, metrics *Metrics) *Server {
@@ -44,6 +45,22 @@ func (s *Server) SetBroker(broker MessageBroker) {
 	s.broker = broker
 }
 
+// SetStateStore installs a StateStore for durable per-room Y.Doc state.
+// Required for multi-pod deployments where a fresh pod needs to
+// reconstruct a room's state without depending on sibling pods.
+func (s *Server) SetStateStore(store StateStore) {
+	s.stateStore = store
+}
+
+// stateStoreOrDefault returns the configured state store or a no-op
+// fallback so rooms always have a non-nil dependency.
+func (s *Server) stateStoreOrDefault() StateStore {
+	if s.stateStore == nil {
+		return NewNoopStateStore()
+	}
+	return s.stateStore
+}
+
 // Flusher returns the flusher used by room managers.
 func (s *Server) Flusher() *Flusher {
 	return s.rooms.flusher
@@ -53,22 +70,59 @@ func (s *Server) Flusher() *Flusher {
 // This is the ConnectionHandler passed to the Transport.
 func (s *Server) HandleConnection(ctx context.Context, documentID string, conn Conn) error {
 	room, err := s.rooms.GetOrCreate(documentID, func(room *Room) error {
-		// Bootstrap: load document state from provider and seed the
-		// room's Y.Doc with it. The seed insert uses a pinned server
-		// ClientID so two relay instances that load identical content
-		// produce byte-identical updates (YATA merges as one op).
+		// Install the durable state store so every Update applied to
+		// this room gets RPUSHed to the event log. Noop fallback for
+		// single-pod deployments.
+		store := s.stateStoreOrDefault()
+		room.SetStateStore(store)
+
+		// Bootstrap priority:
+		//   1. Redis snapshot (+ log tail) if present — fresh pod
+		//      joining an already-active room catches up without
+		//      depending on sibling pods being reachable.
+		//   2. Storage provider's Load (plain text) — either this is
+		//      a true cold start (no Redis state) or Redis is
+		//      unconfigured (single-pod mode). Seeds the Y.Doc via
+		//      the pinned server ClientID so multi-pod bootstraps
+		//      converge deterministically.
 		loadCtx, cancel := context.WithTimeout(ctx, s.config.Storage.LoadTimeout)
 		defer cancel()
 
-		resp, loadErr := s.provider.Load(loadCtx, documentID, "")
-		if loadErr != nil {
-			slog.Error("failed to load document from provider", "doc", documentID, "err", loadErr)
-			return nil
+		snapshot, snapOff, stateErr := store.ReadSnapshot(loadCtx, documentID)
+		if stateErr != nil {
+			slog.Warn("state store read snapshot failed", "doc", documentID, "err", stateErr)
 		}
 
-		if resp != nil && resp.Content != "" {
-			room.BootstrapContent(resp.Content)
-			slog.Info("loaded document content", "doc", documentID, "size", len(resp.Content))
+		if len(snapshot) > 0 {
+			if err := room.BootstrapFromSnapshot(snapshot); err != nil {
+				slog.Warn("bootstrap from snapshot failed", "doc", documentID, "err", err)
+			} else {
+				slog.Info("bootstrapped from state-store snapshot", "doc", documentID, "size", len(snapshot), "log_offset", snapOff)
+			}
+			// Replay the log tail on top of the snapshot so we pick up
+			// updates that landed between snapshot-time and now.
+			if tail, _, tailErr := store.ReadLogTail(loadCtx, documentID, snapOff); tailErr == nil {
+				for _, entry := range tail {
+					if err := room.ApplyLogEntry(entry); err != nil {
+						slog.Warn("log-tail replay failed", "doc", documentID, "err", err)
+					}
+				}
+				if len(tail) > 0 {
+					slog.Info("replayed state-store log tail", "doc", documentID, "entries", len(tail))
+				}
+			} else {
+				slog.Warn("state store read log-tail failed", "doc", documentID, "err", tailErr)
+			}
+		} else {
+			resp, loadErr := s.provider.Load(loadCtx, documentID, "")
+			if loadErr != nil {
+				slog.Error("failed to load document from provider", "doc", documentID, "err", loadErr)
+				return nil
+			}
+			if resp != nil && resp.Content != "" {
+				room.BootstrapContent(resp.Content)
+				slog.Info("loaded document content", "doc", documentID, "size", len(resp.Content))
+			}
 		}
 
 		// Start the flush goroutine for this room — uses its own

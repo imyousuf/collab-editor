@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -543,6 +544,162 @@ func TestRoom_Update_BroadcastsAndBuffers(t *testing.T) {
 		t.Error("room YDocState returned nil after update")
 	}
 }
+
+func TestRoom_BootstrapFromSnapshot_RebuildsState(t *testing.T) {
+	// Phase-2 cold-start: a fresh pod reads a snapshot from the
+	// StateStore and rebuilds a byte-equivalent Y.Doc. Regression guard
+	// for the multi-pod-autoscale case where pod B spins up after pod
+	// A has been serving edits, and an incoming peer on pod B must see
+	// current state, not an empty room.
+	authoritative := crdt.New(crdt.WithClientID(serverClientID))
+	text := authoritative.GetText(sharedTextName)
+	authoritative.Transact(func(txn *crdt.Transaction) {
+		text.Insert(txn, 0, "Current state", nil)
+	})
+	snapshot := authoritative.EncodeStateAsUpdate()
+
+	room, _ := newTestRoom(t)
+	if err := room.BootstrapFromSnapshot(snapshot); err != nil {
+		t.Fatal(err)
+	}
+
+	// A client peer SyncStep1 must return the bootstrapped content.
+	peer := newMockConn()
+	p := newPeer(peer, room)
+	room.AddPeer(p)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.writeLoop(ctx)
+
+	client := newYDocPeerForTest(t)
+	step1 := append([]byte{msgTypeSync}, client.EncodeSyncStep1()...)
+	room.handleMessage(p, step1)
+	select {
+	case reply := <-peer.writeCh:
+		if err := client.ApplySyncMessage(reply[1:]); err != nil {
+			t.Fatalf("client apply: %v", err)
+		}
+		if got := client.Text(); got != "Current state" {
+			t.Errorf("client text after bootstrap: %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no SyncStep2 reply after bootstrap")
+	}
+}
+
+func TestRoom_AppendsUpdatesToStateStore(t *testing.T) {
+	// Every applied Update must land in the state store so a cold-
+	// starting sibling pod can replay it. Fake store records appends
+	// so we can assert the full payload reaches it.
+	room, _ := newTestRoom(t)
+	fake := &recordingStateStore{}
+	room.SetStateStore(fake)
+
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer.writeLoop(ctx)
+
+	client := newYDocPeerForTest(t)
+	client.InsertText("hi")
+	update := append([]byte{msgTypeSync}, client.EncodeUpdate()...)
+	room.handleMessage(peer, update)
+
+	// AppendUpdate is fire-and-forget on a goroutine; poll briefly.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.Appends("test-doc")) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if appends := fake.Appends("test-doc"); len(appends) != 1 {
+		t.Fatalf("expected 1 append to state store, got %d", len(appends))
+	}
+}
+
+func TestRoom_Flush_WritesSnapshotToStateStore(t *testing.T) {
+	// flushBuffer triggers WriteSnapshot so the state store has a
+	// current snapshot after each flush window. Without this, the log
+	// would grow unbounded and cold-start replay would get slower.
+	room, srv := newTestRoom(t)
+	_ = srv
+	fake := &recordingStateStore{}
+	room.SetStateStore(fake)
+	room.BootstrapContent("seeded")
+
+	// Force a dirty buffer so flushBuffer runs.
+	conn := newMockConn()
+	peer := newPeer(conn, room)
+	room.AddPeer(peer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer.writeLoop(ctx)
+	client := newYDocPeerForTest(t)
+	client.InsertText("x")
+	room.handleMessage(peer, append([]byte{msgTypeSync}, client.EncodeUpdate()...))
+
+	room.flushBuffer(time.Second)
+
+	if len(fake.Snapshots("test-doc")) == 0 {
+		t.Error("expected WriteSnapshot after flush, got none")
+	}
+}
+
+// recordingStateStore captures all state-store interactions for tests.
+type recordingStateStore struct {
+	mu        stdsync.Mutex
+	appends   map[string][][]byte
+	snapshots map[string][][]byte
+}
+
+func (r *recordingStateStore) AppendUpdate(_ context.Context, docID string, update []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.appends == nil {
+		r.appends = map[string][][]byte{}
+	}
+	cp := make([]byte, len(update))
+	copy(cp, update)
+	r.appends[docID] = append(r.appends[docID], cp)
+	return nil
+}
+
+func (r *recordingStateStore) Appends(docID string) [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.appends[docID]
+}
+
+func (r *recordingStateStore) Snapshots(docID string) [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.snapshots[docID]
+}
+
+func (r *recordingStateStore) ReadSnapshot(_ context.Context, _ string) ([]byte, int64, error) {
+	return nil, 0, nil
+}
+
+func (r *recordingStateStore) ReadLogTail(_ context.Context, _ string, _ int64) ([][]byte, int64, error) {
+	return nil, 0, nil
+}
+
+func (r *recordingStateStore) WriteSnapshot(_ context.Context, docID string, state []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.snapshots == nil {
+		r.snapshots = map[string][][]byte{}
+	}
+	cp := make([]byte, len(state))
+	copy(cp, state)
+	r.snapshots[docID] = append(r.snapshots[docID], cp)
+	return nil
+}
+
+func (r *recordingStateStore) Close() error { return nil }
 
 func TestRoom_Awareness_BroadcastsButDoesNotBuffer(t *testing.T) {
 	room, _ := newTestRoom(t)

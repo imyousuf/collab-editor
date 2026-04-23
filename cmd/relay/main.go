@@ -93,9 +93,11 @@ func main() {
 		}
 		defer rdb.Close()
 
-		srv.SetBroker(relay.NewRedisBroker(rdb))
+		broker := relay.NewRedisBroker(rdb)
+		srv.SetBroker(broker)
+		srv.SetStateStore(relay.NewRedisStateStore(rdb, broker))
 		srv.Flusher().SetFlushLock(relay.NewRedisFlushLock(rdb))
-		slog.Info("redis broker enabled", "url", cfg.Redis.URL)
+		slog.Info("redis broker + state store enabled", "url", cfg.Redis.URL)
 	}
 
 	// Set up context for graceful shutdown
