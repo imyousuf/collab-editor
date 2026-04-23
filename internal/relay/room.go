@@ -8,7 +8,30 @@ import (
 	"time"
 
 	"github.com/imyousuf/collab-editor/pkg/spi"
+	"github.com/reearth/ygo/crdt"
+	ysync "github.com/reearth/ygo/sync"
 )
+
+// y-websocket message type envelope bytes (first byte of each frame).
+const (
+	msgTypeSync            byte = 0x00 // y-protocols sync message — payload is a ygo/sync frame
+	msgTypeAwareness       byte = 0x01 // y-protocols awareness message — broadcast only
+	msgTypeApplicationEvt  byte = 0x03 // custom application event (e.g., version-created) — broadcast only
+)
+
+// serverClientID is the Yjs ClientID the relay uses when it generates its
+// own updates (specifically the synthetic insert it does when bootstrapping
+// a room from plain-text content). Pinning this to a constant means two
+// relay instances that cold-start the same room from the same provider
+// content produce byte-identical seed updates; the YATA merge dedupes them
+// as the same operation, so the broker peer relaying between instances
+// cannot double-seed. Clients use random 53-bit client IDs and will
+// effectively never collide with this reserved value.
+const serverClientID crdt.ClientID = 1
+
+// Y.Text field that the editor binds to. Kept in sync with the frontend's
+// CollaborationProvider, which calls `ydoc.getText('source')`.
+const sharedTextName = "source"
 
 // Room represents a collaborative editing session for a single document.
 type Room struct {
@@ -20,16 +43,17 @@ type Room struct {
 	closeCh    chan struct{}
 	closeOnce  sync.Once
 
+	// Server-side Y.Doc. This is the authoritative in-memory state for
+	// the room; SyncStep1 responses and Update merges go through it. A
+	// single mutex serializes all writes because ygo's *crdt.Doc is not
+	// safe for concurrent mutation.
+	ydoc   *crdt.Doc
+	ydocMu sync.Mutex
+
 	// Persistence: buffer raw y-websocket messages for flushing to storage
 	buffer  *UpdateBuffer
 	flusher *Flusher
 	flushCh chan struct{} // signaled when buffer exceeds FlushMaxBytes
-
-	// Complete history of sync update messages — both loaded from storage
-	// and received during this room's lifetime. Replayed to newly
-	// connecting peers before their read loop starts.
-	historyMu sync.RWMutex
-	history   [][]byte
 }
 
 func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metrics) *Room {
@@ -39,10 +63,38 @@ func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metri
 		config:     cfg,
 		metrics:    metrics,
 		closeCh:    make(chan struct{}),
+		ydoc:       crdt.New(crdt.WithClientID(serverClientID)),
 		buffer:     NewUpdateBuffer(),
 		flusher:    flusher,
 		flushCh:    make(chan struct{}, 1),
 	}
+}
+
+// BootstrapContent seeds the room's Y.Doc with plain text returned from
+// the storage provider. Must be called before any peer starts syncing.
+// Idempotent: if the Y.Doc already has content (e.g., a sibling relay
+// instance beat us to it via Redis event log), this is a no-op.
+func (r *Room) BootstrapContent(content string) {
+	if content == "" {
+		return
+	}
+	r.ydocMu.Lock()
+	defer r.ydocMu.Unlock()
+	text := r.ydoc.GetText(sharedTextName)
+	if text.Len() > 0 {
+		return
+	}
+	r.ydoc.Transact(func(txn *crdt.Transaction) {
+		text.Insert(txn, 0, content, nil)
+	})
+}
+
+// YDocState returns the current Y.Doc state encoded as a Yjs V1 update,
+// suitable for persistence or for bootstrapping another relay instance.
+func (r *Room) YDocState() []byte {
+	r.ydocMu.Lock()
+	defer r.ydocMu.Unlock()
+	return r.ydoc.EncodeStateAsUpdate()
 }
 
 // AddPeer adds a peer to the room.
@@ -90,29 +142,81 @@ func (r *Room) BroadcastAll(data []byte) {
 }
 
 // handleMessage processes an incoming binary message from a peer.
-// y-websocket messages: byte 0 = type (0=sync, 1=awareness).
-// Only sync messages are buffered for persistence.
+//
+// y-websocket message framing: byte 0 is the message type envelope
+// (0x00 = sync, 0x01 = awareness, 0x03 = application event). The rest
+// is the payload for that type.
+//
+// Sync messages are handled by the ygo sync protocol (SyncStep1 gets a
+// SyncStep2 reply drawn from r.ydoc; SyncStep2 and Update are applied
+// to r.ydoc; Updates are broadcast + buffered for persistence).
+// Awareness and application events are broadcast unchanged.
 func (r *Room) handleMessage(sender *Peer, data []byte) {
 	if len(data) == 0 {
 		return
 	}
 
-	// Relay the raw message to all other peers
-	r.Broadcast(sender, data)
-	r.metrics.UpdatesRelayedTotal.WithLabelValues(r.documentID).Inc()
+	switch data[0] {
+	case msgTypeSync:
+		r.handleSyncMessage(sender, data)
+	case msgTypeAwareness, msgTypeApplicationEvt:
+		r.Broadcast(sender, data)
+		r.metrics.UpdatesRelayedTotal.WithLabelValues(r.documentID).Inc()
+	default:
+		// Unknown frame type — broadcast as-is so future protocol
+		// extensions keep working, but don't attempt to interpret.
+		r.Broadcast(sender, data)
+	}
+}
 
-	// Buffer only sync UPDATE messages (type=0x00, subtype=0x02) for persistence.
-	// Skip sync step1/step2 (subtypes 0x00/0x01) — they're session-specific handshakes.
-	// Skip awareness messages (type=0x01) — they're ephemeral.
-	if len(data) >= 2 && data[0] == 0x00 && data[1] == 0x02 {
-		// Append to in-memory history for replay to new peers
-		cp := make([]byte, len(data))
-		copy(cp, data)
-		r.historyMu.Lock()
-		r.history = append(r.history, cp)
-		r.historyMu.Unlock()
+// handleSyncMessage processes a sync-framed message (byte 0 == 0x00).
+//
+// We delegate the heavy lifting to ygo/sync.ApplySyncMessage, which:
+//   - for SyncStep1: reads the peer's state vector, returns a SyncStep2
+//     body containing the updates the peer is missing.
+//   - for SyncStep2: applies the included state (e.g., during catch-up).
+//   - for Update: applies the update.
+//
+// Reply (if any) is framed with the sync envelope byte and sent to the
+// originating peer ONLY. Updates are additionally broadcast to the other
+// peers and buffered for the flush-to-provider path.
+func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
+	if len(frame) < 2 {
+		return
+	}
+	syncMsg := frame[1:]
 
-		totalSize := r.buffer.Append(data, 0)
+	msgType, _, readErr := ysync.ReadSyncMessage(syncMsg)
+	if readErr != nil {
+		slog.Warn("invalid sync message", "doc", r.documentID, "err", readErr)
+		return
+	}
+
+	r.ydocMu.Lock()
+	reply, applyErr := ysync.ApplySyncMessage(r.ydoc, syncMsg, nil)
+	r.ydocMu.Unlock()
+	if applyErr != nil {
+		slog.Warn("sync apply failed", "doc", r.documentID, "type", msgType, "err", applyErr)
+		return
+	}
+
+	if len(reply) > 0 {
+		framed := make([]byte, 1+len(reply))
+		framed[0] = msgTypeSync
+		copy(framed[1:], reply)
+		sender.Send(framed)
+	}
+
+	switch msgType {
+	case ysync.MsgUpdate:
+		// Live edit from a peer — fan out to everyone else, buffer for
+		// persistence. SyncStep1/2 are session-specific and are NOT
+		// broadcast; they only travel between the requesting peer and
+		// the server.
+		r.Broadcast(sender, frame)
+		r.metrics.UpdatesRelayedTotal.WithLabelValues(r.documentID).Inc()
+
+		totalSize := r.buffer.Append(frame, 0)
 		if totalSize >= r.config.FlushMaxBytes {
 			select {
 			case r.flushCh <- struct{}{}:
@@ -182,24 +286,6 @@ func encodeVersionCreatedMessage(entry *spi.VersionListEntry) []byte {
 	msg[0] = 0x03 // application event message type
 	copy(msg[1:], payload)
 	return msg
-}
-
-// SetStoredMessages sets the initial messages loaded from the storage provider.
-// These become the base of the room's history, which grows as new messages arrive.
-func (r *Room) SetStoredMessages(msgs [][]byte) {
-	r.historyMu.Lock()
-	defer r.historyMu.Unlock()
-	r.history = msgs
-}
-
-// SendHistory replays the complete message history to a peer.
-// Includes both stored messages from provider and messages received during this session.
-func (r *Room) SendHistory(peer *Peer) {
-	r.historyMu.RLock()
-	defer r.historyMu.RUnlock()
-	for _, msg := range r.history {
-		peer.Send(msg)
-	}
 }
 
 // Close cleans up the room when it's being removed.

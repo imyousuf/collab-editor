@@ -53,7 +53,10 @@ func (s *Server) Flusher() *Flusher {
 // This is the ConnectionHandler passed to the Transport.
 func (s *Server) HandleConnection(ctx context.Context, documentID string, conn Conn) error {
 	room, err := s.rooms.GetOrCreate(documentID, func(room *Room) error {
-		// Bootstrap: load document state from provider
+		// Bootstrap: load document state from provider and seed the
+		// room's Y.Doc with it. The seed insert uses a pinned server
+		// ClientID so two relay instances that load identical content
+		// produce byte-identical updates (YATA merges as one op).
 		loadCtx, cancel := context.WithTimeout(ctx, s.config.Storage.LoadTimeout)
 		defer cancel()
 
@@ -63,9 +66,8 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 			return nil
 		}
 
-		// Load returns resolved content only (no Y.js updates).
-		// The room starts with empty history — the frontend seeds from initialContent.
 		if resp != nil && resp.Content != "" {
+			room.BootstrapContent(resp.Content)
 			slog.Info("loaded document content", "doc", documentID, "size", len(resp.Content))
 		}
 
@@ -102,9 +104,10 @@ func (s *Server) HandleConnection(ctx context.Context, documentID string, conn C
 	defer writeCancel()
 	go peer.writeLoop(writeCtx)
 
-	// Replay full history to the peer before starting the read loop.
-	// This bootstraps the peer's Y.Doc with persisted + in-session state.
-	room.SendHistory(peer)
+	// No history replay here: the peer's own y-websocket client sends a
+	// SyncStep1 as its first frame, and our Room.handleSyncMessage
+	// responds with a SyncStep2 drawn from the server-side Y.Doc. That
+	// single exchange carries all state the peer is missing.
 
 	// Read loop blocks until disconnect
 	peer.readLoop(ctx)

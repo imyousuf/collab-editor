@@ -10,7 +10,51 @@ import (
 
 	"github.com/imyousuf/collab-editor/internal/provider"
 	"github.com/imyousuf/collab-editor/pkg/spi"
+	"github.com/reearth/ygo/crdt"
+	ysync "github.com/reearth/ygo/sync"
 )
+
+// ydocPeer wraps a Yjs *crdt.Doc for use as a fake client in room tests.
+// Exposes just the sync-protocol operations the tests need.
+type ydocPeer struct {
+	doc *crdt.Doc
+}
+
+func newYDocPeerForTest(t *testing.T) *ydocPeer {
+	t.Helper()
+	return &ydocPeer{doc: crdt.New()}
+}
+
+func (p *ydocPeer) Text() string {
+	return p.doc.GetText(sharedTextName).ToString()
+}
+
+func (p *ydocPeer) InsertText(s string) {
+	txt := p.doc.GetText(sharedTextName)
+	p.doc.Transact(func(txn *crdt.Transaction) {
+		txt.Insert(txn, 0, s, nil)
+	})
+}
+
+func (p *ydocPeer) EncodeSyncStep1() []byte {
+	return ysync.EncodeSyncStep1(p.doc)
+}
+
+// EncodeUpdate returns a sync-message-framed Update carrying the full state
+// of this peer's Y.Doc. In production, clients send incremental updates as
+// they edit; for tests, sending the full state is a valid Update frame too.
+func (p *ydocPeer) EncodeUpdate() []byte {
+	return ysync.EncodeUpdate(p.doc.EncodeStateAsUpdate())
+}
+
+func (p *ydocPeer) ApplyUpdate(update []byte) error {
+	return p.doc.ApplyUpdate(update)
+}
+
+func (p *ydocPeer) ApplySyncMessage(msg []byte) error {
+	_, err := ysync.ApplySyncMessage(p.doc, msg, nil)
+	return err
+}
 
 // mockConn implements the Conn interface for testing.
 type mockConn struct {
@@ -148,8 +192,12 @@ func TestRoom_HandleMessage_RelaysAllTypes(t *testing.T) {
 	room.AddPeer(peer1)
 	room.AddPeer(peer2)
 
-	// Sync update message relayed to peer2
-	msg := []byte{0, 2, 0x01, 0x02, 0x03}
+	// Sync Update message relayed to peer2. We construct a real Yjs
+	// update rather than hand-rolled bytes because Room.handleSyncMessage
+	// now validates the sync frame through ygo and drops malformed ones.
+	client := newYDocPeerForTest(t)
+	client.InsertText("hi")
+	msg := append([]byte{msgTypeSync}, client.EncodeUpdate()...)
 	room.handleMessage(peer1, msg)
 
 	select {
@@ -161,8 +209,8 @@ func TestRoom_HandleMessage_RelaysAllTypes(t *testing.T) {
 		t.Error("peer2 should receive relayed message")
 	}
 
-	// Awareness message also relayed
-	awareness := []byte{1, 0x01, 0x02}
+	// Awareness message also relayed (pass-through — no Yjs validation).
+	awareness := []byte{msgTypeAwareness, 0x01, 0x02}
 	room.handleMessage(peer1, awareness)
 
 	select {
@@ -195,44 +243,53 @@ func TestRoom_Close(t *testing.T) {
 }
 
 func TestRoom_HandleMessage_BuffersSyncUpdateMessages(t *testing.T) {
+	// The flush pipeline only cares about Update frames (msg type 2);
+	// SyncStep1/2 and awareness must not reach the persistence buffer.
+	// With the Phase-1 rewrite, "validness" is enforced by ygo parsing —
+	// fabricated byte strings no longer pass. Build real frames instead.
 	room, _ := newTestRoom(t)
 	conn := newMockConn()
 	peer := newPeer(conn, room)
 	room.AddPeer(peer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peer.writeLoop(ctx)
 
-	// Sync UPDATE message (type=0x00, subtype=0x02) should be buffered
-	syncUpdate := []byte{0x00, 0x02, 0x01, 0x02, 0x03}
-	room.handleMessage(peer, syncUpdate)
-
+	a := newYDocPeerForTest(t)
+	a.InsertText("a")
+	updateA := append([]byte{msgTypeSync}, a.EncodeUpdate()...)
+	room.handleMessage(peer, updateA)
 	if room.buffer.Len() != 1 {
-		t.Errorf("buffer.Len() = %d, want 1", room.buffer.Len())
+		t.Errorf("buffer.Len() = %d, want 1 after Update", room.buffer.Len())
 	}
 
-	// Sync step1 (type=0x00, subtype=0x00) should NOT be buffered
-	syncStep1 := []byte{0x00, 0x00, 0x01, 0x02}
-	room.handleMessage(peer, syncStep1)
+	// SyncStep1 triggers a SyncStep2 reply but MUST NOT buffer — it's a
+	// session-specific handshake, not document content.
+	step1 := append([]byte{msgTypeSync}, newYDocPeerForTest(t).EncodeSyncStep1()...)
+	room.handleMessage(peer, step1)
 	if room.buffer.Len() != 1 {
-		t.Errorf("buffer.Len() = %d, want 1 (step1 should be skipped)", room.buffer.Len())
+		t.Errorf("buffer.Len() = %d, want 1 (SyncStep1 must not buffer)", room.buffer.Len())
+	}
+	// drain the SyncStep2 reply so subsequent tests don't see it.
+	select {
+	case <-conn.writeCh:
+	case <-time.After(time.Second):
 	}
 
-	// Sync step2 (type=0x00, subtype=0x01) should NOT be buffered
-	syncStep2 := []byte{0x00, 0x01, 0x01, 0x02}
-	room.handleMessage(peer, syncStep2)
+	// Awareness: broadcast path, not buffered.
+	awareness := []byte{msgTypeAwareness, 0x01, 0x02}
+	room.handleMessage(peer, awareness)
 	if room.buffer.Len() != 1 {
-		t.Errorf("buffer.Len() = %d, want 1 (step2 should be skipped)", room.buffer.Len())
+		t.Errorf("buffer.Len() = %d, want 1 (awareness must not buffer)", room.buffer.Len())
 	}
 
-	// Awareness message (type=0x01) should NOT be buffered
-	awarenessMsg := []byte{0x01, 0x01, 0x02}
-	room.handleMessage(peer, awarenessMsg)
-	if room.buffer.Len() != 1 {
-		t.Errorf("buffer.Len() = %d, want 1 (awareness should be skipped)", room.buffer.Len())
-	}
-
-	// Another sync UPDATE should be buffered
-	room.handleMessage(peer, []byte{0x00, 0x02, 0x04, 0x05})
+	// Another Update — buffer grows.
+	b := newYDocPeerForTest(t)
+	b.InsertText("bb")
+	updateB := append([]byte{msgTypeSync}, b.EncodeUpdate()...)
+	room.handleMessage(peer, updateB)
 	if room.buffer.Len() != 2 {
-		t.Errorf("buffer.Len() = %d, want 2", room.buffer.Len())
+		t.Errorf("buffer.Len() = %d, want 2 after second Update", room.buffer.Len())
 	}
 }
 
@@ -256,9 +313,11 @@ func TestRoom_HandleMessage_SignalsFlushOnSizeThreshold(t *testing.T) {
 	peer := newPeer(conn, room)
 	room.AddPeer(peer)
 
-	// Send a sync UPDATE message that exceeds threshold (type=0x00, subtype=0x02)
-	syncMsg := []byte{0x00, 0x02, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a}
-	room.handleMessage(peer, syncMsg)
+	// A real Yjs Update that carries enough content to exceed 10 bytes.
+	client := newYDocPeerForTest(t)
+	client.InsertText("hello world, this is padding")
+	frame := append([]byte{msgTypeSync}, client.EncodeUpdate()...)
+	room.handleMessage(peer, frame)
 
 	// flushCh should be signaled
 	select {
@@ -348,119 +407,168 @@ func TestRoom_FlushLoop_IndependentOfConnectionContext(t *testing.T) {
 	<-done
 }
 
-func TestRoom_StoredMessages_SetAndSend(t *testing.T) {
+// --- Sync protocol tests (Phase 1: server-side Y.Doc) ---
+
+func TestRoom_BootstrapContent_SeedsYDoc(t *testing.T) {
 	room, _ := newTestRoom(t)
+	room.BootstrapContent("Hello, world!")
+	state := room.YDocState()
+	if len(state) == 0 {
+		t.Fatal("YDocState empty after BootstrapContent")
+	}
+	// Verify the state decodes to the seeded content. We round-trip via a
+	// fresh client-side Y.Doc to avoid reaching into room internals.
+	peer := newYDocPeerForTest(t)
+	if err := peer.ApplyUpdate(state); err != nil {
+		t.Fatalf("client failed to apply server state: %v", err)
+	}
+	if got := peer.Text(); got != "Hello, world!" {
+		t.Errorf("client text: got %q, want %q", got, "Hello, world!")
+	}
+}
+
+func TestRoom_BootstrapContent_IsIdempotent(t *testing.T) {
+	// Two relay instances cold-starting the same content must converge to
+	// the SAME Y.Doc state — identical bytes. This is the regression guard
+	// for the prior seeding-race doubling bug: pinning serverClientID=1
+	// ensures both instances' seed updates carry the same (client, clock)
+	// pair, so YATA dedupes them across the broker.
+	contents := "Welcome\nBody\n"
+
+	roomA, _ := newTestRoom(t)
+	roomA.BootstrapContent(contents)
+	roomA.BootstrapContent(contents) // second call — should not double-seed
+	stateA := roomA.YDocState()
+
+	roomB, _ := newTestRoom(t)
+	roomB.BootstrapContent(contents)
+	stateB := roomB.YDocState()
+
+	if string(stateA) != string(stateB) {
+		t.Errorf("seed updates diverged between instances: roomA=%d bytes, roomB=%d bytes", len(stateA), len(stateB))
+	}
+}
+
+func TestRoom_SyncStep1_ReturnsSyncStep2WithServerState(t *testing.T) {
+	// Regression: prior relay broadcast everything without responding,
+	// so y-websocket's `synced` flag stayed false. The client compensated
+	// with timing-based guards that masked content-doubling bugs. Now the
+	// server is a proper Yjs peer and answers SyncStep1 with its state.
+	room, _ := newTestRoom(t)
+	room.BootstrapContent("Hello")
+
+	client := newYDocPeerForTest(t)
+	step1 := client.EncodeSyncStep1()
+	framed := append([]byte{msgTypeSync}, step1...)
 
 	conn := newMockConn()
 	peer := newPeer(conn, room)
 	room.AddPeer(peer)
-
-	// Start write loop so Send() works
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go peer.writeLoop(ctx)
 
-	// Set stored messages
-	msgs := [][]byte{
-		{0x00, 0x02, 0x01},
-		{0x00, 0x02, 0x02},
-	}
-	room.SetStoredMessages(msgs)
+	room.handleMessage(peer, framed)
 
-	// Send stored messages to peer
-	room.SendHistory(peer)
-
-	// Verify peer received both messages
-	for i, expected := range msgs {
-		select {
-		case got := <-conn.writeCh:
-			if string(got) != string(expected) {
-				t.Errorf("msg %d: got %v, want %v", i, got, expected)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("timeout waiting for stored message %d", i)
+	select {
+	case got := <-conn.writeCh:
+		if len(got) < 1 || got[0] != msgTypeSync {
+			t.Fatalf("expected sync envelope, got % x", got)
 		}
+		if err := client.ApplySyncMessage(got[1:]); err != nil {
+			t.Fatalf("client failed to apply reply: %v", err)
+		}
+		if text := client.Text(); text != "Hello" {
+			t.Errorf("after step2, client text: got %q, want %q", text, "Hello")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SyncStep2")
 	}
 }
 
-func TestRoom_HistoryAccumulatesNewMessages(t *testing.T) {
+func TestRoom_Update_BroadcastsAndBuffers(t *testing.T) {
+	// An Update message from peer A must:
+	//   - Apply to the room's Y.Doc.
+	//   - Broadcast to peer B (but not echo back to A).
+	//   - Be buffered for the flush-to-provider path.
+	// SyncStep1/2 frames must NOT be broadcast (session-specific).
 	room, _ := newTestRoom(t)
 
-	// Set initial stored messages (from provider bootstrap)
-	room.SetStoredMessages([][]byte{
-		{0x00, 0x02, 0x01},
-	})
+	connA := newMockConn()
+	peerA := newPeer(connA, room)
+	room.AddPeer(peerA)
 
-	conn := newMockConn()
-	peer := newPeer(conn, room)
-	room.AddPeer(peer)
-
-	// New sync update arrives via handleMessage — should be added to history
-	newMsg := []byte{0x00, 0x02, 0x04, 0x05}
-	room.handleMessage(peer, newMsg)
-
-	// History should have both stored + new
-	room.historyMu.RLock()
-	defer room.historyMu.RUnlock()
-	if len(room.history) != 2 {
-		t.Fatalf("history length: got %d, want 2", len(room.history))
-	}
-	if string(room.history[0]) != string([]byte{0x00, 0x02, 0x01}) {
-		t.Errorf("history[0]: got %v", room.history[0])
-	}
-	if string(room.history[1]) != string(newMsg) {
-		t.Errorf("history[1]: got %v", room.history[1])
-	}
-}
-
-func TestRoom_NewPeerReceivesFullHistory(t *testing.T) {
-	room, _ := newTestRoom(t)
-
-	// Set stored messages
-	room.SetStoredMessages([][]byte{
-		{0x00, 0x02, 0x01},
-	})
-
-	// First peer connects and sends a new message
-	conn1 := newMockConn()
-	peer1 := newPeer(conn1, room)
-	room.AddPeer(peer1)
-	room.handleMessage(peer1, []byte{0x00, 0x02, 0x09})
-
-	// Second peer connects and should receive full history (stored + new)
-	conn2 := newMockConn()
-	peer2 := newPeer(conn2, room)
-	room.AddPeer(peer2)
+	connB := newMockConn()
+	peerB := newPeer(connB, room)
+	room.AddPeer(peerB)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go peer2.writeLoop(ctx)
+	go peerA.writeLoop(ctx)
+	go peerB.writeLoop(ctx)
 
-	room.SendHistory(peer2)
+	// Peer A produces an Update by editing its own Y.Doc and encoding.
+	client := newYDocPeerForTest(t)
+	client.InsertText("Hi")
+	update := client.EncodeUpdate() // a Yjs Update (msg type 2) framed by ygo/sync
 
-	// Should receive 2 messages
-	for i := 0; i < 2; i++ {
-		select {
-		case <-conn2.writeCh:
-			// ok
-		case <-time.After(time.Second):
-			t.Fatalf("timeout waiting for history message %d", i)
+	frame := append([]byte{msgTypeSync}, update...)
+	room.handleMessage(peerA, frame)
+
+	// Peer B receives a copy of the frame.
+	select {
+	case got := <-connB.writeCh:
+		if string(got) != string(frame) {
+			t.Errorf("peer B received different bytes: got % x, want % x", got, frame)
 		}
+	case <-time.After(time.Second):
+		t.Fatal("peer B did not receive the update")
+	}
+
+	// Peer A must NOT receive its own frame echoed back.
+	select {
+	case got := <-connA.writeCh:
+		t.Errorf("peer A received its own echo: % x", got)
+	case <-time.After(50 * time.Millisecond):
+		// expected
+	}
+
+	// Update is buffered for persistence.
+	if room.buffer.Len() == 0 {
+		t.Error("update was not buffered for persistence")
+	}
+
+	// Room's Y.Doc applied the update.
+	if room.YDocState() == nil {
+		t.Error("room YDocState returned nil after update")
 	}
 }
 
-func TestRoom_StoredMessages_EmptyIsNoOp(t *testing.T) {
+func TestRoom_Awareness_BroadcastsButDoesNotBuffer(t *testing.T) {
 	room, _ := newTestRoom(t)
-	conn := newMockConn()
-	peer := newPeer(conn, room)
+	connA := newMockConn()
+	peerA := newPeer(connA, room)
+	room.AddPeer(peerA)
+	connB := newMockConn()
+	peerB := newPeer(connB, room)
+	room.AddPeer(peerB)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peerB.writeLoop(ctx)
 
-	// No stored messages set — SendHistory should not panic
-	room.SendHistory(peer)
+	awareness := []byte{msgTypeAwareness, 0x02, 0xde, 0xad}
+	room.handleMessage(peerA, awareness)
 
 	select {
-	case <-conn.writeCh:
-		t.Error("should not send anything when no stored messages")
-	default:
-		// expected
+	case got := <-connB.writeCh:
+		if string(got) != string(awareness) {
+			t.Errorf("peer B received wrong awareness frame: got % x", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("awareness not broadcast")
+	}
+
+	if room.buffer.Len() != 0 {
+		t.Errorf("awareness must not be buffered for persistence, buffer len=%d", room.buffer.Len())
 	}
 }

@@ -264,4 +264,93 @@ describe('CollaborationProvider unit tests', () => {
 
     expect((provider as any)._appMessageCallbacks.size).toBe(0);
   });
+
+  test('whenSynced resolves immediately when provider is already synced', async () => {
+    // The seed race fix (task #112) depends on whenSynced waiting for
+    // the y-websocket initial state-vector exchange. If the underlying
+    // provider already reports synced=true, whenSynced must not block.
+    const provider = new CollaborationProvider();
+    const fakeProvider = {
+      awareness: { getStates: () => new Map() },
+      wsconnected: true,
+      synced: true,
+      on: vi.fn(),
+      disconnect: vi.fn(),
+      destroy: vi.fn(),
+    };
+    (provider as any)._provider = fakeProvider;
+    (provider as any)._setStatus('connected');
+
+    const start = Date.now();
+    await provider.whenSynced(1000);
+    expect(Date.now() - start).toBeLessThan(200);
+  });
+
+  test('whenSynced resolves on the synced event from the provider', async () => {
+    // After Phase 1, the relay is a proper Yjs peer and emits SYNC_STEP_2
+    // on connect. whenSynced just listens for the event — no timing
+    // heuristics. Regression guard: if someone ever re-introduces idle
+    // detection or a fixed settle, this test fires late.
+    const provider = new CollaborationProvider();
+    let onSyncedHandler: ((state: boolean) => void) | null = null;
+    const fakeProvider = {
+      awareness: { getStates: () => new Map() },
+      wsconnected: true,
+      synced: false,
+      on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+        if (event === 'synced') onSyncedHandler = handler;
+      }),
+      disconnect: vi.fn(),
+      destroy: vi.fn(),
+    };
+    (provider as any)._provider = fakeProvider;
+    (provider as any)._setStatus('connected');
+
+    const start = Date.now();
+    const p = provider.whenSynced(5000);
+    setTimeout(() => onSyncedHandler?.(true), 20);
+    await p;
+    expect(Date.now() - start).toBeLessThan(200);
+  });
+
+  test('whenSynced short-circuits when provider is already synced', async () => {
+    const provider = new CollaborationProvider();
+    const fakeProvider = {
+      awareness: { getStates: () => new Map() },
+      wsconnected: true,
+      synced: true,
+      on: vi.fn(),
+      disconnect: vi.fn(),
+      destroy: vi.fn(),
+    };
+    (provider as any)._provider = fakeProvider;
+    (provider as any)._setStatus('connected');
+
+    const start = Date.now();
+    await provider.whenSynced(5000);
+    expect(Date.now() - start).toBeLessThan(100);
+  });
+
+  test('whenSynced times out if the provider never syncs (safety bound)', async () => {
+    // If the relay is misbehaving or something in the path drops
+    // SYNC_STEP_2, the init must not hang forever. Fall back to the
+    // timeout and let the caller proceed with whatever state arrived.
+    const provider = new CollaborationProvider();
+    const fakeProvider = {
+      awareness: { getStates: () => new Map() },
+      wsconnected: true,
+      synced: false,
+      on: vi.fn(),
+      disconnect: vi.fn(),
+      destroy: vi.fn(),
+    };
+    (provider as any)._provider = fakeProvider;
+    (provider as any)._setStatus('connected');
+
+    const start = Date.now();
+    await provider.whenSynced(120);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+    expect(elapsed).toBeLessThan(500);
+  });
 });

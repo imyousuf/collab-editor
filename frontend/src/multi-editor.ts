@@ -58,6 +58,7 @@ import './toolbar/editor-toolbar.js';
 import './toolbar/editor-status-bar.js';
 import './toolbar/version-panel.js';
 import './toolbar/comment-panel.js';
+import './toolbar/comment-list-panel.js';
 import './toolbar/suggest-status.js';
 
 @customElement('multi-editor')
@@ -91,6 +92,20 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _activeCommentThread: CommentThread | null = null;
   @state() private _commentPanelPos: { x: number; y: number } | null = null;
   @state() private _commentCapabilities: CommentsCapabilities | null = null;
+  @state() private _resolvedThreads: CommentThread[] = [];
+  @state() private _commentsListOpen = false;
+  /**
+   * In-progress comment draft. The thread isn't created on the SPI until
+   * the user types and clicks Send — this avoids persisting empty,
+   * abandoned threads when users open the draft panel and close it.
+   */
+  @state() private _draftAnchor: {
+    from: number;
+    to: number;
+    quoted_text: string;
+    startRel: Uint8Array;
+    endRel: Uint8Array;
+  } | null = null;
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -390,7 +405,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         <div id="editor-root" class="editor-root" part="editor-area"></div>
         ${statusBarVisible ? this._renderStatusBarSlot() : nothing}
         ${this._suggestActive ? this._renderSuggestStatus() : nothing}
-        ${this._activeCommentThread ? this._renderCommentPanel() : nothing}
+        ${this._activeCommentThread || this._draftAnchor ? this._renderCommentPanel() : nothing}
       </div>
       ${!toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
     `;
@@ -419,6 +434,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         <comment-panel
           .open=${true}
           .thread=${this._activeCommentThread}
+          .draftAnchor=${this._draftAnchor
+            ? { quoted_text: this._draftAnchor.quoted_text }
+            : null}
           .capabilities=${this._commentCapabilities}
           .currentUserId=${this.collaboration?.user?.name ?? ''}
           @comment-panel-close=${this._handleCommentPanelClose}
@@ -429,6 +447,8 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @comment-suggestion-accept=${this._handleCommentSuggestionAccept}
           @comment-suggestion-reject=${this._handleCommentSuggestionReject}
           @comment-mention-search=${this._handleCommentMentionSearch}
+          @comment-draft-submit=${this._handleCommentDraftSubmit}
+          @comment-draft-cancel=${this._handleCommentDraftCancel}
         ></comment-panel>
       </div>
     `;
@@ -478,8 +498,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .versionCount=${this._versions.length}
           .versionPanelOpen=${this._versionPanelOpen}
           .versionsAvailable=${this._versionCoordinator.available}
+          .resolvedCommentCount=${this._resolvedThreads.length}
+          .commentsListOpen=${this._commentsListOpen}
+          .commentsAvailable=${this._commentsAvailable}
           @version-toggle=${this._handleVersionToggle}
           @version-quick-save=${this._handleVersionSave}
+          @comments-list-toggle=${this._handleCommentsListToggle}
         ></editor-status-bar>
         <version-panel
           ?open=${this._versionPanelOpen}
@@ -494,6 +518,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @version-diff-clear=${this._handleVersionDiffClear}
           @version-close=${this._handleVersionClose}
         ></version-panel>
+        <comment-list-panel
+          ?open=${this._commentsListOpen}
+          .threads=${this._resolvedThreads}
+          @comment-thread-activate=${this._handleResolvedThreadActivate}
+          @comment-list-close=${this._handleCommentsListClose}
+        ></comment-list-panel>
       </slot>
     `;
   }
@@ -533,6 +563,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
    * to avoid reading stale Lit properties after async gaps.
    */
   private async _performInit(): Promise<void> {
+    const __perf = (globalThis as any).__MULTI_EDITOR_PERF__
+      ? { t0: performance.now(), marks: [] as Array<[string, number]> }
+      : null;
+    const mark = (label: string) => __perf?.marks.push([label, performance.now() - __perf.t0]);
+
     // Snapshot current config — all reads use this, not live Lit properties
     const config = {
       collaboration: this.collaboration,
@@ -568,6 +603,8 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._suggestEngine = null;
     this._activeCommentThread = null;
     this._commentPanelPos = null;
+    this._resolvedThreads = [];
+    this._commentsListOpen = false;
     this._commentsAvailable = false;
     this._suggestAvailable = false;
     this._suggestActive = false;
@@ -596,6 +633,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       } catch {
         // Connection may fail but y-websocket auto-reconnects
       }
+      mark('connected');
 
       // Track collaborator presence via awareness
       this._wireAwareness();
@@ -616,26 +654,30 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     // Mount binding (async — Tiptap's whenReady)
     await this._mountBinding(mode);
+    mark('mounted');
 
-    // Brief delay to allow stored Y.js state (replayed by the relay after
-    // connect) to arrive and be processed by y-websocket before we check
-    // whether to seed. Without this, the seed check runs before stored
-    // messages populate Y.Text, causing the original content to overwrite
-    // persisted edits.
+    // Brief settle so the relay's history-replay + peer awareness
+    // broadcasts can arrive before we decide whether to seed. Two things
+    // we can't skip waiting for:
+    //   1. Relay replays buffered subtype-0x02 update messages to the
+    //      new peer on connect — our Y.Text absorbs them here.
+    //   2. Other peers' awareness updates — needed for the decideSeed()
+    //      election when two tabs open simultaneously.
+    // The relay never completes a y-websocket sync-step-2 handshake, so
+    // we don't wait on it indefinitely — see collab-provider.whenSynced.
+    // Wait for the server's SYNC_STEP_2 reply to arrive before we
+    // allow editing. After Phase 1, the relay is a real Yjs peer and
+    // this is a definite signal, not a timing heuristic.
+    //
+    // Note: initialContent is NOT seeded client-side anymore. The relay
+    // seeds its own Y.Doc on room creation from the storage provider's
+    // plain text (via a pinned server ClientID) and ships that to us
+    // via SYNC_STEP_2. Seeding on the client would concurrently insert
+    // the same content a second time and double the document.
     if (this._collabProvider) {
-      await new Promise(r => setTimeout(r, 200));
+      await this._collabProvider.whenSynced().catch(() => undefined);
     }
-
-    // Seed Y.Text AFTER mounting binding so yCollab's observer catches the insert.
-    // y-codemirror.next only observes CHANGES to Y.Text — it does NOT read
-    // pre-existing content. Seeding after mount ensures the yCollab observer
-    // dispatches the content to CodeMirror.
-    // Guard: only seed if Y.Text is still empty (no state from relay sync).
-    if (this._collabProvider && config.initialContent && this._collabProvider.sharedText.length === 0) {
-      this._collabProvider.ydoc.transact(() => {
-        this._collabProvider!.sharedText.insert(0, config.initialContent);
-      });
-    }
+    mark('synced');
 
     // Check staleness after async mount
     if (config.collaboration !== this.collaboration || config.mimeType !== this.mimeType) {
@@ -693,10 +735,16 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
       // Comments coordinator — fetch capabilities first, then attach.
       await this._attachCommentCoordinator(relayUrl, docId, config.collaboration);
+      mark('coordinators-attached');
     }
 
     this._readyResolve?.();
     this._readyResolve = null;
+    mark('ready');
+    if (__perf) {
+      // eslint-disable-next-line no-console
+      console.log('[multi-editor perf]', __perf.marks.map(([k, t]) => `${k}=${Math.round(t)}ms`).join(' '));
+    }
   }
 
   private async _attachCommentCoordinator(
@@ -768,13 +816,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       } },
     );
 
-    this._commentCoordinator.onThreadsChange(() => {
+    this._commentCoordinator.onThreadsChange((threads) => {
       if (this._activeCommentThread) {
-        const fresh = this._commentEngine
-          ?.getThreads()
-          .find((t) => t.id === this._activeCommentThread!.id);
+        const fresh = threads.find(
+          (t) => t.id === this._activeCommentThread!.id,
+        );
         this._activeCommentThread = fresh ?? null;
       }
+      this._resolvedThreads = threads.filter((t) => t.status === 'resolved');
     });
     this._commentCoordinator.attach(
       this._commentEngine,
@@ -1011,15 +1060,88 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!range) return;
     const { start, end } = range;
     const { anchor, startRel, endRel } = this._commentEngine.createAnchor(start, end);
-    const threadId = this._commentEngine.createThread(anchor, startRel, endRel, '', null);
+    // Open a draft instead of creating the thread up front. Empty threads
+    // (user clicks Add Comment but never types) would otherwise persist
+    // forever as ghost anchors on the SPI.
+    this._draftAnchor = {
+      from: start,
+      to: end,
+      quoted_text: anchor.quoted_text,
+      startRel,
+      endRel,
+    };
+    this._activeCommentThread = null;
+    this._commentCoordinator.setActiveThread(null);
+    this._positionCommentPanelAtSelection();
+  }
+
+  private _handleCommentDraftSubmit(e: CustomEvent): void {
+    if (!this._commentEngine || !this._collabProvider || !this._draftAnchor) return;
+    const content = (e.detail?.content ?? '').trim();
+    if (!content) return;
+    // Re-create anchor from the stored RelativePositions to follow any
+    // edits the user made while the draft was open. If the anchor is
+    // lost (range deleted), fall back to the captured offsets.
+    const draft = this._draftAnchor;
+    const startRel = Y.decodeRelativePosition(draft.startRel);
+    const endRel = Y.decodeRelativePosition(draft.endRel);
+    const absStart = Y.createAbsolutePositionFromRelativePosition(
+      startRel,
+      this._collabProvider.ydoc,
+    );
+    const absEnd = Y.createAbsolutePositionFromRelativePosition(
+      endRel,
+      this._collabProvider.ydoc,
+    );
+    const start = absStart?.index ?? draft.from;
+    const end = absEnd?.index ?? draft.to;
+    const { anchor, startRel: sRel, endRel: eRel } = this._commentEngine.createAnchor(
+      start,
+      end,
+    );
+    const threadId = this._commentEngine.createThread(anchor, sRel, eRel, content, null);
+    this._draftAnchor = null;
     const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
     if (thread) {
       this._activeCommentThread = thread;
       this._commentCoordinator.setActiveThread(threadId);
-      // New thread's anchor decoration renders on the next frame; wait
-      // before querying its position.
       requestAnimationFrame(() => this._positionCommentPanelNear(threadId));
     }
+  }
+
+  private _handleCommentDraftCancel(): void {
+    this._draftAnchor = null;
+  }
+
+  /**
+   * Position the panel below the user's current text selection. Used for
+   * draft popovers — there's no rendered anchor decoration yet, so we
+   * measure the DOM selection instead.
+   */
+  private _positionCommentPanelAtSelection(): void {
+    const editorRoot = this.renderRoot.querySelector('#editor-root') as HTMLElement | null;
+    if (!editorRoot) return;
+    let selRect: DOMRect | null = null;
+    // WYSIWYG selection lives on the document; CodeMirror's is inside a
+    // shadow-root-hosted contenteditable but window.getSelection still
+    // returns its range when focused.
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+      selRect = sel.getRangeAt(0).getBoundingClientRect();
+    }
+    const rootRect = editorRoot.getBoundingClientRect();
+    const panelWidth = 380;
+    if (!selRect || (selRect.width === 0 && selRect.height === 0)) {
+      this._commentPanelPos = { x: 16, y: 48 };
+      return;
+    }
+    this._commentPanelPos = {
+      x: Math.max(
+        8,
+        Math.min(selRect.left - rootRect.left, rootRect.width - panelWidth - 8),
+      ),
+      y: selRect.bottom - rootRect.top + 6,
+    };
   }
 
   /**
@@ -1032,12 +1154,24 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _positionCommentPanelNear(threadId: string): void {
     const editorRoot = this.renderRoot.querySelector('#editor-root') as HTMLElement | null;
     if (!editorRoot) return;
-    const anchor = editorRoot.querySelector(
+    // DualModeBinding keeps both editors mounted (one display:none),
+    // so both may carry a decoration with this thread id. The hidden
+    // one has a zero-sized bounding rect, which produces a negative y
+    // and clips the panel off the top. Pick the first VISIBLE match.
+    const matches = editorRoot.querySelectorAll(
       `[data-comment-thread-id="${CSS.escape(threadId)}"]`,
-    ) as HTMLElement | null;
+    );
+    let anchor: HTMLElement | null = null;
+    for (const el of matches) {
+      const rect = (el as HTMLElement).getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        anchor = el as HTMLElement;
+        break;
+      }
+    }
     if (!anchor) {
-      // Couldn't find the anchor — keep whatever position was set before
-      // (may be stale) or fall back to default on first render.
+      // Couldn't find a visible anchor — keep whatever position was set
+      // before (may be stale) or fall back to default on first render.
       this._commentPanelPos = this._commentPanelPos ?? { x: 16, y: 48 };
       return;
     }
@@ -1154,6 +1288,55 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentEngine?.decideSuggestion(e.detail.threadId, 'rejected');
     this._activeCommentThread = null;
     this._commentCoordinator.setActiveThread(null);
+  }
+
+  private _handleCommentsListToggle(): void {
+    this._commentsListOpen = !this._commentsListOpen;
+  }
+
+  private _handleCommentsListClose(): void {
+    this._commentsListOpen = false;
+  }
+
+  private _handleResolvedThreadActivate(e: CustomEvent): void {
+    if (!this._commentEngine) return;
+    const thread = this._commentEngine
+      .getThreads()
+      .find((t) => t.id === e.detail.threadId);
+    if (!thread) return;
+    this._commentsListOpen = false;
+    this._activeCommentThread = thread;
+    this._commentCoordinator.setActiveThread(thread.id);
+    this._positionCommentPanelNearStatusBar();
+  }
+
+  /**
+   * Resolved threads have no inline anchor (decorations are suppressed
+   * for status === 'resolved'), so position the popover above the
+   * status-bar comments indicator instead. Falls back to a top-left
+   * default if the indicator can't be located.
+   */
+  private _positionCommentPanelNearStatusBar(): void {
+    const editorRoot = this.renderRoot.querySelector('#editor-root') as HTMLElement | null;
+    const indicator = this.renderRoot.querySelector(
+      'editor-status-bar',
+    ) as HTMLElement | null;
+    if (!editorRoot) {
+      this._commentPanelPos = { x: 16, y: 48 };
+      return;
+    }
+    const rootRect = editorRoot.getBoundingClientRect();
+    const panelWidth = 380;
+    if (!indicator) {
+      this._commentPanelPos = { x: 16, y: 48 };
+      return;
+    }
+    const barRect = indicator.getBoundingClientRect();
+    // Right-align with the status bar, float above it.
+    this._commentPanelPos = {
+      x: Math.max(8, rootRect.width - panelWidth - 8),
+      y: Math.max(8, barRect.top - rootRect.top - 320),
+    };
   }
 
   private async _handleCommentMentionSearch(e: CustomEvent): Promise<void> {

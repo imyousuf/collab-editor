@@ -9,11 +9,12 @@ import type {
   RemoteUpdateCallback,
 } from '../interfaces/collaboration.js';
 
-// Both WebsocketProvider and SocketIOProvider share: awareness, wsconnected, on('status'), disconnect(), destroy()
+// Both WebsocketProvider and SocketIOProvider share: awareness, wsconnected, synced, on('status'/'synced'), disconnect(), destroy()
 // Using a structural type avoids union incompatibility with generics on .on()
 interface YjsProvider {
   awareness: any;
   wsconnected: boolean;
+  synced?: boolean;
   on(event: string, handler: (...args: any[]) => void): void;
   disconnect(): void;
   destroy(): void;
@@ -118,6 +119,35 @@ export class CollaborationProvider implements ICollaborationProvider {
       }, timeoutMs);
 
       this._connectedResolvers.push({ resolve, reject, timer });
+    });
+  }
+
+  /**
+   * Resolve when the underlying y-websocket provider emits `synced`,
+   * i.e., when the relay has responded with `SYNC_STEP_2` and the client
+   * has applied it. After this point the Y.Doc holds the authoritative
+   * server state and it is safe to start editing.
+   *
+   * The relay was rewritten in Phase 1 (see internal/relay/room.go) to
+   * be a proper Yjs peer — it maintains a server-side Y.Doc and replies
+   * to `SYNC_STEP_1` with a real `SYNC_STEP_2`. `synced` reliably flips
+   * once; no idle-detection, no fixed-settle heuristics, no seeding
+   * race to defend against.
+   *
+   * `timeoutMs` is a safety bound so a broken relay can't stall init
+   * forever — if it fires the caller starts editing against whatever
+   * state the Y.Doc has received so far (typically still empty).
+   */
+  async whenSynced(timeoutMs = 5000): Promise<void> {
+    await this.whenConnected(10000);
+    if (!this._provider || this._provider.synced === true) return;
+
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs);
+      this._provider!.on('synced', () => {
+        clearTimeout(timer);
+        resolve();
+      });
     });
   }
 
