@@ -295,4 +295,96 @@ describe('blame-tiptap-plugin', () => {
       editor.destroy();
     });
   });
+
+  describe('regression: markdown syntax-char offset shift', () => {
+    function createMarkdownEditor(md: string): Editor {
+      const el = document.createElement('div');
+      document.body.appendChild(el);
+      // @ts-expect-error — the Markdown extension import isn't typed
+      const { Markdown } = require('@tiptap/markdown');
+      const editor = new Editor({
+        element: el,
+        extensions: [StarterKit, Markdown],
+      });
+      editor.commands.setContent(md, { contentType: 'markdown' } as any);
+      return editor;
+    }
+
+    test("heading blame: segment on `Hello` does NOT shift onto `#` space", () => {
+      const editor = createMarkdownEditor('# Hello');
+      editor.registerPlugin(createBlamePlugin());
+      // Y.Text offsets [2, 7) cover the word `Hello` — the `# ` prefix
+      // is at offsets 0-1 and is NOT part of the rendered PM text.
+      const yText = '# Hello';
+      const segs: BlameSegment[] = [{ start: 2, end: 7, userName: 'alice' }];
+      const { tr } = editor.state;
+      tr.setMeta(blamePluginKey, { segments: segs, ytext: { toString: () => yText } as any });
+      editor.view.dispatch(tr);
+
+      const decoSet = blamePluginKey.getState(editor.state);
+      const found: any[] = [];
+      decoSet?.find().forEach((d: any) => found.push(d));
+      expect(found).toHaveLength(1);
+      // Heading text "Hello" occupies PM pos 1..5 (5 chars). Decoration
+      // must cover exactly that range — no shift onto the block boundary.
+      expect(found[0].from).toBe(1);
+      expect(found[0].to).toBe(6);
+      editor.destroy();
+    });
+
+    test("inline bold: segment on `3` in `12**3**456` lands on `3` only", () => {
+      const editor = createMarkdownEditor('12**3**456');
+      editor.registerPlugin(createBlamePlugin());
+      const yText = '12**3**456';
+      // The `3` lives at Y.Text offset 4 (after `12**`).
+      const segs: BlameSegment[] = [{ start: 4, end: 5, userName: 'bob' }];
+      const { tr } = editor.state;
+      tr.setMeta(blamePluginKey, { segments: segs, ytext: { toString: () => yText } as any });
+      editor.view.dispatch(tr);
+
+      const decoSet = blamePluginKey.getState(editor.state);
+      const found: any[] = [];
+      decoSet?.find().forEach((d: any) => found.push(d));
+      expect(found).toHaveLength(1);
+      // `3` is a single-char text node inside the <strong> mark. It's
+      // bounded by tiny PM positions — assert the decoration is exactly
+      // one PM char wide.
+      expect(found[0].to - found[0].from).toBe(1);
+      editor.destroy();
+    });
+
+    test('no spillover across block boundary', () => {
+      // `# H\n\nbody`: if a segment from `H` was attributed to userA
+      // and a segment from `body` was attributed to userB, neither
+      // decoration should span the \n\n gap.
+      const editor = createMarkdownEditor('# H\n\nbody');
+      editor.registerPlugin(createBlamePlugin());
+      const yText = '# H\n\nbody';
+
+      const segs: BlameSegment[] = [
+        { start: 2, end: 3, userName: 'alice' }, // `H`
+        { start: 5, end: 9, userName: 'bob' }, // `body`
+      ];
+      const { tr } = editor.state;
+      tr.setMeta(blamePluginKey, { segments: segs, ytext: { toString: () => yText } as any });
+      editor.view.dispatch(tr);
+
+      const decoSet = blamePluginKey.getState(editor.state);
+      const found: any[] = [];
+      decoSet?.find().forEach((d: any) => found.push(d));
+      expect(found).toHaveLength(2);
+
+      const aliceDec = found.find((d: any) => d.type.attrs['data-blame-user'] === 'alice');
+      const bobDec = found.find((d: any) => d.type.attrs['data-blame-user'] === 'bob');
+      expect(aliceDec).toBeDefined();
+      expect(bobDec).toBeDefined();
+      // Alice's decoration must end before Bob's begins — no overlap.
+      expect(aliceDec.to).toBeLessThanOrEqual(bobDec.from);
+      // Alice's decoration is 1 PM char wide (`H`).
+      expect(aliceDec.to - aliceDec.from).toBe(1);
+      // Bob's decoration is 4 PM chars wide (`body`).
+      expect(bobDec.to - bobDec.from).toBe(4);
+      editor.destroy();
+    });
+  });
 });

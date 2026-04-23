@@ -1,16 +1,34 @@
 /**
  * ProseMirror/Tiptap blame view plugin.
  *
- * Renders inline decorations with author color backgrounds.
- * Maps character offsets from BlameSegment to ProseMirror positions.
+ * Renders inline decorations with author color backgrounds. Uses the
+ * shared pm-position-map helper to project Y.Text-offset segments onto
+ * ProseMirror positions correctly for Markdown, HTML, and plain text.
  */
 
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { BlameSegment } from './blame-engine.js';
 import { BlameEngine } from './blame-engine.js';
+import { buildPositionMap, snapRange } from './pm-position-map.js';
+import type { FormattingOverride } from './pm-position-map.js';
+import type * as Y from 'yjs';
 
 export const blamePluginKey = new PluginKey('blame');
+
+/**
+ * Meta payload accepted by the plugin. Callers either pass a plain
+ * segment array (legacy), or a structured payload with Y.Text access
+ * needed for formatting-authorship overrides.
+ */
+export type BlameMeta =
+  | BlameSegment[]
+  | null
+  | {
+      segments: BlameSegment[];
+      overrides?: FormattingOverride[];
+      ytext?: Y.Text;
+    };
 
 /**
  * Create a ProseMirror plugin that renders blame decorations.
@@ -23,12 +41,19 @@ export function createBlamePlugin(): Plugin {
         return DecorationSet.empty;
       },
       apply(tr, oldSet) {
-        const meta = tr.getMeta(blamePluginKey);
+        const meta = tr.getMeta(blamePluginKey) as BlameMeta | undefined;
         if (meta !== undefined) {
-          if (meta === null || (Array.isArray(meta) && meta.length === 0)) {
-            return DecorationSet.empty;
+          if (meta === null) return DecorationSet.empty;
+          if (Array.isArray(meta)) {
+            if (meta.length === 0) return DecorationSet.empty;
+            return createDecorations(tr.doc, meta, [], undefined);
           }
-          return createDecorations(tr.doc, meta as BlameSegment[]);
+          if (!meta.segments || meta.segments.length === 0) {
+            return meta.overrides && meta.overrides.length > 0
+              ? createDecorations(tr.doc, [], meta.overrides, meta.ytext)
+              : DecorationSet.empty;
+          }
+          return createDecorations(tr.doc, meta.segments, meta.overrides ?? [], meta.ytext);
         }
         // Map existing decorations through document changes
         if (tr.docChanged) {
@@ -46,35 +71,37 @@ export function createBlamePlugin(): Plugin {
 }
 
 /**
- * Build a DecorationSet from blame segments.
- *
- * Maps character offsets to ProseMirror positions.
- * ProseMirror adds 1 for the doc node and 1 for each block node,
- * so positions don't map 1:1 with character offsets.
+ * Build a DecorationSet from blame segments and optional formatting
+ * authorship overrides. Base segments paint every char per the CRDT
+ * clientID that authored it; overrides layer on top to credit the
+ * formatter of a mark when one user wrapped another user's text.
  */
-function createDecorations(doc: any, segments: BlameSegment[]): DecorationSet {
+function createDecorations(
+  doc: any,
+  segments: BlameSegment[],
+  overrides: FormattingOverride[],
+  ytext: Y.Text | undefined,
+): DecorationSet {
   const decorations: Decoration[] = [];
 
-  // Build a character offset -> PM position mapping by walking the doc
-  const posMap = buildPositionMap(doc);
-
-  // The posMap's maximum character offset (used for clamping)
-  const maxCharOffset = Math.max(...posMap.keys());
+  // The shared helper needs Y.Text content to know what's source vs
+  // rendered. When callers didn't pass the Y.Text handle (legacy call
+  // sites), derive the "source" from the PM text — this degrades to
+  // the previous behavior for plain-text content handlers and avoids
+  // crashing on Markdown/HTML docs where segment ranges may not snap
+  // perfectly.
+  const yTextStr = ytext ? ytext.toString() : pmToString(doc);
+  const posMap = buildPositionMap(doc, yTextStr);
 
   for (const seg of segments) {
-    const from = posMap.get(seg.start);
-    // Clamp seg.end to the max mapped offset — blame segments use Y.Text
-    // character offsets which may exceed ProseMirror's text content length
-    // (raw markdown vs rendered content).
-    const clampedEnd = Math.min(seg.end, maxCharOffset);
-    const to = posMap.get(clampedEnd);
-    if (from === undefined || to === undefined) continue;
-    if (from >= to) continue;
+    const snapped = snapRange(seg.start, seg.end, posMap);
+    if (snapped.from === undefined || snapped.to === undefined) continue;
+    if (snapped.from >= snapped.to) continue;
 
     const color = BlameEngine.assignColor(seg.userName);
 
     decorations.push(
-      Decoration.inline(from, to, {
+      Decoration.inline(snapped.from, snapped.to, {
         style: `background-color: ${color}20; border-bottom: 2px solid ${color};`,
         'data-blame-user': seg.userName,
         title: seg.userName,
@@ -82,39 +109,38 @@ function createDecorations(doc: any, segments: BlameSegment[]): DecorationSet {
     );
   }
 
+  // Layer formatting-authorship overrides on top. A later decoration
+  // with the same range wins in PM rendering, so the credit goes to
+  // the formatter for the visible text while the tooltip preserves
+  // the original author for hover.
+  for (const ov of overrides) {
+    if (ov.from >= ov.to) continue;
+    const color = BlameEngine.assignColor(ov.delimiterUser);
+    decorations.push(
+      Decoration.inline(ov.from, ov.to, {
+        style: `background-color: ${color}30; border-bottom: 2px dashed ${color};`,
+        'data-blame-user': ov.delimiterUser,
+        'data-blame-text-user': ov.textUser,
+        title: `text by ${ov.textUser}, formatted by ${ov.delimiterUser}`,
+      }),
+    );
+  }
+
   return DecorationSet.create(doc, decorations);
 }
 
-/**
- * Build a map from character offset (0-based) to ProseMirror position.
- *
- * Walks the ProseMirror document and records the PM position for each
- * character offset in the plain text representation.
- */
-function buildPositionMap(doc: any): Map<number, number> {
-  const map = new Map<number, number>();
-  let charOffset = 0;
-
-  doc.descendants((node: any, pos: number) => {
+/** Serialize PM doc to plain text as a fallback when Y.Text isn't supplied. */
+function pmToString(doc: any): string {
+  const parts: string[] = [];
+  doc.descendants((node: any) => {
     if (node.isText) {
-      for (let i = 0; i < node.text!.length; i++) {
-        map.set(charOffset + i, pos + i);
-      }
-      charOffset += node.text!.length;
-      return false; // don't descend into text nodes
+      parts.push(node.text ?? '');
+      return false;
     }
-
-    if (node.isBlock && node !== doc && charOffset > 0) {
-      // Block boundaries map to newline characters in plain text
-      map.set(charOffset, pos);
-      charOffset++; // account for the \n between blocks
+    if (node.isBlock && node !== doc && parts.length > 0) {
+      parts.push('\n');
     }
-
-    return true; // descend into non-text nodes
+    return true;
   });
-
-  // Map the end position
-  map.set(charOffset, doc.content.size);
-
-  return map;
+  return parts.join('');
 }
