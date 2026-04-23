@@ -302,7 +302,6 @@ describe('blame-tiptap-plugin', () => {
     function createMarkdownEditor(md: string): Editor {
       const el = document.createElement('div');
       document.body.appendChild(el);
-      // @ts-expect-error — the Markdown extension import isn't typed
       const { Markdown } = require('@tiptap/markdown');
       const editor = new Editor({
         element: el,

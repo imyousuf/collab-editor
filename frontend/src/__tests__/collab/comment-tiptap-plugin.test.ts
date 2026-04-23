@@ -226,7 +226,6 @@ describe('comment-tiptap-plugin', () => {
     function createMarkdownEditor(md: string): Editor {
       const el = document.createElement('div');
       document.body.appendChild(el);
-      // @ts-expect-error — Markdown extension isn't typed
       const { Markdown } = require('@tiptap/markdown');
       const editor = new Editor({ element: el, extensions: [StarterKit, Markdown] });
       editor.commands.setContent(md, { contentType: 'markdown' } as any);
