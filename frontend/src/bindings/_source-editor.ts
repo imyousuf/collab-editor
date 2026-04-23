@@ -131,7 +131,10 @@ export class SourceEditorInstance {
     return () => this._updateCallbacks.delete(callback);
   }
 
-  enableBlame(segments: BlameSegment[]): void {
+  // ctx is unused in source mode — Y.Text offsets map 1:1 to the
+  // source editor's doc positions. Accepting it keeps the signature
+  // aligned with the WYSIWYG editor for shared binding code paths.
+  enableBlame(segments: BlameSegment[], _ctx?: unknown): void {
     if (!this._blameActive) {
       this._view.dispatch({
         effects: this._blameCompartment.reconfigure(createBlameExtensions()),
@@ -150,7 +153,7 @@ export class SourceEditorInstance {
     }
   }
 
-  updateBlame(segments: BlameSegment[]): void {
+  updateBlame(segments: BlameSegment[], _ctx?: unknown): void {
     if (this._blameActive) {
       this._view.dispatch({ effects: setBlameData.of(segments) });
     }

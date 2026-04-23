@@ -2,10 +2,12 @@
  * @vitest-environment jsdom
  */
 import { describe, test, expect } from 'vitest';
+import * as Y from 'yjs';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { createBlamePlugin, blamePluginKey } from '../../collab/blame-tiptap-plugin.js';
 import type { BlameSegment } from '../../collab/blame-engine.js';
+import { findFormattingOverrides } from '../../collab/pm-position-map.js';
 
 function createEditor(html: string): Editor {
   const el = document.createElement('div');
@@ -350,6 +352,63 @@ describe('blame-tiptap-plugin', () => {
       // bounded by tiny PM positions — assert the decoration is exactly
       // one PM char wide.
       expect(found[0].to - found[0].from).toBe(1);
+      editor.destroy();
+    });
+
+    test('formatting authorship override: UserA wraps UserB text in bold', () => {
+      // Simulate two CRDT clients. docB typed plain "bold" first;
+      // docA merged docB's state, then inserted ** delimiters around
+      // "bold". The resulting Y.Text is `**bold**`. The blame plugin
+      // should overlay an override decoration crediting UserA for the
+      // visible "bold" with a tooltip referencing UserB.
+      const docB = new Y.Doc();
+      const ytextB = docB.getText('source');
+      ytextB.insert(0, 'bold');
+
+      const docA = new Y.Doc();
+      Y.applyUpdate(docA, Y.encodeStateAsUpdate(docB));
+      const ytextA = docA.getText('source');
+      ytextA.insert(0, '**');
+      ytextA.insert(6, '**');
+
+      const editor = createMarkdownEditor(ytextA.toString());
+      editor.registerPlugin(createBlamePlugin());
+
+      const clientToUser = new Map<number, string>([
+        [docB.clientID, 'UserB'],
+        [docA.clientID, 'UserA'],
+      ]);
+
+      // Base segments (the character-level attribution from Y.Text items).
+      const segs: BlameSegment[] = [
+        { start: 0, end: 2, userName: 'UserA' }, // opening **
+        { start: 2, end: 6, userName: 'UserB' }, // inner "bold"
+        { start: 6, end: 8, userName: 'UserA' }, // closing **
+      ];
+
+      // Compute overrides via the shared helper — the binding does this
+      // in production; here we call it directly for the plugin test.
+      const overrides = findFormattingOverrides(editor.state.doc, ytextA, clientToUser);
+      expect(overrides).toHaveLength(1);
+      expect(overrides[0].delimiterUser).toBe('UserA');
+      expect(overrides[0].textUser).toBe('UserB');
+
+      const { tr } = editor.state;
+      tr.setMeta(blamePluginKey, { segments: segs, overrides, ytext: ytextA });
+      editor.view.dispatch(tr);
+
+      const decoSet = blamePluginKey.getState(editor.state);
+      const found: any[] = [];
+      decoSet?.find().forEach((d: any) => found.push(d));
+
+      // The override decoration is the one with data-blame-text-user.
+      const overrideDec = found.find(
+        (d: any) => d.type?.attrs?.['data-blame-text-user'] === 'UserB',
+      );
+      expect(overrideDec).toBeDefined();
+      expect(overrideDec.type.attrs['data-blame-user']).toBe('UserA');
+      expect(overrideDec.type.attrs['title']).toContain('text by UserB');
+      expect(overrideDec.type.attrs['title']).toContain('formatted by UserA');
       editor.destroy();
     });
 

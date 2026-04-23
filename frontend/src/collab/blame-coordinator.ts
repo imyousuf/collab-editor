@@ -110,7 +110,7 @@ export class BlameCoordinator {
   onModeSwitch(): void {
     if (!this._active || !this._engine || !this._binding) return;
     const segments = this._engine.getLiveBlame();
-    this._binding.updateBlame(segments);
+    this._binding.updateBlame(segments, this._buildContext());
   }
 
   /**
@@ -134,7 +134,7 @@ export class BlameCoordinator {
 
     this._engine.startLiveBlame();
     const segments = this._engine.getLiveBlame();
-    this._binding.enableBlame(segments);
+    this._binding.enableBlame(segments, this._buildContext());
 
     // Debounced Y.Doc update observer — recomputes blame 300ms after
     // the last update. Avoids dispatching CodeMirror effects on every
@@ -146,7 +146,7 @@ export class BlameCoordinator {
         this._updateTimer = null;
         if (this._active && this._engine && this._binding) {
           const updated = this._engine.getLiveBlame();
-          this._binding.updateBlame(updated);
+          this._binding.updateBlame(updated, this._buildContext());
         }
       }, 300);
     };
@@ -165,5 +165,14 @@ export class BlameCoordinator {
     this._updateUnsub = null;
     this._engine?.stopLiveBlame();
     this._binding?.disableBlame();
+  }
+
+  /** Build the extra context the WYSIWYG plugin needs for posMap + overrides. */
+  private _buildContext(): import('../interfaces/blame.js').BlameContext {
+    if (!this._engine) return {};
+    return {
+      ytext: this._engine.getYText(),
+      clientToUser: this._engine.getClientToUserMap(),
+    };
   }
 }

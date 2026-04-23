@@ -92,7 +92,16 @@ export class BlameEngine {
 
   /** Build blame segments from the live Y.Doc's current state. */
   getLiveBlame(): BlameSegment[] {
-    // Build client-ID-to-user map from awareness (live connected users)
+    return this._extractBlameFromText(this.getYText(), this.getClientToUserMap());
+  }
+
+  /** Handle to the shared Y.Text — used by plugins for formatting overrides. */
+  getYText(): Y.Text {
+    return this._ydoc.getText('source');
+  }
+
+  /** ClientID → userName map derived from awareness. Empty when awareness absent. */
+  getClientToUserMap(): Map<number, string> {
     const clientToUser = new Map<number, string>();
     if (this._awareness) {
       const states = this._awareness.getStates?.() as Map<number, any> | undefined;
@@ -104,10 +113,7 @@ export class BlameEngine {
         });
       }
     }
-
-    // Use the LIVE doc's Y.Text — its items have the correct client IDs
-    const text = this._ydoc.getText('source');
-    return this._extractBlameFromText(text, clientToUser);
+    return clientToUser;
   }
 
   // --- Version blame (passthrough) ---
