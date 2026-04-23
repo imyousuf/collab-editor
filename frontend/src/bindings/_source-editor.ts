@@ -177,11 +177,15 @@ export class SourceEditorInstance {
     this._commentsActive = false;
   }
 
+  // ytext is unused in source mode — Y.Text offsets map 1:1 to
+  // CodeMirror positions. The parameter is accepted to keep the
+  // signature aligned with the WYSIWYG instance for shared binding code.
   updateComments(
     threads: CommentThread[],
     overlays: SuggestionOverlayRegion[],
     activeThreadId: string | null,
     pending: PendingSuggestOverlay | null = null,
+    _ytext?: unknown,
   ): void {
     this._lastCommentState = { threads, overlays, pending, activeThreadId };
     if (this._commentsActive) this._pushCommentState();

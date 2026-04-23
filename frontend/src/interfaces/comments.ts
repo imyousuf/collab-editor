@@ -161,12 +161,19 @@ export interface ICommentCapability {
    * @param pending — the author's local Suggest-Mode buffer overlay (layer 3).
    *                  null when not in Suggest Mode or buffer is empty.
    *                  Optional with default null for backwards compatibility.
+   * @param ytext — shared Y.Text handle. Required by the WYSIWYG plugin
+   *                so its posMap builds against the true Markdown/HTML
+   *                source — without this, stored Y.Text offsets get
+   *                mapped against rendered PM text and land on wrong
+   *                visible characters. The source-mode plugin ignores
+   *                it (CodeMirror positions are 1:1 with Y.Text).
    */
   updateComments(
     threads: CommentThread[],
     overlays: SuggestionOverlayRegion[],
     activeThreadId: string | null,
     pending?: import('./suggest.js').PendingSuggestOverlay | null,
+    ytext?: import('yjs').Text,
   ): void;
 }
 

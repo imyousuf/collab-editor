@@ -43,6 +43,7 @@ export class WysiwygEditorInstance {
     overlays: SuggestionOverlayRegion[];
     pending: PendingSuggestOverlay | null;
     activeThreadId: string | null;
+    ytext?: import('yjs').Text;
   } = { threads: [], overlays: [], pending: null, activeThreadId: null };
 
   constructor(
@@ -173,8 +174,9 @@ export class WysiwygEditorInstance {
     overlays: SuggestionOverlayRegion[],
     activeThreadId: string | null,
     pending: PendingSuggestOverlay | null = null,
+    ytext?: import('yjs').Text,
   ): void {
-    this._lastCommentState = { threads, overlays, pending, activeThreadId };
+    this._lastCommentState = { threads, overlays, pending, activeThreadId, ytext };
     if (this._commentsActive) this._pushCommentState();
   }
 
@@ -187,6 +189,7 @@ export class WysiwygEditorInstance {
         this._lastCommentState.overlays,
         this._lastCommentState.activeThreadId,
         this._lastCommentState.pending,
+        this._lastCommentState.ytext,
       ),
     );
     this._editor.view.dispatch(tr);

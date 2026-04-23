@@ -196,11 +196,17 @@ export class CommentCoordinator {
     const overlays = this._engine.getSuggestionOverlays(
       this._config.userColor ?? paletteColor,
     );
+    // Pass the Y.Text handle so the WYSIWYG plugin's posMap can map
+    // against the true Markdown/HTML source. Without this the plugin
+    // falls back to serializing the PM doc, which strips the syntax
+    // chars and makes stored Y.Text offsets land on wrong PM positions.
+    const ytext = this._ydoc?.getText('source');
     this._binding.updateComments(
       threads,
       overlays,
       this._activeThreadId,
       this._pendingOverlay,
+      ytext,
     );
   }
 

@@ -828,6 +828,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       if (thread) {
         this._activeCommentThread = thread;
         this._commentCoordinator.setActiveThread(threadId);
+        this._positionCommentPanelNear(threadId);
       }
     }) as EventListener;
     root.addEventListener('comment-thread-activated', handler);
@@ -1015,7 +1016,41 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (thread) {
       this._activeCommentThread = thread;
       this._commentCoordinator.setActiveThread(threadId);
+      // New thread's anchor decoration renders on the next frame; wait
+      // before querying its position.
+      requestAnimationFrame(() => this._positionCommentPanelNear(threadId));
     }
+  }
+
+  /**
+   * Place the comment panel BELOW the anchor decoration so it never
+   * covers the text the comment is about. Clamps horizontally to stay
+   * inside the editor root, and falls back to a default top-left
+   * position when the anchor can't be located (e.g., decoration not
+   * rendered yet in the currently-visible editor instance).
+   */
+  private _positionCommentPanelNear(threadId: string): void {
+    const editorRoot = this.renderRoot.querySelector('#editor-root') as HTMLElement | null;
+    if (!editorRoot) return;
+    const anchor = editorRoot.querySelector(
+      `[data-comment-thread-id="${CSS.escape(threadId)}"]`,
+    ) as HTMLElement | null;
+    if (!anchor) {
+      // Couldn't find the anchor — keep whatever position was set before
+      // (may be stale) or fall back to default on first render.
+      this._commentPanelPos = this._commentPanelPos ?? { x: 16, y: 48 };
+      return;
+    }
+    const rootRect = editorRoot.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    const panelWidth = 380;
+    this._commentPanelPos = {
+      x: Math.max(
+        8,
+        Math.min(anchorRect.left - rootRect.left, rootRect.width - panelWidth - 8),
+      ),
+      y: anchorRect.bottom - rootRect.top + 6,
+    };
   }
 
   private _handleSuggestToggle(e: CustomEvent): void {

@@ -184,8 +184,9 @@ export class PreviewSourceBinding
     overlays: SuggestionOverlayRegion[],
     activeThreadId: string | null,
     pending: PendingSuggestOverlay | null = null,
+    ytext?: import('yjs').Text,
   ): void {
-    this._sourceEditor?.updateComments(threads, overlays, activeThreadId, pending);
+    this._sourceEditor?.updateComments(threads, overlays, activeThreadId, pending, ytext);
   }
 
   destroy(): void {
