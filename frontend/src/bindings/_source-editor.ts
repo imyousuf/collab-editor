@@ -23,6 +23,7 @@ import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { basicSetup } from 'codemirror';
 import { yCollab } from 'y-codemirror.next';
+import * as Y from 'yjs';
 import type { CollaborationContext } from '../interfaces/editor-binding.js';
 import { cssVarTheme } from './_cm-theme.js';
 
@@ -55,6 +56,11 @@ export class SourceEditorInstance {
   private _readonlyCompartment = new Compartment();
   private _blameCompartment = new Compartment();
   private _commentsCompartment = new Compartment();
+  // Wraps yCollab(ytext, awareness) so Suggest Mode can swap the bound
+  // Y.Text at runtime without recreating the EditorView.
+  private _collabCompartment = new Compartment();
+  private _awareness: any = null;
+  private _ytext: Y.Text | null = null;
   private _blameActive = false;
   private _commentsActive = false;
   private _updateCallbacks: Set<(content: string) => void> = new Set();
@@ -70,8 +76,12 @@ export class SourceEditorInstance {
     options: SourceEditorOptions,
     collab?: CollaborationContext | null,
   ) {
-    const collabExtensions = collab?.sharedText && collab?.awareness
-      ? [yCollab(collab.sharedText, collab.awareness)]
+    if (collab?.sharedText && collab?.awareness) {
+      this._ytext = collab.sharedText;
+      this._awareness = collab.awareness;
+    }
+    const collabExtension = this._ytext && this._awareness
+      ? yCollab(this._ytext, this._awareness)
       : [];
 
     const themeExtensions = options.theme === 'dark' ? [oneDark] : [];
@@ -83,7 +93,7 @@ export class SourceEditorInstance {
         EditorView.lineWrapping,
         this._languageCompartment.of(getLanguageExtension(options.language)),
         this._readonlyCompartment.of(EditorState.readOnly.of(options.readonly)),
-        ...collabExtensions,
+        this._collabCompartment.of(collabExtension),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const content = update.state.doc.toString();
@@ -124,6 +134,38 @@ export class SourceEditorInstance {
     this._view.dispatch({
       effects: this._readonlyCompartment.reconfigure(EditorState.readOnly.of(readonly)),
     });
+  }
+
+  /**
+   * Swap the Y.Text this editor's yCollab is bound to. Used by Suggest
+   * Mode to redirect writes into a per-user buffer Y.Doc. Requires a
+   * collab context to have been supplied at mount — rebinding on a
+   * non-collab editor is a no-op.
+   *
+   * Important: y-codemirror.next's `ySync` is a module-level ViewPlugin
+   * constant that captures the Y.Text in its constructor. A single
+   * Compartment.reconfigure doesn't force the plugin to re-construct
+   * because the plugin reference is identical across yCollab() calls.
+   * We dispatch TWO reconfigures — first to `[]` (tears down the old
+   * ySync instance so its Y.Text observer is detached), then to the new
+   * `yCollab(newText, awareness)` (constructs a fresh ySync bound to
+   * the new Y.Text).
+   */
+  rebindSharedText(newText: Y.Text): void {
+    if (!this._awareness) return;
+    if (newText === this._ytext) return;
+    this._ytext = newText;
+    this._view.dispatch({
+      effects: this._collabCompartment.reconfigure([]),
+    });
+    this._view.dispatch({
+      effects: this._collabCompartment.reconfigure(yCollab(newText, this._awareness)),
+    });
+  }
+
+  /** Current Y.Text target — exposed for tests. */
+  get ytext(): Y.Text | null {
+    return this._ytext;
   }
 
   onUpdate(callback: (content: string) => void): () => void {
