@@ -63,8 +63,8 @@ export interface StatusBarConfig {
   /** Show version history controls. Default: true when versions are available */
   showVersionHistory?: boolean;
 
-  /** Show the comments sidebar control. Default: true when comments are available. */
-  showCommentsSidebar?: boolean;
+  /** Show the resolved-comments dropdown control. Default: true when comments are available. */
+  showResolvedComments?: boolean;
 
   /** Show the Suggest-Mode status pill while suggesting. Default: true */
   showSuggestStatus?: boolean;

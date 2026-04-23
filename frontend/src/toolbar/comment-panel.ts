@@ -36,6 +36,13 @@ export class CommentPanel extends LitElement {
   @property({ attribute: false }) thread: CommentThread | null = null;
   @property({ attribute: false }) capabilities: CommentsCapabilities | null = null;
   @property({ attribute: false }) currentUserId = '';
+  /**
+   * Draft anchor. When set and `thread` is null, the panel renders a
+   * draft-thread form: just the quoted text + textarea + Send. Submitting
+   * creates the thread with the typed content as the first comment;
+   * closing discards the draft without creating anything.
+   */
+  @property({ attribute: false }) draftAnchor: { quoted_text: string } | null = null;
 
   @state() private _replyDraft = '';
   @state() private _mentionOptions: MentionCandidate[] = [];
@@ -191,9 +198,32 @@ export class CommentPanel extends LitElement {
       cursor: pointer;
     }
     .mention-item:hover { background: var(--me-toolbar-button-hover-bg, #f0f0f0); }
+
+    .resolved-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      border-top: 1px solid var(--me-toolbar-border, #eee);
+      font-size: 11px;
+      color: var(--me-comment-meta-color, #888);
+      gap: 8px;
+    }
+    .resolved-note { font-style: italic; }
+    .reopen-link {
+      background: none;
+      border: none;
+      padding: 2px 4px;
+      cursor: pointer;
+      font-size: 11px;
+      color: var(--me-wysiwyg-link-color, #2563eb);
+      text-decoration: underline;
+    }
+    .reopen-link:hover { color: var(--me-version-btn-primary-hover-bg, #1d4ed8); }
   `;
 
   override render(): TemplateResult | typeof nothing {
+    if (!this.thread && this.draftAnchor) return this._renderDraft(this.draftAnchor);
     if (!this.thread) return nothing;
     const t = this.thread;
     const isResolved = t.status === 'resolved';
@@ -206,7 +236,7 @@ export class CommentPanel extends LitElement {
           </span>
           <div class="actions">
             ${isResolved
-              ? html`<button class="primary" @click=${() => this._dispatch('comment-thread-reopen', { threadId: t.id })}>Reopen</button>`
+              ? nothing
               : html`<button class="primary" @click=${() => this._dispatch('comment-thread-resolve', { threadId: t.id })}>Resolve</button>`}
             ${canDelete
               ? html`<button title="Delete thread" @click=${() => this._dispatch('comment-thread-delete', { threadId: t.id })}>🗑</button>`
@@ -223,9 +253,41 @@ export class CommentPanel extends LitElement {
             : t.comments.map((c) => this._renderComment(c))}
         </div>
 
-        ${isResolved ? nothing : this._renderReplyBox(t.id)}
+        ${isResolved ? this._renderResolvedFooter(t) : this._renderReplyBox(t.id)}
       </div>
     `;
+  }
+
+  /**
+   * Resolved threads are opened from the status-bar history list and are
+   * meant for reading, not editing. We intentionally do NOT put "Reopen"
+   * next to the Close × — users would misclick it thinking it activates
+   * the thread, which brings back the inline highlight and confuses the
+   * mental model. Reopen lives as a deliberate link in the footer with
+   * a confirmation prompt.
+   */
+  private _renderResolvedFooter(t: CommentThread): TemplateResult {
+    const resolvedBy = t.resolved_by ?? 'someone';
+    const resolvedAt = t.resolved_at ? formatRelative(t.resolved_at) : '';
+    return html`
+      <div class="resolved-footer">
+        <span class="resolved-note">
+          Resolved by ${resolvedBy}${resolvedAt ? ` · ${resolvedAt}` : ''}
+        </span>
+        <button class="reopen-link" @click=${() => this._confirmReopen(t.id)}>Reopen thread</button>
+      </div>
+    `;
+  }
+
+  private _confirmReopen(threadId: string): void {
+    const ok =
+      typeof window !== 'undefined' && typeof window.confirm === 'function'
+        ? window.confirm(
+            'Reopen this thread? The inline highlight will reappear on the anchored text.',
+          )
+        : true;
+    if (!ok) return;
+    this._dispatch('comment-thread-reopen', { threadId });
   }
 
   private _renderSuggestion(s: NonNullable<CommentThread['suggestion']>): TemplateResult {
@@ -273,7 +335,63 @@ export class CommentPanel extends LitElement {
     `;
   }
 
+  private _renderDraft(anchor: { quoted_text: string }): TemplateResult {
+    const cancel = () => this._dispatch('comment-draft-cancel', {});
+    return html`
+      <div class="panel">
+        <div class="header">
+          <span class="header-quote" title="${anchor.quoted_text}">
+            "${anchor.quoted_text || '(empty)'}"
+          </span>
+          <div class="actions">
+            <button title="Cancel" @click=${cancel}>×</button>
+          </div>
+        </div>
+        ${this._renderComposer({
+          placeholder: 'Add a comment… (type @ for mentions)',
+          secondaryLabel: 'Cancel',
+          onSecondary: cancel,
+          onSend: () => this._submitDraft(),
+          autofocus: true,
+        })}
+      </div>
+    `;
+  }
+
+  private _submitDraft(): void {
+    const content = this._replyDraft.trim();
+    if (!content) return;
+    this._dispatch('comment-draft-submit', { content });
+    this._replyDraft = '';
+    this._mentionActive = false;
+  }
+
   private _renderReplyBox(threadId: string): TemplateResult {
+    return this._renderComposer({
+      placeholder: 'Reply… (type @ for mentions)',
+      secondaryLabel: 'Clear',
+      onSecondary: () => {
+        this._replyDraft = '';
+        this._mentionActive = false;
+      },
+      onSend: () => this._sendReply(threadId),
+      autofocus: false,
+    });
+  }
+
+  /**
+   * Shared textarea + mention-list + action buttons. Used by both the
+   * reply box on an existing thread and the draft composer on a new
+   * thread — the only difference is the secondary button (Clear vs
+   * Cancel), the placeholder, and what onSend does.
+   */
+  private _renderComposer(opts: {
+    placeholder: string;
+    secondaryLabel: string;
+    onSecondary: () => void;
+    onSend: () => void;
+    autofocus: boolean;
+  }): TemplateResult {
     return html`
       <div class="reply">
         ${this._mentionActive && this._mentionOptions.length > 0
@@ -293,14 +411,15 @@ export class CommentPanel extends LitElement {
         <textarea
           .value=${this._replyDraft}
           @input=${(e: Event) => this._onReplyInput(e)}
-          placeholder="Reply… (type @ for mentions)"
+          placeholder="${opts.placeholder}"
+          ?autofocus=${opts.autofocus}
         ></textarea>
         <div class="reply-actions">
-          <button @click=${() => { this._replyDraft = ''; this._mentionActive = false; }}>Clear</button>
+          <button @click=${opts.onSecondary}>${opts.secondaryLabel}</button>
           <button
             class="primary"
             ?disabled=${this._replyDraft.trim().length === 0}
-            @click=${() => this._sendReply(threadId)}
+            @click=${opts.onSend}
           >Send</button>
         </div>
       </div>

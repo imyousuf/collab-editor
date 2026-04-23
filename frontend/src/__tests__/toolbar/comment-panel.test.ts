@@ -77,10 +77,41 @@ describe('comment-panel', () => {
     expect(received?.threadId).toBe('t1');
   });
 
-  test('resolved thread hides reply box and shows Reopen', async () => {
+  test('resolved thread hides reply box, no primary action, Reopen is a deliberate footer link', async () => {
+    // Earlier design had "Reopen" as the primary button right next to the
+    // close ×. Users misclicked it — activating a resolved thread from
+    // the status-bar list appeared to "bring the highlight back" because
+    // one stray click reopened the thread. Now: resolved threads are
+    // read-only by default; Reopen is a text link in the footer behind a
+    // confirm() prompt.
     const panel = await mountPanel({ thread: makeThread({ status: 'resolved' }) });
     expect(panel.shadowRoot!.querySelector('textarea')).toBeNull();
-    expect(panel.shadowRoot!.querySelector('.actions .primary')!.textContent).toContain('Reopen');
+    // No primary action — headers only have the delete + close.
+    expect(panel.shadowRoot!.querySelector('.actions .primary')).toBeNull();
+    const reopenLink = panel.shadowRoot!.querySelector('.reopen-link');
+    expect(reopenLink).not.toBeNull();
+    expect(reopenLink!.textContent).toContain('Reopen thread');
+  });
+
+  test('clicking Reopen link dispatches reopen only after confirm() passes', async () => {
+    const panel = await mountPanel({ thread: makeThread({ status: 'resolved' }) });
+    let dispatched: any = null;
+    panel.addEventListener('comment-thread-reopen', (e: any) => { dispatched = e.detail; });
+
+    const originalConfirm = window.confirm;
+    try {
+      // User cancels: no reopen.
+      (window as any).confirm = () => false;
+      (panel.shadowRoot!.querySelector('.reopen-link') as HTMLButtonElement).click();
+      expect(dispatched).toBeNull();
+
+      // User confirms: reopen fires with the thread id.
+      (window as any).confirm = () => true;
+      (panel.shadowRoot!.querySelector('.reopen-link') as HTMLButtonElement).click();
+      expect(dispatched?.threadId).toBe('t1');
+    } finally {
+      (window as any).confirm = originalConfirm;
+    }
   });
 
   test('suggestion section renders before/after + Accept/Reject', async () => {

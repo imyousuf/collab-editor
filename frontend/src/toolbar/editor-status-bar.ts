@@ -40,6 +40,9 @@ export class EditorStatusBar extends LitElement {
   @property({ type: Number }) versionCount = 0;
   @property({ type: Boolean }) versionPanelOpen = false;
   @property({ type: Boolean }) versionsAvailable = false;
+  @property({ type: Number }) resolvedCommentCount = 0;
+  @property({ type: Boolean }) commentsListOpen = false;
+  @property({ type: Boolean }) commentsAvailable = false;
 
   static styles = css`
     :host {
@@ -165,6 +168,24 @@ export class EditorStatusBar extends LitElement {
     .version-save-btn:hover {
       background: var(--me-toolbar-button-hover-bg, rgba(0,0,0,0.06));
     }
+
+    .comments-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .comments-indicator:hover {
+      background: var(--me-toolbar-hover-bg, rgba(0,0,0,0.06));
+    }
+    .comments-indicator.active {
+      background: var(--me-toolbar-button-active-bg, rgba(0,0,0,0.1));
+    }
+    .comments-icon {
+      font-size: 14px;
+    }
   `;
 
   render() {
@@ -172,6 +193,8 @@ export class EditorStatusBar extends LitElement {
     const showUser = this.config?.showUserIdentity !== false;
     const showPresence = this.config?.showPresence !== false;
     const showVersions = this.config?.showVersionHistory !== false && this.versionsAvailable;
+    const showResolvedComments =
+      this.config?.showResolvedComments !== false && this.commentsAvailable;
 
     return html`
       <div class="left">
@@ -180,6 +203,8 @@ export class EditorStatusBar extends LitElement {
         ${this.documentName ? this._renderDocName() : nothing}
         ${showVersions ? html`<span class="separator-dot">&middot;</span>` : nothing}
         ${showVersions ? this._renderVersionIndicator() : nothing}
+        ${showResolvedComments ? html`<span class="separator-dot">&middot;</span>` : nothing}
+        ${showResolvedComments ? this._renderCommentsIndicator() : nothing}
       </div>
       <div class="right">
         ${showPresence && this.collaborators.length > 0 ? this._renderCollaborators() : nothing}
@@ -250,6 +275,30 @@ export class EditorStatusBar extends LitElement {
   private _onQuickSave(e: Event) {
     e.stopPropagation(); // don't trigger version-toggle
     this.dispatchEvent(new CustomEvent('version-quick-save', {
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _renderCommentsIndicator() {
+    const label = this.resolvedCommentCount > 0
+      ? `${this.resolvedCommentCount} resolved`
+      : 'Resolved';
+    return html`
+      <span
+        class="comments-indicator ${this.commentsListOpen ? 'active' : ''}"
+        part="comments-indicator"
+        @click=${this._onCommentsClick}
+        title="Resolved Comments"
+      >
+        <span class="comments-icon">&#x1F4AC;</span>
+        <span>${label}</span>
+      </span>
+    `;
+  }
+
+  private _onCommentsClick() {
+    this.dispatchEvent(new CustomEvent('comments-list-toggle', {
       bubbles: true,
       composed: true,
     }));
