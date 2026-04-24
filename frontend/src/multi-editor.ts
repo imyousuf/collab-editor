@@ -1577,11 +1577,24 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
     if (!thread?.suggestion) return;
     try {
-      // Legacy path: if the suggestion carries a base64 Y.js update (from
-      // pre-split threads), apply it. New-model suggestions omit
-      // yjs_payload and C7 will replace this branch with a text-level
-      // diff on syncText.
-      if (thread.suggestion.yjs_payload) {
+      // New-model path: apply a text-level diff to syncText. The thread's
+      // anchor is resolved against the current Y.Text (surviving peer
+      // edits via its stored RelativePosition), and the after_text from
+      // the suggestion's human-readable view replaces the anchored
+      // range. Fresh reviewer-clientID ops avoid the dead-items
+      // pathology the old Y.applyUpdate approach would hit when the
+      // suggester had already reverted their drafts.
+      const syncText = this._collabProvider.syncText;
+      const applied = tryApplyTextSuggestion(
+        syncText,
+        this._commentEngine.resolveAnchorById(threadId),
+        thread.suggestion.human_readable.after_text,
+      );
+
+      // Legacy path: pre-split threads may carry a base64 Y.js update
+      // with their whole-document operations. Apply it only if the
+      // text-level path didn't do anything (e.g., anchor lost).
+      if (!applied && thread.suggestion.yjs_payload) {
         const payload = Uint8Array.from(
           atob(thread.suggestion.yjs_payload),
           (c) => c.charCodeAt(0),
@@ -1791,6 +1804,38 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._binding?.destroy();
     this._collabProvider?.destroy();
   }
+}
+
+/**
+ * Apply a suggestion's text-level diff to a Y.Text.
+ *
+ * Replaces the anchored range with `afterText` as fresh ops on the
+ * caller's clientID. Anchor positions come from
+ * `CommentEngine.resolveAnchor` so peer edits since the suggestion
+ * was created are already baked in (RelativePositions shift).
+ *
+ * Returns `true` when a change was applied. Returns `false` when the
+ * anchor is lost (caller falls back to the legacy yjs_payload path if
+ * one is present).
+ */
+function tryApplyTextSuggestion(
+  ytext: Y.Text,
+  anchor: { from: number; to: number } | null,
+  afterText: string,
+): boolean {
+  if (!anchor) return false;
+  const { from, to } = anchor;
+  if (from < 0 || to > ytext.length || from > to) return false;
+  const doc = ytext.doc;
+  const apply = () => {
+    const existing = ytext.toString().slice(from, to);
+    if (existing === afterText) return;
+    if (to > from) ytext.delete(from, to - from);
+    if (afterText.length > 0) ytext.insert(from, afterText);
+  };
+  if (doc) doc.transact(apply);
+  else apply();
+  return true;
 }
 
 /**

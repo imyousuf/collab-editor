@@ -89,6 +89,24 @@ describe('CommentEngine — anchors', () => {
     const resolved = (engine as any).resolveAnchor(stored);
     expect(resolved).toBeNull();
   });
+
+  test('resolveAnchorById resolves a live thread', () => {
+    const { engine, ytext } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(6, 11); // "world"
+    const id = engine.createThread(anchor, startRel, endRel, 'hey', null);
+
+    // Peer-like edit: insert before the anchor.
+    ytext.insert(0, 'OH, ');
+
+    const resolved = engine.resolveAnchorById(id);
+    expect(resolved).not.toBeNull();
+    expect(ytext.toString().slice(resolved!.from, resolved!.to)).toBe('world');
+  });
+
+  test('resolveAnchorById returns null for an unknown id', () => {
+    const { engine } = setup();
+    expect(engine.resolveAnchorById('does-not-exist')).toBeNull();
+  });
 });
 
 describe('CommentEngine — CRUD writes to Y.Map', () => {

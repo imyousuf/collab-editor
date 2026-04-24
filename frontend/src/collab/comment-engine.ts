@@ -216,6 +216,18 @@ export class CommentEngine {
     return null;
   }
 
+  /**
+   * Resolve a thread's anchor by id. Public companion to `resolveAnchor`
+   * for callers that only have the public CommentThread type (which
+   * lacks the base64 RelativePositions stored internally).
+   */
+  resolveAnchorById(threadId: string): { from: number; to: number } | null {
+    const raw = this._ymap.get(threadId);
+    const thread = asStoredThread(raw);
+    if (!thread) return null;
+    return this.resolveAnchor(thread);
+  }
+
   // --- Public: thread CRUD (writes to Y.Map, debounce-persists to SPI) ---
 
   /** Create a new thread. Returns the newly-generated thread id. */
