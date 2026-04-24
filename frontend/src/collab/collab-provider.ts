@@ -1,6 +1,7 @@
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { SocketIOProvider } from './socketio-provider.js';
+import { DocReplicator } from './doc-replicator.js';
 import type {
   ICollaborationProvider,
   CollaborationConfig,
@@ -21,8 +22,11 @@ interface YjsProvider {
 }
 
 export class CollaborationProvider implements ICollaborationProvider {
-  readonly ydoc: Y.Doc;
-  readonly sharedText: Y.Text;
+  readonly syncDoc: Y.Doc;
+  readonly syncText: Y.Text;
+  readonly editorDoc: Y.Doc;
+  readonly editorText: Y.Text;
+  readonly replicator: DocReplicator;
   readonly meta: Y.Map<string>;
 
   private _provider: YjsProvider | null = null;
@@ -33,10 +37,18 @@ export class CollaborationProvider implements ICollaborationProvider {
   private _connectedResolvers: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
 
   constructor() {
-    this.ydoc = new Y.Doc();
-    this.sharedText = this.ydoc.getText('source');
-    this.meta = this.ydoc.getMap('meta');
+    this.syncDoc = new Y.Doc();
+    this.syncText = this.syncDoc.getText('source');
+    this.meta = this.syncDoc.getMap('meta');
+    this.editorDoc = new Y.Doc();
+    this.editorText = this.editorDoc.getText('source');
+    this.replicator = new DocReplicator(this.syncDoc, this.editorDoc);
   }
+
+  /** @deprecated Use `syncDoc`. Retained for backward compatibility during the split. */
+  get ydoc(): Y.Doc { return this.syncDoc; }
+  /** @deprecated Use `syncText` or `editorText` depending on consumer. Defaults to `syncText`. */
+  get sharedText(): Y.Text { return this.syncText; }
 
   get status(): CollabStatus { return this._status; }
 
@@ -52,14 +64,14 @@ export class CollaborationProvider implements ICollaborationProvider {
       this._provider = new SocketIOProvider(
         config.providerUrl,
         config.roomName,
-        this.ydoc,
+        this.syncDoc,
         { auth: config.socketAuth },
       );
     } else {
       this._provider = new WebsocketProvider(
         config.providerUrl,
         config.roomName,
-        this.ydoc,
+        this.syncDoc,
       );
     }
     this._provider.awareness.setLocalStateField('user', config.user);
@@ -90,8 +102,9 @@ export class CollaborationProvider implements ICollaborationProvider {
       this._connectedResolvers = [];
     }
 
-    // Listen for remote updates on the Y.Doc
-    this.ydoc.on('update', (_update: Uint8Array, origin: any) => {
+    // Listen for remote updates on syncDoc (the transport-bound doc).
+    // The replicator mirrors these to editorDoc automatically.
+    this.syncDoc.on('update', (_update: Uint8Array, origin: any) => {
       // Only fire for remote updates (not local transactions)
       if (origin !== this._provider) return;
       this._remoteCallbacks.forEach(cb => cb({ origin }));
@@ -171,7 +184,9 @@ export class CollaborationProvider implements ICollaborationProvider {
     this._statusCallbacks.clear();
     this._remoteCallbacks.clear();
     this._appMessageCallbacks.clear();
-    this.ydoc.destroy();
+    this.replicator.destroy();
+    this.editorDoc.destroy();
+    this.syncDoc.destroy();
   }
 
   /** Register a callback for application event messages (type 0x03). */

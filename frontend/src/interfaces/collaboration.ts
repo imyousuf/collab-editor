@@ -1,4 +1,5 @@
 import type * as Y from 'yjs';
+import type { DocReplicator } from '../collab/doc-replicator.js';
 
 export type CollabStatus = 'disconnected' | 'connecting' | 'connected';
 
@@ -67,17 +68,32 @@ export interface ICollaborationProvider {
   /** Current connection status */
   readonly status: CollabStatus;
 
-  /** The shared Y.Text that all editors bind to */
+  /** @deprecated Prefer `syncText`. Alias preserved during the syncDoc/editorDoc split. */
   readonly sharedText: Y.Text;
 
-  /** The shared Y.Map for metadata */
+  /** The shared Y.Map for metadata (lives on syncDoc — canonical shared state). */
   readonly meta: Y.Map<string>;
 
-  /** Yjs awareness for cursor sharing */
+  /** Yjs awareness for cursor sharing (bound to syncDoc's transport). */
   readonly awareness: any;
 
-  /** The underlying Y.Doc */
+  /** @deprecated Prefer `syncDoc`. Alias preserved during the syncDoc/editorDoc split. */
   readonly ydoc: Y.Doc;
+
+  /** Canonical shared-truth doc. Bound to the websocket transport. All peers converge on this. */
+  readonly syncDoc: Y.Doc;
+
+  /** `syncDoc.getText('source')` — the canonical shared text. */
+  readonly syncText: Y.Text;
+
+  /** Local editor doc. Bound to the editor surfaces (Tiptap / CodeMirror). Mirrors syncDoc via the replicator. */
+  readonly editorDoc: Y.Doc;
+
+  /** `editorDoc.getText('source')` — the editor's view of the text. */
+  readonly editorText: Y.Text;
+
+  /** The bidirectional replicator between syncDoc and editorDoc. */
+  readonly replicator: DocReplicator;
 
   /**
    * Connect to the collaboration server.
