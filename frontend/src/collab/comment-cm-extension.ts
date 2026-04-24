@@ -3,12 +3,14 @@
  *
  * Mirrors comment-tiptap-plugin.ts but for source mode. Renders:
  *
- *   - Inline range marks for committed comment anchors.
- *   - Strikethrough + inline "after" widget for committed suggestion
- *     overlays.
- *   - Strikethrough + inline "after" widget for the author's local
- *     Suggest-Mode buffer overlay.
+ *   - Inline range marks for committed comment *and* suggestion anchors.
  *   - A gutter with per-line comment/suggestion indicators.
+ *
+ * Post syncDoc/editorDoc split: inline strikethrough + "after" widgets
+ * are gone. Suggestions are surfaced via the comment panel, the
+ * Suggestions list in the status bar (C10), and the non-intrusive
+ * anchor highlight. Reviewers preview a suggestion by activating it,
+ * which applies the diff to their local editorDoc (C9).
  *
  * Click handlers dispatch a DOM `comment-thread-activated` CustomEvent
  * on the editor root so the multi-editor orchestrator can open the
@@ -26,7 +28,6 @@ import {
   type DecorationSet,
   EditorView,
   GutterMarker,
-  WidgetType,
   gutter,
 } from '@codemirror/view';
 import type {
@@ -78,92 +79,35 @@ export const commentCmDecorationField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-class SuggestAfterWidget extends WidgetType {
-  constructor(private text: string, private color: string, private threadId: string) {
-    super();
-  }
-  toDOM(): HTMLElement {
-    const el = document.createElement('span');
-    el.className = 'cm-suggest-after';
-    el.setAttribute('data-comment-thread-id', this.threadId);
-    el.textContent = this.text;
-    el.style.cssText = `
-      text-decoration: underline;
-      text-decoration-color: ${this.color};
-      color: ${this.color};
-      background-color: ${this.color}15;
-      padding: 0 2px;
-      margin: 0 1px;
-      border-radius: 2px;
-      cursor: pointer;
-    `;
-    return el;
-  }
-  eq(other: SuggestAfterWidget): boolean {
-    return (
-      this.text === other.text &&
-      this.color === other.color &&
-      this.threadId === other.threadId
-    );
-  }
-}
-
 function buildDecorations(doc: any, state: CommentCmState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  // RangeSetBuilder requires ranges in ascending order. Collect all
-  // decorations first, then sort.
   const collected: Array<{ from: number; to: number; dec: Decoration }> = [];
 
   for (const thread of state.threads) {
     if (thread.status === 'resolved') continue;
-    if (thread.suggestion && thread.suggestion.status === 'pending') continue;
+    // Render the anchor highlight for both plain comments and suggestion
+    // threads. The distinct class name lets the theme tint suggestions
+    // differently if desired; either way, source mode stays clean —
+    // no inline widgets, no strikethrough text.
     const from = Math.min(thread.anchor.start, doc.length);
     const to = Math.min(thread.anchor.end, doc.length);
     if (from >= to) continue;
     const isActive = thread.id === state.activeThreadId;
+    const hasSuggestion = !!(thread.suggestion && thread.suggestion.status === 'pending');
+    const classes = [
+      'cm-comment-anchor',
+      hasSuggestion ? 'cm-comment-anchor--suggestion' : '',
+      isActive ? 'cm-comment-anchor--active' : '',
+    ].filter(Boolean).join(' ');
     collected.push({
       from,
       to,
       dec: Decoration.mark({
-        class: isActive ? 'cm-comment-anchor cm-comment-anchor--active' : 'cm-comment-anchor',
+        class: classes,
         attributes: { 'data-comment-thread-id': thread.id },
       }),
     });
   }
-
-  const addSuggest = (overlay: SuggestionOverlayRegion | PendingSuggestOverlay & { threadId?: string }) => {
-    const threadId = (overlay as SuggestionOverlayRegion).threadId ?? '__pending__';
-    const color = overlay.authorColor;
-    const from = Math.min(overlay.start, doc.length);
-    const to = Math.min(overlay.end, doc.length);
-    if (to > from) {
-      collected.push({
-        from,
-        to,
-        dec: Decoration.mark({
-          class: 'cm-suggest-before',
-          attributes: {
-            'data-comment-thread-id': threadId,
-            style: `text-decoration: line-through; text-decoration-color: ${color}; background-color: ${color}20;`,
-          },
-        }),
-      });
-    }
-    if (overlay.afterText) {
-      const widgetPos = Math.min(to, doc.length);
-      collected.push({
-        from: widgetPos,
-        to: widgetPos,
-        dec: Decoration.widget({
-          widget: new SuggestAfterWidget(overlay.afterText, color, threadId),
-          side: 1,
-        }),
-      });
-    }
-  };
-
-  for (const overlay of state.overlays) addSuggest(overlay);
-  if (state.pending) addSuggest(state.pending);
 
   collected.sort((a, b) => a.from - b.from || a.to - b.to);
   for (const { from, to, dec } of collected) {
@@ -200,12 +144,9 @@ export const commentCmGutter = gutter({
     for (const t of state.threads) {
       if (t.status !== 'open') continue;
       if (t.anchor.start >= line.from && t.anchor.start <= line.to) {
-        if (t.suggestion) suggestionCount += 1;
+        if (t.suggestion && t.suggestion.status === 'pending') suggestionCount += 1;
         else commentCount += 1;
       }
-    }
-    for (const o of state.overlays) {
-      if (o.start >= line.from && o.start <= line.to) suggestionCount += 1;
     }
     if (suggestionCount > 0) return new CommentGutterMarker(suggestionCount, true);
     if (commentCount > 0) return new CommentGutterMarker(commentCount, false);
@@ -223,9 +164,17 @@ export const commentCmTheme = EditorView.baseTheme({
     backgroundColor: 'rgba(255, 236, 179, 0.45)',
     borderBottom: '2px solid #ffca28',
   },
+  '.cm-comment-anchor--suggestion': {
+    backgroundColor: 'rgba(197, 225, 165, 0.45)',
+    borderBottom: '2px solid #689f38',
+  },
   '.cm-comment-anchor--active': {
     backgroundColor: 'rgba(255, 213, 79, 0.55)',
     borderBottom: '2px solid #f9a825',
+  },
+  '.cm-comment-anchor--suggestion.cm-comment-anchor--active': {
+    backgroundColor: 'rgba(174, 213, 129, 0.55)',
+    borderBottom: '2px solid #558b2f',
   },
   '.cm-comment-gutter': {
     width: '22px',

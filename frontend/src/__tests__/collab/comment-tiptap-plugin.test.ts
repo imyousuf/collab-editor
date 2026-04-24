@@ -114,7 +114,10 @@ describe('comment-tiptap-plugin', () => {
     editor.destroy();
   });
 
-  test('committed suggestion emits strikethrough + after widget + margin icon', () => {
+  test('overlays and pending payloads do NOT render inline decorations (post syncDoc split)', () => {
+    // Post-refactor, inline strikethrough + "after" widgets are gone.
+    // Overlay / pending payloads are still accepted in the plugin state
+    // for plumbing compatibility, but produce zero decorations.
     const editor = createEditor('<p>hello world</p>');
     editor.registerPlugin(createCommentPlugin());
 
@@ -127,52 +130,27 @@ describe('comment-tiptap-plugin', () => {
       authorColor: '#1f77b4',
       status: 'pending',
     };
-
-    const tr = editor.state.tr;
-    tr.setMeta(commentPluginKey, buildCommentMeta([], [overlay], null));
-    editor.view.dispatch(tr);
-
-    const { count } = pluginDecorations(editor);
-    // Inline strikethrough + widget for after-text + widget for marker.
-    expect(count).toBeGreaterThanOrEqual(3);
-    editor.destroy();
-  });
-
-  test('pending Suggest-Mode overlay from author also renders', () => {
-    const editor = createEditor('<p>hello world</p>');
-    editor.registerPlugin(createCommentPlugin());
-
     const tr = editor.state.tr;
     tr.setMeta(
       commentPluginKey,
-      buildCommentMeta(
-        [],
-        [],
-        null,
-        {
-          start: 6,
-          end: 11,
-          afterText: 'earth',
-          operations: [],
-          authorColor: '#ff7f0e',
-        },
-      ),
+      buildCommentMeta([], [overlay], null, {
+        start: 6, end: 11, afterText: 'earth', operations: [], authorColor: '#ff7f0e',
+      }),
     );
     editor.view.dispatch(tr);
 
     const { count } = pluginDecorations(editor);
-    expect(count).toBeGreaterThanOrEqual(2);
+    expect(count).toBe(0);
     editor.destroy();
   });
 
-  test('thread with pending suggestion skips the comment-anchor decoration (suggestion handles the range)', () => {
+  test('thread with pending suggestion renders the anchor with the suggestion tint class', () => {
     const editor = createEditor('<p>hello world</p>');
     editor.registerPlugin(createCommentPlugin());
 
     const thread = makeThread({
       id: 't1',
       suggestion: {
-        yjs_payload: 'AAA=',
         human_readable: {
           summary: 's', before_text: 'hello', after_text: 'HI',
           operations: [],
@@ -182,26 +160,18 @@ describe('comment-tiptap-plugin', () => {
         status: 'pending',
       },
     });
-    const overlay: SuggestionOverlayRegion = {
-      threadId: 't1',
-      start: 0,
-      end: 5,
-      afterText: 'HI',
-      operations: [],
-      authorColor: '#1f77b4',
-      status: 'pending',
-    };
     const tr = editor.state.tr;
-    tr.setMeta(commentPluginKey, buildCommentMeta([thread], [overlay], null));
+    tr.setMeta(commentPluginKey, buildCommentMeta([thread], [], null));
     editor.view.dispatch(tr);
 
     const decoSet = (commentPluginKey.getState(editor.state) as any).decorations;
     const all: any[] = [];
     decoSet.find().forEach((d: any) => all.push(d));
-    const commentAnchor = all.find(
-      (d) => d.type?.attrs?.class === 'me-comment-anchor',
+    const anchor = all.find((d) =>
+      String(d.type?.attrs?.class ?? '').includes('me-comment-anchor'),
     );
-    expect(commentAnchor).toBeUndefined();
+    expect(anchor).toBeDefined();
+    expect(String(anchor.type.attrs.class)).toContain('me-comment-anchor--suggestion');
     editor.destroy();
   });
 
@@ -258,36 +228,5 @@ describe('comment-tiptap-plugin', () => {
       editor.destroy();
     });
 
-    test('suggestion overlay across block boundary does not spill into body', () => {
-      const editor = createMarkdownEditor('# H\n\nbody');
-      editor.registerPlugin(createCommentPlugin());
-      const yText = '# H\n\nbody';
-      const overlay = {
-        threadId: 't-cross-block',
-        start: 2,
-        end: 3,
-        afterText: 'HI',
-        operations: [],
-        authorColor: '#123456',
-        status: 'pending' as const,
-      };
-      const tr = editor.state.tr;
-      tr.setMeta(
-        commentPluginKey,
-        buildCommentMeta([], [overlay], null, null, { toString: () => yText } as any),
-      );
-      editor.view.dispatch(tr);
-
-      const decoSet = (commentPluginKey.getState(editor.state) as any).decorations;
-      const strikethrough: any[] = [];
-      decoSet.find().forEach((d: any) => {
-        if (d.type?.attrs?.class === 'me-suggest-before') strikethrough.push(d);
-      });
-      expect(strikethrough).toHaveLength(1);
-      // Must be exactly 1 PM char wide (the `H`) — not spilling into
-      // body via the old undercounted block separator.
-      expect(strikethrough[0].to - strikethrough[0].from).toBe(1);
-      editor.destroy();
-    });
   });
 });

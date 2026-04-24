@@ -1,15 +1,16 @@
 /**
  * ProseMirror/Tiptap comments plugin.
  *
- * Renders three overlay layers:
+ * Renders anchor-range highlights for open comment threads and for
+ * pending-suggestion threads. Suggestions use a distinct tint so users
+ * can spot them at a glance — everything else (before/after preview,
+ * accept/reject UI, submit flow) lives in the comment panel and the
+ * status bar, not inline in the editor.
  *
- *   1. Committed comment anchors  — underlined background on the range,
- *      margin speech-bubble widget at line start.
- *   2. Committed pending suggestion overlays — strikethrough on the
- *      anchored range + underlined `after_text` widget rendered inline.
- *   3. Local Suggest-Mode buffer overlay — same visual vocabulary as a
- *      committed suggestion, but colored with the author's suggestion
- *      color and labeled "(pending)".
+ * Post syncDoc/editorDoc split: there are no inline strikethrough or
+ * "after" widgets. Reviewers preview a suggestion by activating the
+ * thread — the proposed diff is applied to their local editorDoc in
+ * C9's preview flow.
  *
  * Character offsets are the wire-layer unit; a position map is rebuilt
  * on each docChange + clamped to the text-content max offset (same
@@ -120,44 +121,40 @@ export function buildCommentMeta(
 function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
   const yTextStr = state.ytext ? state.ytext.toString() : pmToString(doc);
   const posMap = buildPositionMap(doc, yTextStr);
-  if (posMap.size === 0 && state.threads.length === 0 && state.overlays.length === 0 && !state.pending) {
+  if (posMap.size === 0 && state.threads.length === 0) {
     return DecorationSet.empty;
   }
   const decorations: Decoration[] = [];
 
-  // 1) Comment anchor highlights. Threads with no suggestion get a soft
-  // yellow highlight; threads WITH a suggestion skip the anchor (the
-  // suggestion decoration handles their range).
+  // Anchor-range highlight for open threads. Suggestions get a distinct
+  // green tint; plain comments get the original yellow. Either way,
+  // WYSIWYG mode stays clean — no inline widgets, no strikethrough.
   for (const thread of state.threads) {
     if (thread.status === 'resolved') continue;
-    if (thread.suggestion && thread.suggestion.status === 'pending') continue;
     const snapped = snapRange(thread.anchor.start, thread.anchor.end, posMap);
     if (snapped.from === undefined || snapped.to === undefined) continue;
     if (snapped.from >= snapped.to) continue;
     const isActive = thread.id === state.activeThreadId;
+    const hasSuggestion = !!(thread.suggestion && thread.suggestion.status === 'pending');
+    const classes = [
+      'me-comment-anchor',
+      hasSuggestion ? 'me-comment-anchor--suggestion' : '',
+      isActive ? 'me-comment-anchor--active' : '',
+    ].filter(Boolean).join(' ');
+    const style = hasSuggestion
+      ? (isActive
+        ? 'background-color: rgba(174, 213, 129, 0.55); border-bottom: 2px solid #558b2f;'
+        : 'background-color: rgba(197, 225, 165, 0.45); border-bottom: 2px solid #689f38;')
+      : (isActive
+        ? 'background-color: rgba(255, 213, 79, 0.55); border-bottom: 2px solid #f9a825;'
+        : 'background-color: rgba(255, 236, 179, 0.45); border-bottom: 2px solid #ffca28;');
     decorations.push(
       Decoration.inline(snapped.from, snapped.to, {
-        class: isActive ? 'me-comment-anchor me-comment-anchor--active' : 'me-comment-anchor',
+        class: classes,
         'data-comment-thread-id': thread.id,
-        style: isActive
-          ? 'background-color: rgba(255, 213, 79, 0.55); border-bottom: 2px solid #f9a825;'
-          : 'background-color: rgba(255, 236, 179, 0.45); border-bottom: 2px solid #ffca28;',
+        style,
       }),
     );
-  }
-
-  // 2) Committed pending suggestion overlays.
-  for (const overlay of state.overlays) {
-    decorateSuggestion(decorations, posMap, overlay);
-  }
-
-  // 3) Author's own pending Suggest-Mode buffer.
-  if (state.pending) {
-    decorateSuggestion(decorations, posMap, {
-      threadId: '__pending__',
-      ...state.pending,
-      status: 'pending',
-    });
   }
 
   return DecorationSet.create(doc, decorations);
@@ -176,70 +173,5 @@ function pmToString(doc: any): string {
     return true;
   });
   return parts.join('');
-}
-
-function decorateSuggestion(
-  out: Decoration[],
-  posMap: Map<number, number>,
-  overlay: SuggestionOverlayRegion,
-): void {
-  const snapped = snapRange(overlay.start, overlay.end, posMap);
-  const from = snapped.from;
-  const to = snapped.to;
-  if (from === undefined) return;
-  const color = overlay.authorColor;
-
-  // Strikethrough on the "before" range when it exists in the live doc.
-  if (to !== undefined && to > from) {
-    out.push(
-      Decoration.inline(from, to, {
-        class: 'me-suggest-before',
-        'data-comment-thread-id': overlay.threadId,
-        style: `text-decoration: line-through; text-decoration-color: ${color}; background-color: ${color}20;`,
-      }),
-    );
-  }
-
-  // Inline widget with the "after" text immediately after the range.
-  const insertAt: number = to !== undefined ? to : from;
-  if (overlay.afterText) {
-    out.push(
-      Decoration.widget(insertAt, () => {
-        const el = document.createElement('span');
-        el.className = 'me-suggest-after';
-        el.setAttribute('data-comment-thread-id', overlay.threadId);
-        el.textContent = overlay.afterText;
-        el.style.cssText = `
-          text-decoration: underline;
-          text-decoration-color: ${color};
-          color: ${color};
-          background-color: ${color}15;
-          padding: 0 2px;
-          margin: 0 1px;
-          border-radius: 2px;
-          cursor: pointer;
-        `;
-        return el;
-      }, { side: 1 }),
-    );
-  }
-
-  // Margin pencil icon at the left of the containing line.
-  out.push(
-    Decoration.widget(from, () => {
-      const el = document.createElement('span');
-      el.className = 'me-suggest-marker';
-      el.setAttribute('data-comment-thread-id', overlay.threadId);
-      el.textContent = '✎';
-      el.style.cssText = `
-        position: absolute;
-        left: -1.5em;
-        color: ${color};
-        font-size: 0.85em;
-        cursor: pointer;
-      `;
-      return el;
-    }, { side: -1 }),
-  );
 }
 

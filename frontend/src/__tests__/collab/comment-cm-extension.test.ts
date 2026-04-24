@@ -75,7 +75,7 @@ describe('comment-cm-extension', () => {
     view.destroy();
   });
 
-  test('suggestion overlay produces strikethrough + widget', () => {
+  test('overlays and pending payloads produce no decorations (post syncDoc split)', () => {
     const view = makeView('hello world');
     const overlay: SuggestionOverlayRegion = {
       threadId: 't-sug',
@@ -86,24 +86,46 @@ describe('comment-cm-extension', () => {
       authorColor: '#2ca02c',
       status: 'pending',
     };
-    dispatchState(view, { overlays: [overlay] });
-    // One mark (strikethrough) + one widget.
-    expect(view.state.field(commentCmDecorationField).size).toBe(2);
-    view.destroy();
-  });
-
-  test('pending Suggest-Mode overlay renders same as committed', () => {
-    const view = makeView('hello world');
     dispatchState(view, {
+      overlays: [overlay],
       pending: {
-        start: 6,
-        end: 11,
-        afterText: 'earth',
-        operations: [],
+        start: 6, end: 11, afterText: 'earth', operations: [],
         authorColor: '#d62728',
       },
     });
-    expect(view.state.field(commentCmDecorationField).size).toBe(2);
+    // Inline strikethrough + "after" widget rendering was removed in C8.
+    // Suggestions surface via the anchor highlight on the thread itself
+    // (see the separate test for suggestion-thread tint) and via the
+    // comment panel / Suggestions list.
+    expect(view.state.field(commentCmDecorationField).size).toBe(0);
+    view.destroy();
+  });
+
+  test('thread with pending suggestion renders anchor with the suggestion tint class', () => {
+    const view = makeView('hello world');
+    dispatchState(view, {
+      threads: [
+        thread({
+          id: 't-sug',
+          suggestion: {
+            human_readable: {
+              summary: 's', before_text: 'hello', after_text: 'HI',
+              operations: [],
+            },
+            author_id: 'u1',
+            author_name: 'Alice',
+            status: 'pending',
+          },
+        }),
+      ],
+    });
+    const set = view.state.field(commentCmDecorationField);
+    expect(set.size).toBe(1);
+    const iter = set.iter();
+    expect(iter.value).toBeTruthy();
+    // Decoration.mark's class is on the spec attrs.
+    const cls = String((iter.value as any).spec?.class ?? '');
+    expect(cls).toContain('cm-comment-anchor--suggestion');
     view.destroy();
   });
 
