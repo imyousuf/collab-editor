@@ -832,13 +832,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentCoordinator.detach();
     this._commentEngine?.destroy();
     this._commentEngine = null;
-    // If Suggest Mode is still active, rebind the editor back to the
-    // editor-side Y.Text before destroying the buffer — otherwise yCollab's
-    // observer would briefly point at a destroyed Y.Text.
-    if (this._suggestActive && this._binding && this._collabProvider) {
-      this._binding.rebindSharedText(this._collabProvider.editorText);
-    }
-    this._suggestEngine?.disable();
+    // Suggest Mode cleanup. The engine's destroy() reopens the outbound
+    // gate if it was still closed. No rebind needed — the editor has
+    // always been bound to editorText since the doc split.
+    this._suggestEngine?.destroy();
     this._suggestEngine = null;
     this._activeCommentThread = null;
     this._commentPanelPos = null;
@@ -866,6 +863,15 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         this._collabStatus = status;
         this.dispatchEvent(new CollabStatusEvent({ status }));
         this._collabStatusCallbacks.forEach(cb => cb({ status }));
+      });
+      // When editorDoc is recreated (Suggest Mode exit), rebind the
+      // editor surfaces to the fresh editorText. The new text matches
+      // syncDoc's state — so any local drafts the user had typed are
+      // visibly reverted.
+      this._collabProvider.onEditorDocReset(() => {
+        if (this._binding && this._collabProvider) {
+          this._binding.rebindSharedText(this._collabProvider.editorText);
+        }
       });
       try {
         await this._collabProvider.connect(config.collaboration);
@@ -1048,13 +1054,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         pollIntervalMs: collab.commentsPollInterval ?? 30_000,
       },
     );
-    // SuggestEngine still uses the legacy buffer model; C4 rewrites it to
-    // use the replicator gate + editorDoc reset. For now it keeps pointing
-    // at syncDoc/syncText (matches the pre-split behavior via the alias
-    // preserved on CollaborationProvider).
+    // SuggestEngine is a thin controller over the replicator gate + the
+    // editorDoc reset path. Enable closes outbound; commit/discard reset
+    // editorDoc (visual revert) and reopen outbound.
     this._suggestEngine = new SuggestEngine(
-      this._collabProvider.syncDoc,
-      syncText,
+      this._collabProvider,
       { user: {
         userId: collab.user.name,
         userName: collab.user.name,
@@ -1084,10 +1088,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentsAvailable = this._commentCoordinator.commentsAvailable;
     this._suggestAvailable = this._commentCoordinator.suggestAvailable;
 
-    // Suggest buffer change -> update pending count + push pending overlay.
-    this._suggestEngine.onBufferChange(() => {
-      this._suggestPendingCount = this._suggestEngine?.hasPendingChanges() ? 1 : 0;
-    });
+    // Pending-changes tracking: instead of the old buffer-change observer,
+    // poll the editor's serialized text on each binding content-change event
+    // (wired in _mountBinding). The count updates there.
 
     // Load persisted threads and start polling.
     try {
@@ -1148,6 +1151,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // Subscribe to binding events
     this._binding.onContentChange((content) => {
       this._emitContentChange(content);
+      // Suggest-mode pending count: recompute on every editor change while
+      // the engine is active. The engine compares content against its
+      // enable-time snapshot.
+      if (this._suggestEngine?.isEnabled()) {
+        const serialized = this._binding?.getCurrentSerialized() ?? content;
+        this._suggestPendingCount = this._suggestEngine.hasPendingChanges(serialized) ? 1 : 0;
+      }
     });
 
     this._binding.onRemoteChange((detail) => {
@@ -1440,35 +1450,34 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!this._suggestEngine || !this._binding || !this._collabProvider) return;
     const active = !!e.detail.active;
     if (active) {
-      // Capture the buffer Y.Text from enable() and route the editor's
-      // writes into it. Without this rebind, keystrokes would bypass the
-      // buffer and land on the shared Y.Text — i.e., no Suggest Mode.
+      // Close the replicator's outbound gate so local edits stay off the
+      // wire. The editor continues to write to editorText — no rebind.
       // Pass the editor's current serialized form as the enable-time
-      // "before" snapshot so submit's diff is computed against what the
-      // user actually sees, not the raw Y.Text underneath.
+      // "before" snapshot so submit's diff is computed symmetrically
+      // (same serializer on both sides).
       const currentText = this._binding.getCurrentSerialized();
-      const { bufferText } = this._suggestEngine.enable(currentText);
-      this._binding.rebindSharedText(bufferText);
+      this._suggestEngine.enable(currentText);
       this._suggestActive = true;
       this._commentCoordinator.setSuggestActive(true);
       // Clicking the Suggest-Mode toggle button transferred focus to
-      // the toolbar. Without restoring it, the user's first keystroke
-      // would land on the body and be silently dropped — making it
-      // look like Suggest Mode isn't capturing edits at all.
+      // the toolbar. Restore it so the first keystroke lands on the
+      // editor.
       this._binding.focusEditor();
     } else {
-      if (this._suggestEngine.hasPendingChanges()) {
-        const action = window.confirm(
+      const currentText = this._binding.getCurrentSerialized();
+      if (this._suggestEngine.hasPendingChanges(currentText)) {
+        const submit = window.confirm(
           'You have pending suggestions. Submit them before exiting Suggest Mode? ' +
             '(Cancel to discard)',
         );
-        if (action) this._commitPendingSuggestion();
+        if (submit) {
+          this._commitPendingSuggestion();
+        } else {
+          this._suggestEngine.discard();
+        }
+      } else {
+        this._suggestEngine.disable();
       }
-      // Rebind the editor back to the editor-side Y.Text BEFORE disabling
-      // the buffer — otherwise the editor would be briefly bound to a
-      // destroyed Y.Text.
-      this._binding.rebindSharedText(this._collabProvider.editorText);
-      this._suggestEngine.disable();
       this._suggestActive = false;
       this._suggestPendingCount = 0;
       this._commentCoordinator.setSuggestActive(false);
@@ -1476,7 +1485,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleSuggestSubmit(): void {
-    if (!this._suggestEngine || !this._suggestEngine.hasPendingChanges()) return;
+    if (!this._suggestEngine || !this._binding) return;
+    const currentText = this._binding.getCurrentSerialized();
+    if (!this._suggestEngine.hasPendingChanges(currentText)) return;
     this._suggestNoteDraft = '';
     this._suggestNoteModalOpen = true;
   }
@@ -1495,31 +1506,27 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   private _handleSuggestDiscard(): void {
     if (!this._suggestEngine || !this._binding || !this._collabProvider) return;
-    // clear() = disable() + enable(); the editor must be bound to a
-    // stable anchor during that window, so rebind to the editor doc's
-    // text, clear, then rebind to the freshly-created buffer.
-    this._binding.rebindSharedText(this._collabProvider.editorText);
-    this._suggestEngine.clear();
-    const fresh = this._suggestEngine.getBufferText();
-    if (fresh) this._binding.rebindSharedText(fresh);
+    // Discard resets editorDoc (reverts the editor visually) and reopens
+    // the outbound gate. Re-enable so the user can keep suggesting from
+    // the restored baseline.
+    this._suggestEngine.discard();
+    const currentText = this._binding.getCurrentSerialized();
+    this._suggestEngine.enable(currentText);
     this._suggestPendingCount = 0;
   }
 
   private _commitPendingSuggestion(note: string | null = null): void {
     if (!this._suggestEngine || !this._commentEngine || !this._binding || !this._collabProvider) return;
-    if (!this._suggestEngine.hasPendingChanges()) return;
+    const afterText = this._binding.getCurrentSerialized();
+    if (!this._suggestEngine.hasPendingChanges(afterText)) return;
     try {
-      // Pair the "after" snapshot with the same serializer used at enable.
-      const afterText = this._binding.getCurrentSerialized();
-      const payload = this._suggestEngine.buildSuggestion(note, afterText);
+      // commit() builds the payload, resets editorDoc (visual revert), and
+      // reopens the outbound gate. We pass the payload to the comment
+      // engine, then re-enable so the user can keep suggesting.
+      const payload = this._suggestEngine.commit(note, afterText);
       this._commentEngine.commitSuggestion(payload);
-      // Same dance as discard: rebind to the editor doc's text, swap the
-      // buffer, rebind to the fresh buffer so the user can continue
-      // suggesting.
-      this._binding.rebindSharedText(this._collabProvider.editorText);
-      this._suggestEngine.clear();
-      const fresh = this._suggestEngine.getBufferText();
-      if (fresh) this._binding.rebindSharedText(fresh);
+      const nextBefore = this._binding.getCurrentSerialized();
+      this._suggestEngine.enable(nextBefore);
       this._suggestPendingCount = 0;
     } catch (err) {
       console.error('commit suggestion failed', err);
@@ -1564,12 +1571,17 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
     if (!thread?.suggestion) return;
     try {
-      const payload = Uint8Array.from(atob(thread.suggestion.yjs_payload), (c) => c.charCodeAt(0));
-      // Apply the suggestion payload to syncDoc. The wire broadcasts the
-      // change to peers, and the replicator mirrors it into the reviewer's
-      // own editorDoc. C7 replaces this with a text-level diff so we can
-      // drop yjs_payload entirely.
-      Y.applyUpdate(this._collabProvider.syncDoc, payload);
+      // Legacy path: if the suggestion carries a base64 Y.js update (from
+      // pre-split threads), apply it. New-model suggestions omit
+      // yjs_payload and C7 will replace this branch with a text-level
+      // diff on syncText.
+      if (thread.suggestion.yjs_payload) {
+        const payload = Uint8Array.from(
+          atob(thread.suggestion.yjs_payload),
+          (c) => c.charCodeAt(0),
+        );
+        Y.applyUpdate(this._collabProvider.syncDoc, payload);
+      }
       this._commentEngine.decideSuggestion(threadId, 'accepted');
     } catch (err) {
       console.error('accept suggestion failed', err);

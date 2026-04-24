@@ -1,22 +1,14 @@
 /**
- * Source-level regression guard for Suggest Mode edit routing.
+ * Source-level regression guard for Suggest Mode wiring.
  *
- * Why this test exists
- * --------------------
- * The initial Suggest Mode implementation called
- * `this._suggestEngine.enable()` but threw away the returned buffer.
- * CodeMirror/Tiptap stayed bound to the shared Y.Text, so local
- * "suggestions" leaked to peers and the pending-change detector
- * compared two identical strings (buffer == base) forever.
+ * In the new syncDoc/editorDoc model, Suggest Mode is a thin controller
+ * over the replicator's outbound gate + an editorDoc reset on exit.
+ * There is no buffer Y.Doc, no rebind-on-enable, and no rebindSharedText
+ * in the suggest toggle/commit/discard handlers.
  *
- * The fix: `_handleSuggestToggle(true)` must capture `bufferText` from
- * `enable()` and call `binding.rebindSharedText(bufferText)`. The
- * disable path must rebind back to the shared Y.Text BEFORE tearing
- * down the buffer so yCollab isn't left pointing at a destroyed Y.Text.
- *
- * A full behavioural test lives in
- * `suggest-engine-routing.test.ts`. This one is a cheap static check
- * that the code in `multi-editor.ts` still wires the pieces together.
+ * This guard catches accidental reintroduction of the old buffer-and-rebind
+ * machinery. The full behavioural coverage lives in suggest-engine.test.ts
+ * and suggest-engine-routing.test.ts.
  */
 import { describe, test, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -29,38 +21,55 @@ const multiEditorSrc = readFileSync(
   'utf8',
 );
 
-describe('multi-editor suggest-mode routing guard', () => {
-  test('captures bufferText from suggestEngine.enable()', () => {
-    // The toggle handler must destructure the return value. A regression
-    // would either ignore the return (`suggestEngine.enable()` standalone)
-    // or discard it.
+describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () => {
+  test('SuggestEngine is constructed with the collaboration provider', () => {
+    // The new SuggestEngine signature is `(collab, config)`. A regression
+    // would pass `(ydoc, sharedText, config)` as before.
     expect(multiEditorSrc).toMatch(
-      /const\s*\{\s*bufferText[^}]*\}\s*=\s*this\._suggestEngine\.enable\s*\(/,
+      /new SuggestEngine\s*\(\s*this\._collabProvider\s*,/,
     );
   });
 
-  test('calls binding.rebindSharedText with the buffer Y.Text on enable', () => {
-    // Order matters: must see `rebindSharedText(bufferText)` near the
-    // enable site.
+  test('enable captures the editor-native serialized text', () => {
+    // Enable takes the enable-time "before" snapshot so diff captures are
+    // symmetric (same serializer on both sides). Regression would call
+    // enable() with no arg.
     expect(multiEditorSrc).toMatch(
-      /rebindSharedText\s*\(\s*bufferText\s*\)/,
+      /this\._suggestEngine\.enable\s*\(\s*currentText\s*\)/,
     );
   });
 
-  test('rebinds back to the editor-side Y.Text on disable', () => {
-    // Disable path must rebind to the editor-side Y.Text so the editor
-    // isn't pointing at a Y.Text that suggestEngine.disable() is about to
-    // destroy. Post-syncDoc/editorDoc split, this is `editorText`.
+  test('onEditorDocReset subscription rebinds the editor', () => {
+    // resetEditorDoc fires the callback after swapping editorDoc. Bindings
+    // MUST rebind to the new editorText or they keep pointing at the
+    // destroyed Y.Text.
+    expect(multiEditorSrc).toMatch(/onEditorDocReset\s*\(/);
     expect(multiEditorSrc).toMatch(
       /rebindSharedText\s*\(\s*this\._collabProvider\.editorText\s*\)/,
     );
   });
 
-  test('rebinds around clear() in discard and commit paths', () => {
-    // _handleSuggestDiscard and _commitPendingSuggestion both call
-    // suggestEngine.clear() which destroys the old buffer and creates a
-    // new one. The editor must be rebound to the new buffer afterwards
-    // via getBufferText().
-    expect(multiEditorSrc).toMatch(/this\._suggestEngine\.getBufferText\s*\(/);
+  test('commit path calls SuggestEngine.commit (not buildSuggestion + manual revert)', () => {
+    // The engine's commit() bundles build + resetEditorDoc + disable so
+    // the three happen atomically. A regression would call buildSuggestion
+    // alone and forget to revert.
+    expect(multiEditorSrc).toMatch(
+      /this\._suggestEngine\.commit\s*\(/,
+    );
+  });
+
+  test('discard path calls SuggestEngine.discard (not engine.clear + rebind)', () => {
+    // clear() was the old API. The new API is discard() which handles
+    // reset + gate reopen internally.
+    expect(multiEditorSrc).toMatch(
+      /this\._suggestEngine\.discard\s*\(/,
+    );
+    // Ensure the old buffer-swap dance is gone.
+    expect(multiEditorSrc).not.toMatch(
+      /this\._suggestEngine\.getBufferText\s*\(/,
+    );
+    expect(multiEditorSrc).not.toMatch(
+      /this\._suggestEngine\.clear\s*\(/,
+    );
   });
 });

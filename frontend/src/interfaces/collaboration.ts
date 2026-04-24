@@ -120,4 +120,21 @@ export interface ICollaborationProvider {
 
   /** Permanently destroy the provider and Y.Doc */
   destroy(): void;
+
+  /**
+   * Destroy and recreate `editorDoc` (and its replicator) from the current
+   * `syncDoc` state. Used on Suggest Mode exit to discard local drafts and
+   * their tombstoned CRDT ops. Fresh editorDoc → fresh clientID → no clock-
+   * continuity issues when the outbound gate next opens.
+   *
+   * Subscribers registered via `onEditorDocReset` fire AFTER the swap, so
+   * bindings can rebind to the new `editorText`.
+   */
+  resetEditorDoc(): void;
+
+  /**
+   * Register a callback invoked every time `editorDoc` is swapped via
+   * `resetEditorDoc()`. Returns an unsubscribe function.
+   */
+  onEditorDocReset(callback: () => void): () => void;
 }

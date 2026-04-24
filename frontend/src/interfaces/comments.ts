@@ -61,8 +61,13 @@ export interface SuggestionView {
 }
 
 export interface Suggestion {
-  /** Opaque base64 Y.js update. Decoded only by the reviewer's editor. */
-  yjs_payload: string;
+  /**
+   * Opaque base64 Y.js update. Legacy field — suggestions created after
+   * the syncDoc/editorDoc split omit this. Accept applies a text-level
+   * diff to syncText instead. Retained for backward compatibility with
+   * threads decided before the split.
+   */
+  yjs_payload?: string;
   human_readable: SuggestionView;
   author_id: string;
   author_name: string;

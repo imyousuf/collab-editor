@@ -68,7 +68,15 @@ function setupStack(
     persistDebounceMs: 10,
     persistEnabled: false,
   });
-  const suggest = new SuggestEngine(ydoc, ytext, {
+  // The test uses a minimal collab provider shim. SuggestEngine only
+  // touches .replicator and .resetEditorDoc(); everything else is wired by
+  // the caller.
+  const replicator = { inboundOpen: true, outboundOpen: true } as any;
+  const collabShim = {
+    replicator,
+    resetEditorDoc: () => {},
+  } as any;
+  const suggest = new SuggestEngine(collabShim, {
     user: { userId: 'u1', userName: 'Alice' },
   });
   const binding = bindingDouble();
@@ -129,25 +137,23 @@ describe('Comment creation + panel activation flow', () => {
 });
 
 describe('Suggest Mode commit flow', () => {
-  test('commit via SuggestEngine → CommentEngine creates thread with payload', () => {
+  test('buildSuggestion via SuggestEngine → CommentEngine creates thread with text-level payload', () => {
     const { engine, suggest } = setupStack({
       commentsEnabled: true,
       suggestEnabled: true,
     });
-    suggest.enable();
-    const bufferText = suggest.getBufferText()!;
-    bufferText.delete(6, 5);
-    bufferText.insert(6, 'earth');
-
-    const payload = suggest.buildSuggestion('looks better');
+    suggest.enable('hello world');
+    const payload = suggest.buildSuggestion('looks better', 'hello earth');
     const threadId = engine.commitSuggestion(payload);
 
     const thread = engine.getThreads().find((t) => t.id === threadId);
     expect(thread?.suggestion).toBeDefined();
     expect(thread?.suggestion?.status).toBe('pending');
     expect(thread?.suggestion?.author_note).toBe('looks better');
-    // yjs_payload is round-tripped unchanged (opaque to the wire).
-    expect(thread?.suggestion?.yjs_payload).toBe(payload.yjs_payload);
+    // New-model suggestions omit yjs_payload — accept applies a text diff.
+    expect(thread?.suggestion?.yjs_payload).toBeUndefined();
+    expect(thread?.suggestion?.human_readable.before_text).toBe('world');
+    expect(thread?.suggestion?.human_readable.after_text).toBe('earth');
   });
 });
 

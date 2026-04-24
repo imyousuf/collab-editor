@@ -16,8 +16,13 @@ import type {
  */
 export interface SuggestionPayload {
   anchor: CommentAnchor;
-  /** Base64 Y.js update — opaque outside of the editor. */
-  yjs_payload: string;
+  /**
+   * Base64 Y.js update — opaque outside of the editor.
+   * Legacy field: new submissions omit this (Accept applies a text-level
+   * diff to syncText instead). Retained for backward compatibility with
+   * threads created before the syncDoc/editorDoc split.
+   */
+  yjs_payload?: string;
   view: SuggestionView;
   /** Optional markdown note from the author explaining the change. */
   author_note: string | null;

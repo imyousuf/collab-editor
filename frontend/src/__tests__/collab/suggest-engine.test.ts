@@ -1,180 +1,212 @@
-import { describe, test, expect, beforeEach } from 'vitest';
-import * as Y from 'yjs';
+import { describe, test, expect, beforeEach, afterEach } from 'vitest';
+import { CollaborationProvider } from '../../collab/collab-provider.js';
 import { SuggestEngine } from '../../collab/suggest-engine.js';
 
-function base64Decode(s: string): Uint8Array {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
 function setup(initialContent = 'hello world') {
-  const baseDoc = new Y.Doc();
-  const baseText = baseDoc.getText('source');
-  baseText.insert(0, initialContent);
-  const engine = new SuggestEngine(baseDoc, baseText, {
+  const collab = new CollaborationProvider();
+  collab.syncText.insert(0, initialContent);
+  // Replicator mirrors into editorText automatically.
+  const engine = new SuggestEngine(collab, {
     user: { userId: 'u1', userName: 'Alice' },
   });
-  return { baseDoc, baseText, engine };
+  return { collab, engine };
 }
 
 describe('SuggestEngine — enable/disable', () => {
-  test('enable seeds buffer with current base content', () => {
-    const { engine, baseText } = setup('hello world');
-    const { bufferText } = engine.enable();
-    expect(bufferText.toString()).toBe(baseText.toString());
+  test('enable closes outbound gate and records textAtEnable', () => {
+    const { collab, engine } = setup('hello world');
+    expect(collab.replicator.outboundOpen).toBe(true);
+    engine.enable('hello world');
+    expect(collab.replicator.outboundOpen).toBe(false);
+    expect(engine.getBeforeText()).toBe('hello world');
     expect(engine.isEnabled()).toBe(true);
+    collab.destroy();
   });
 
-  test('disable tears down the buffer', () => {
-    const { engine } = setup();
-    engine.enable();
+  test('disable reopens outbound gate', () => {
+    const { collab, engine } = setup();
+    engine.enable('hello world');
     engine.disable();
+    expect(collab.replicator.outboundOpen).toBe(true);
     expect(engine.isEnabled()).toBe(false);
-    expect(engine.getBufferDoc()).toBeNull();
+    collab.destroy();
+  });
+
+  test('enable is idempotent', () => {
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    engine.enable('other');
+    expect(engine.getBeforeText()).toBe('hello world');
+    collab.destroy();
   });
 
   test('hasPendingChanges is false right after enable', () => {
-    const { engine } = setup();
-    engine.enable();
-    expect(engine.hasPendingChanges()).toBe(false);
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    expect(engine.hasPendingChanges('hello world')).toBe(false);
+    collab.destroy();
+  });
+
+  test('hasPendingChanges is false when disabled', () => {
+    const { collab, engine } = setup();
+    expect(engine.hasPendingChanges('anything')).toBe(false);
+    collab.destroy();
   });
 });
 
-describe('SuggestEngine — buffer isolation', () => {
-  test('local edits stay in buffer and do not touch base', () => {
-    const { engine, baseText } = setup('hello world');
-    const { bufferText } = engine.enable();
-    bufferText.insert(0, 'HI, ');
-    expect(bufferText.toString()).toBe('HI, hello world');
-    expect(baseText.toString()).toBe('hello world');
-    expect(engine.hasPendingChanges()).toBe(true);
+describe('SuggestEngine — outbound gate isolates local drafts', () => {
+  test('local edits stay on editorDoc while gate is closed', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    // User types on editorDoc (replicator mirrors to syncDoc when open,
+    // blocks when closed).
+    collab.editorText.insert(0, 'HI, ');
+    expect(collab.editorText.toString()).toBe('HI, hello world');
+    expect(collab.syncText.toString()).toBe('hello world');
+    expect(engine.hasPendingChanges('HI, hello world')).toBe(true);
+    collab.destroy();
   });
 
-  test('remote base edits rebase the buffer', () => {
-    const { engine, baseText } = setup('hello world');
-    const { bufferText } = engine.enable();
-    // Local edit: insert exclamation at end.
-    bufferText.insert(bufferText.length, '!');
-
-    // Simulate remote base edit: delete "hello " prefix.
-    baseText.delete(0, 6);
-
-    expect(baseText.toString()).toBe('world');
-    // Buffer should reflect both the remote deletion AND the local
-    // addition of "!".
-    expect(bufferText.toString()).toBe('world!');
+  test('peer updates on syncDoc still reach editorDoc while gate is closed', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    // Simulate a peer edit arriving on syncDoc.
+    collab.syncText.insert(collab.syncText.length, '!');
+    expect(collab.editorText.toString()).toBe('hello world!');
+    collab.destroy();
   });
 });
 
-describe('SuggestEngine — buildSuggestion', () => {
+describe('SuggestEngine — buildSuggestion (text-level)', () => {
   test('throws when Suggest Mode is off', () => {
-    const { engine } = setup();
-    expect(() => engine.buildSuggestion(null)).toThrow(/not active/);
+    const { collab, engine } = setup();
+    expect(() => engine.buildSuggestion(null, 'anything')).toThrow(/not active/);
+    collab.destroy();
   });
 
   test('throws when no pending changes', () => {
-    const { engine } = setup();
-    engine.enable();
-    expect(() => engine.buildSuggestion(null)).toThrow(/no pending changes/);
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    expect(() => engine.buildSuggestion(null, 'hello world')).toThrow(/no pending changes/);
+    collab.destroy();
   });
 
   test('replace: shrinks anchor to minimal changed range', () => {
-    const { engine } = setup('hello world');
-    const { bufferText } = engine.enable();
-    // Change "world" -> "earth"
-    bufferText.delete(6, 5);
-    bufferText.insert(6, 'earth');
-    const payload = engine.buildSuggestion('size matters');
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    const payload = engine.buildSuggestion('size matters', 'hello earth');
     expect(payload.anchor).toEqual({ start: 6, end: 11, quoted_text: 'world' });
     expect(payload.view.before_text).toBe('world');
     expect(payload.view.after_text).toBe('earth');
     expect(payload.view.summary).toContain('Change');
     expect(payload.author_note).toBe('size matters');
+    collab.destroy();
   });
 
   test('insert: anchor has zero-length range', () => {
-    const { engine } = setup('abc');
-    const { bufferText } = engine.enable();
-    bufferText.insert(3, 'def');
-    const payload = engine.buildSuggestion(null);
+    const { collab, engine } = setup('abc');
+    engine.enable('abc');
+    const payload = engine.buildSuggestion(null, 'abcdef');
     expect(payload.anchor.start).toBe(3);
     expect(payload.anchor.end).toBe(3);
     expect(payload.view.operations[0].kind).toBe('insert');
     expect(payload.view.operations[0].inserted_text).toBe('def');
+    collab.destroy();
   });
 
   test('delete: anchor spans removed range', () => {
-    const { engine } = setup('hello world');
-    const { bufferText } = engine.enable();
-    bufferText.delete(5, 6); // delete " world"
-    const payload = engine.buildSuggestion(null);
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    const payload = engine.buildSuggestion(null, 'hello');
     expect(payload.anchor).toEqual({ start: 5, end: 11, quoted_text: ' world' });
     expect(payload.view.operations[0].kind).toBe('delete');
     expect(payload.view.after_text).toBe('');
+    collab.destroy();
   });
 
-  test('yjs_payload roundtrip: applying to a fresh doc reproduces buffer text', () => {
-    const { engine, baseDoc } = setup('hello world');
-    const { bufferText } = engine.enable();
-    bufferText.delete(6, 5);
-    bufferText.insert(6, 'earth');
-
-    const payload = engine.buildSuggestion(null);
-
-    // Apply the payload on top of a fresh copy of the base doc.
-    const targetDoc = new Y.Doc();
-    Y.applyUpdate(targetDoc, Y.encodeStateAsUpdate(baseDoc));
-    const targetText = targetDoc.getText('source');
-    expect(targetText.toString()).toBe('hello world');
-
-    Y.applyUpdate(targetDoc, base64Decode(payload.yjs_payload));
-    expect(targetText.toString()).toBe('hello earth');
+  test('payload does not include yjs_payload (text-level diff only)', () => {
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    const payload = engine.buildSuggestion(null, 'hello earth');
+    expect(payload.yjs_payload).toBeUndefined();
+    collab.destroy();
   });
 });
 
-describe('SuggestEngine — change + warning events', () => {
-  test('onBufferChange fires when buffer mutates', () => {
-    const { engine } = setup();
-    engine.enable();
-    let count = 0;
-    engine.onBufferChange(() => {
-      count += 1;
-    });
-    engine.getBufferText()!.insert(0, 'X');
-    expect(count).toBeGreaterThan(0);
+describe('SuggestEngine — commit & discard', () => {
+  test('commit builds payload, resets editorDoc, reopens gate', () => {
+    const { collab, engine } = setup('hello world');
+    const oldEditorDoc = collab.editorDoc;
+
+    engine.enable('hello world');
+    // User drafts in editorDoc.
+    collab.editorText.insert(0, 'HI, ');
+    expect(collab.editorText.toString()).toBe('HI, hello world');
+    expect(collab.syncText.toString()).toBe('hello world');
+
+    const payload = engine.commit('my note', 'HI, hello world');
+
+    // Editor doc got swapped — fresh instance, no drafts.
+    expect(collab.editorDoc).not.toBe(oldEditorDoc);
+    expect(collab.editorText.toString()).toBe('hello world');
+    // Gate reopened.
+    expect(collab.replicator.outboundOpen).toBe(true);
+    expect(engine.isEnabled()).toBe(false);
+    // Payload built from the before/after snapshots.
+    expect(payload.view.before_text).toBe('');
+    expect(payload.view.after_text).toBe('HI, ');
+
+    collab.destroy();
   });
 
-  test('onRebaseWarning fires when remote deletion shrinks buffer further than base', () => {
-    const { engine, baseText } = setup('abcdefghij');
-    const { bufferText } = engine.enable();
-    // Local edit: replace "c" with "CCC" -> length 12.
-    bufferText.delete(2, 1);
-    bufferText.insert(2, 'CCC');
+  test('discard resets editorDoc and reopens gate without building payload', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    collab.editorText.insert(0, 'DRAFT ');
+    expect(collab.editorText.toString()).toBe('DRAFT hello world');
 
-    const warnings: any[] = [];
-    engine.onRebaseWarning((w) => warnings.push(w));
+    engine.discard();
 
-    // Remote edit: delete "abcdef" (6 chars) from base.
-    baseText.delete(0, 6);
-    // Buffer should lose some content. Implementation best-effort,
-    // but in this case the local insertion got dropped so the handler
-    // should fire at least once.
-    // Not asserting exact dropped count; just that a warning surfaced.
-    expect(warnings.length).toBeGreaterThanOrEqual(0);
+    expect(collab.editorText.toString()).toBe('hello world');
+    expect(collab.replicator.outboundOpen).toBe(true);
+    expect(engine.isEnabled()).toBe(false);
+    collab.destroy();
+  });
+
+  test('discard is a no-op when not enabled', () => {
+    const { collab, engine } = setup();
+    engine.discard();
+    expect(engine.isEnabled()).toBe(false);
+    collab.destroy();
+  });
+
+  test('after commit, further edits propagate to syncDoc normally', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    collab.editorText.insert(0, 'X');
+    engine.commit(null, 'Xhello world');
+    // After reset + reopen, a fresh edit should replicate without
+    // clock-gap issues.
+    collab.editorText.insert(collab.editorText.length, '!');
+    expect(collab.syncText.toString()).toBe('hello world!');
+    collab.destroy();
   });
 });
 
-describe('SuggestEngine — clear', () => {
-  test('clear resets the buffer', () => {
-    const { engine } = setup('hello');
-    const { bufferText } = engine.enable();
-    bufferText.insert(0, 'X');
-    expect(engine.hasPendingChanges()).toBe(true);
-    engine.clear();
-    expect(engine.isEnabled()).toBe(true);
-    expect(engine.hasPendingChanges()).toBe(false);
-    expect(engine.getBufferText()!.toString()).toBe('hello');
+describe('SuggestEngine — destroy', () => {
+  test('destroy reopens outbound gate if it was closed', () => {
+    const { collab, engine } = setup();
+    engine.enable('hello world');
+    expect(collab.replicator.outboundOpen).toBe(false);
+    engine.destroy();
+    expect(collab.replicator.outboundOpen).toBe(true);
+    collab.destroy();
+  });
+
+  test('destroy is idempotent', () => {
+    const { collab, engine } = setup();
+    engine.destroy();
+    expect(() => engine.destroy()).not.toThrow();
+    collab.destroy();
   });
 });

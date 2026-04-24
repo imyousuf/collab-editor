@@ -24,26 +24,32 @@ interface YjsProvider {
 export class CollaborationProvider implements ICollaborationProvider {
   readonly syncDoc: Y.Doc;
   readonly syncText: Y.Text;
-  readonly editorDoc: Y.Doc;
-  readonly editorText: Y.Text;
-  readonly replicator: DocReplicator;
   readonly meta: Y.Map<string>;
+
+  private _editorDoc: Y.Doc;
+  private _editorText: Y.Text;
+  private _replicator: DocReplicator;
 
   private _provider: YjsProvider | null = null;
   private _status: CollabStatus = 'disconnected';
   private _statusCallbacks = new Set<CollabStatusCallback>();
   private _remoteCallbacks = new Set<RemoteUpdateCallback>();
   private _appMessageCallbacks = new Set<(data: any) => void>();
+  private _editorResetCallbacks = new Set<() => void>();
   private _connectedResolvers: Array<{ resolve: () => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }> = [];
 
   constructor() {
     this.syncDoc = new Y.Doc();
     this.syncText = this.syncDoc.getText('source');
     this.meta = this.syncDoc.getMap('meta');
-    this.editorDoc = new Y.Doc();
-    this.editorText = this.editorDoc.getText('source');
-    this.replicator = new DocReplicator(this.syncDoc, this.editorDoc);
+    this._editorDoc = new Y.Doc();
+    this._editorText = this._editorDoc.getText('source');
+    this._replicator = new DocReplicator(this.syncDoc, this._editorDoc);
   }
+
+  get editorDoc(): Y.Doc { return this._editorDoc; }
+  get editorText(): Y.Text { return this._editorText; }
+  get replicator(): DocReplicator { return this._replicator; }
 
   /** @deprecated Use `syncDoc`. Retained for backward compatibility during the split. */
   get ydoc(): Y.Doc { return this.syncDoc; }
@@ -184,9 +190,42 @@ export class CollaborationProvider implements ICollaborationProvider {
     this._statusCallbacks.clear();
     this._remoteCallbacks.clear();
     this._appMessageCallbacks.clear();
-    this.replicator.destroy();
-    this.editorDoc.destroy();
+    this._editorResetCallbacks.clear();
+    this._replicator.destroy();
+    this._editorDoc.destroy();
     this.syncDoc.destroy();
+  }
+
+  resetEditorDoc(): void {
+    const oldReplicator = this._replicator;
+    const oldEditorDoc = this._editorDoc;
+
+    // Fresh editorDoc → fresh clientID → no clock-continuity gap with syncDoc.
+    const newEditorDoc = new Y.Doc();
+    const newEditorText = newEditorDoc.getText('source');
+    const newReplicator = new DocReplicator(this.syncDoc, newEditorDoc);
+
+    // Seed the new editor doc from syncDoc BEFORE swapping in the replicator,
+    // otherwise the seed update fires a listener on the not-yet-attached
+    // editor doc. (The seed uses the replicator's REPL origin so no loop
+    // forms either way.)
+    newReplicator.seedEditorFromSync();
+
+    this._editorDoc = newEditorDoc;
+    this._editorText = newEditorText;
+    this._replicator = newReplicator;
+
+    // Tear down the old pair now that all references have moved.
+    oldReplicator.destroy();
+    oldEditorDoc.destroy();
+
+    // Notify subscribers (bindings) so they can rebind to the new editorText.
+    this._editorResetCallbacks.forEach(cb => { try { cb(); } catch { /* swallow */ } });
+  }
+
+  onEditorDocReset(callback: () => void): () => void {
+    this._editorResetCallbacks.add(callback);
+    return () => this._editorResetCallbacks.delete(callback);
   }
 
   /** Register a callback for application event messages (type 0x03). */
