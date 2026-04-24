@@ -833,10 +833,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentEngine?.destroy();
     this._commentEngine = null;
     // If Suggest Mode is still active, rebind the editor back to the
-    // shared Y.Text before destroying the buffer — otherwise yCollab's
+    // editor-side Y.Text before destroying the buffer — otherwise yCollab's
     // observer would briefly point at a destroyed Y.Text.
     if (this._suggestActive && this._binding && this._collabProvider) {
-      this._binding.rebindSharedText(this._collabProvider.sharedText);
+      this._binding.rebindSharedText(this._collabProvider.editorText);
     }
     this._suggestEngine?.disable();
     this._suggestEngine = null;
@@ -930,11 +930,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         .replace(/\/ws\/?$/, '');
       const docId = config.collaboration.roomName;
 
-      // Blame coordinator
+      // Blame coordinator — walks items on the editor doc (what the user sees).
       this._blameCoordinator.onActiveChange((active) => { this._blameActive = active; });
       this._blameCoordinator.attach(
         this._binding,
-        this._collabProvider.ydoc,
+        this._collabProvider.editorDoc,
         this._collabProvider.awareness,
         docId,
         {
@@ -943,10 +943,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         },
       );
 
-      // Version coordinator
+      // Version coordinator — snapshots what the user sees (editor doc).
       this._versionCoordinator.attach(
         this._binding,
-        this._collabProvider.ydoc,
+        this._collabProvider.editorDoc,
         this._collabProvider,
         {
           relayUrl,
@@ -1029,10 +1029,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     }
     this._commentCapabilities = caps;
 
-    const sharedText = this._collabProvider.sharedText;
+    // Comments are canonical shared state — they live on syncDoc's Y.Map
+    // and their anchors resolve against syncText. Peers must converge on
+    // the same thread set, so comments route through the wire-bound doc.
+    const syncText = this._collabProvider.syncText;
     this._commentEngine = new CommentEngine(
-      this._collabProvider.ydoc,
-      sharedText,
+      this._collabProvider.syncDoc,
+      syncText,
       {
         relayUrl,
         documentId: docId,
@@ -1045,9 +1048,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         pollIntervalMs: collab.commentsPollInterval ?? 30_000,
       },
     );
+    // SuggestEngine still uses the legacy buffer model; C4 rewrites it to
+    // use the replicator gate + editorDoc reset. For now it keeps pointing
+    // at syncDoc/syncText (matches the pre-split behavior via the alias
+    // preserved on CollaborationProvider).
     this._suggestEngine = new SuggestEngine(
-      this._collabProvider.ydoc,
-      sharedText,
+      this._collabProvider.syncDoc,
+      syncText,
       { user: {
         userId: collab.user.name,
         userName: collab.user.name,
@@ -1067,7 +1074,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._commentCoordinator.attach(
       this._commentEngine,
       this._binding,
-      this._collabProvider.ydoc,
+      this._collabProvider.syncDoc,
       this._collabProvider.awareness,
       {
         commentsEnabled: collab.commentsEnabled,
@@ -1124,10 +1131,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     this._binding = this._factory.create(this.mimeType);
 
+    // Editor surfaces bind to the editor doc. Local keystrokes land on
+    // editorText first; the replicator mirrors them to syncDoc for peers.
     const collabContext: CollaborationContext | null = this._collabProvider ? {
-      sharedText: this._collabProvider.sharedText,
+      sharedText: this._collabProvider.editorText,
       awareness: this._collabProvider.awareness,
-      ydoc: this._collabProvider.ydoc,
+      ydoc: this._collabProvider.editorDoc,
     } : null;
 
     await this._binding.mount(root, mode, {
@@ -1294,7 +1303,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const range = readSelectionRange(
       this.renderRoot,
       this._binding,
-      this._collabProvider.sharedText.toString(),
+      this._collabProvider.syncText.toString(),
     );
     if (!range) return;
     const { start, end } = range;
@@ -1324,13 +1333,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const draft = this._draftAnchor;
     const startRel = Y.decodeRelativePosition(draft.startRel);
     const endRel = Y.decodeRelativePosition(draft.endRel);
+    // Comment anchors are encoded against syncDoc (CommentEngine binds to it).
     const absStart = Y.createAbsolutePositionFromRelativePosition(
       startRel,
-      this._collabProvider.ydoc,
+      this._collabProvider.syncDoc,
     );
     const absEnd = Y.createAbsolutePositionFromRelativePosition(
       endRel,
-      this._collabProvider.ydoc,
+      this._collabProvider.syncDoc,
     );
     const start = absStart?.index ?? draft.from;
     const end = absEnd?.index ?? draft.to;
@@ -1454,10 +1464,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         );
         if (action) this._commitPendingSuggestion();
       }
-      // Rebind the editor back to the shared Y.Text BEFORE disabling the
-      // buffer — otherwise the editor would be briefly bound to a
+      // Rebind the editor back to the editor-side Y.Text BEFORE disabling
+      // the buffer — otherwise the editor would be briefly bound to a
       // destroyed Y.Text.
-      this._binding.rebindSharedText(this._collabProvider.sharedText);
+      this._binding.rebindSharedText(this._collabProvider.editorText);
       this._suggestEngine.disable();
       this._suggestActive = false;
       this._suggestPendingCount = 0;
@@ -1486,9 +1496,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _handleSuggestDiscard(): void {
     if (!this._suggestEngine || !this._binding || !this._collabProvider) return;
     // clear() = disable() + enable(); the editor must be bound to a
-    // stable anchor during that window, so rebind to the base, clear,
-    // then rebind to the freshly-created buffer.
-    this._binding.rebindSharedText(this._collabProvider.sharedText);
+    // stable anchor during that window, so rebind to the editor doc's
+    // text, clear, then rebind to the freshly-created buffer.
+    this._binding.rebindSharedText(this._collabProvider.editorText);
     this._suggestEngine.clear();
     const fresh = this._suggestEngine.getBufferText();
     if (fresh) this._binding.rebindSharedText(fresh);
@@ -1503,9 +1513,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       const afterText = this._binding.getCurrentSerialized();
       const payload = this._suggestEngine.buildSuggestion(note, afterText);
       this._commentEngine.commitSuggestion(payload);
-      // Same dance as discard: rebind to base, swap the buffer, rebind
-      // to the fresh buffer so the user can continue suggesting.
-      this._binding.rebindSharedText(this._collabProvider.sharedText);
+      // Same dance as discard: rebind to the editor doc's text, swap the
+      // buffer, rebind to the fresh buffer so the user can continue
+      // suggesting.
+      this._binding.rebindSharedText(this._collabProvider.editorText);
       this._suggestEngine.clear();
       const fresh = this._suggestEngine.getBufferText();
       if (fresh) this._binding.rebindSharedText(fresh);
@@ -1554,10 +1565,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!thread?.suggestion) return;
     try {
       const payload = Uint8Array.from(atob(thread.suggestion.yjs_payload), (c) => c.charCodeAt(0));
-      // Apply the suggestion payload to the base Y.Doc. Normal y-websocket
-      // sync broadcasts the change to peers, identical to the reviewer
-      // having typed the edit by hand.
-      Y.applyUpdate(this._collabProvider.ydoc, payload);
+      // Apply the suggestion payload to syncDoc. The wire broadcasts the
+      // change to peers, and the replicator mirrors it into the reviewer's
+      // own editorDoc. C7 replaces this with a text-level diff so we can
+      // drop yjs_payload entirely.
+      Y.applyUpdate(this._collabProvider.syncDoc, payload);
       this._commentEngine.decideSuggestion(threadId, 'accepted');
     } catch (err) {
       console.error('accept suggestion failed', err);

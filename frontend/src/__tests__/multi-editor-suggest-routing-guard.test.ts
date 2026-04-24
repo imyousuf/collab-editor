@@ -47,12 +47,12 @@ describe('multi-editor suggest-mode routing guard', () => {
     );
   });
 
-  test('rebinds back to the shared Y.Text on disable', () => {
-    // Disable path must rebind to `this._collabProvider.sharedText` so
-    // the editor isn't pointing at a Y.Text that suggestEngine.disable()
-    // is about to destroy.
+  test('rebinds back to the editor-side Y.Text on disable', () => {
+    // Disable path must rebind to the editor-side Y.Text so the editor
+    // isn't pointing at a Y.Text that suggestEngine.disable() is about to
+    // destroy. Post-syncDoc/editorDoc split, this is `editorText`.
     expect(multiEditorSrc).toMatch(
-      /rebindSharedText\s*\(\s*this\._collabProvider\.sharedText\s*\)/,
+      /rebindSharedText\s*\(\s*this\._collabProvider\.editorText\s*\)/,
     );
   });
 
