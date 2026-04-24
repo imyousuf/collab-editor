@@ -144,6 +144,42 @@ describe('comment-tiptap-plugin', () => {
     editor.destroy();
   });
 
+  test('zero-width suggestion anchor renders a caret widget decoration', () => {
+    // Regression: insert-only suggestions were previously filtered
+    // out (if (from >= to) continue), leaving nothing visible in
+    // WYSIWYG to show where the proposal lives.
+    const editor = createEditor('<p>hello world</p>');
+    editor.registerPlugin(createCommentPlugin());
+
+    const thread = makeThread({
+      id: 't-insert',
+      anchor: { start: 5, end: 5, quoted_text: '' },
+      suggestion: {
+        human_readable: {
+          summary: 's', before_text: '', after_text: ' - 123',
+          operations: [],
+        },
+        author_id: 'u1',
+        author_name: 'Alice',
+        status: 'pending',
+      },
+    });
+    const tr = editor.state.tr;
+    tr.setMeta(commentPluginKey, buildCommentMeta([thread], [], null));
+    editor.view.dispatch(tr);
+
+    const decoSet = (commentPluginKey.getState(editor.state) as any).decorations;
+    const all: any[] = [];
+    decoSet.find().forEach((d: any) => all.push(d));
+    expect(all.length).toBe(1);
+    // Tiptap Decoration.widget carries a DOM-building fn under `type.toDOM`.
+    const rendered = all[0].type?.toDOM?.(editor.view, () => 0);
+    expect(rendered).toBeTruthy();
+    expect((rendered as HTMLElement).getAttribute('data-comment-thread-id')).toBe('t-insert');
+    expect((rendered as HTMLElement).textContent).toBe('‸');
+    editor.destroy();
+  });
+
   test('thread with pending suggestion renders the anchor with the suggestion tint class', () => {
     const editor = createEditor('<p>hello world</p>');
     editor.registerPlugin(createCommentPlugin());

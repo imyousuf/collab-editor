@@ -167,6 +167,79 @@ describe('SourceEditorInstance.rebindSharedText', () => {
     }
   });
 
+  test('rebind resyncs CodeMirror doc to the new Y.Text when they differ', () => {
+    // Regression: after Suggest Mode submit, editorDoc is reset and the
+    // source editor was left displaying the discarded draft because
+    // yCollab's ySync only observes future Y.Text changes, not existing
+    // state. The rebind flow now replaces the doc during the brief
+    // yCollab-detached window.
+    baseText.insert(0, 'draft-content');
+    const inst = mkInstance();
+
+    // Simulate the editor's view carrying drafted content while the
+    // new Y.Text has the reverted baseline.
+    inst.view.dispatch({
+      changes: { from: 0, to: inst.view.state.doc.length, insert: 'draft-content' },
+    });
+
+    const newDoc = new Y.Doc();
+    const newText = newDoc.getText('source');
+    newText.insert(0, 'reverted-content');
+
+    try {
+      inst.rebindSharedText(newText);
+      expect(inst.view.state.doc.toString()).toBe('reverted-content');
+    } finally {
+      inst.destroy();
+      newDoc.destroy();
+    }
+  });
+
+  test('rebind does NOT leak editor content back to the new Y.Text', () => {
+    // The resync dispatch between the two compartment reconfigures
+    // happens while yCollab is detached, so the new Y.Text must stay
+    // exactly what the caller gave us — no ops applied from the
+    // transient editor state.
+    const inst = mkInstance();
+    inst.view.dispatch({ changes: { from: 0, insert: 'junk-in-editor' } });
+
+    const newDoc = new Y.Doc();
+    const newText = newDoc.getText('source');
+    newText.insert(0, 'clean');
+
+    try {
+      inst.rebindSharedText(newText);
+      expect(newText.toString()).toBe('clean');
+    } finally {
+      inst.destroy();
+      newDoc.destroy();
+    }
+  });
+
+  test('rebind skips the resync when contents already match', () => {
+    baseText.insert(0, 'same');
+    const inst = mkInstance();
+    inst.view.dispatch({
+      changes: { from: 0, to: inst.view.state.doc.length, insert: 'same' },
+    });
+
+    const newDoc = new Y.Doc();
+    const newText = newDoc.getText('source');
+    newText.insert(0, 'same');
+
+    try {
+      // Spy-free check: we just confirm the doc stays put and no
+      // exception is thrown on a same-content rebind.
+      const before = inst.view.state.doc.toString();
+      inst.rebindSharedText(newText);
+      expect(inst.view.state.doc.toString()).toBe(before);
+      expect(newText.toString()).toBe('same');
+    } finally {
+      inst.destroy();
+      newDoc.destroy();
+    }
+  });
+
   test('awareness instance is reused across rebinds (no duplicate cursors)', () => {
     const inst = mkInstance();
     const bufferDoc = new Y.Doc();

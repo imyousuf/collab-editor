@@ -128,7 +128,10 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
 
   for (const thread of state.threads) {
     if (thread.status === 'resolved') continue;
-    const snapped = snapRange(thread.anchor.start, thread.anchor.end, posMap);
+    const isZeroWidth = thread.anchor.end <= thread.anchor.start;
+    const snapped = isZeroWidth
+      ? { from: snapSinglePosition(thread.anchor.start, posMap, doc), to: undefined }
+      : snapRange(thread.anchor.start, thread.anchor.end, posMap);
     if (snapped.from === undefined) continue;
     const isActive = thread.id === state.activeThreadId;
     const hasSuggestion = !!(thread.suggestion && thread.suggestion.status === 'pending');
@@ -188,6 +191,38 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
   }
 
   return DecorationSet.create(doc, decorations);
+}
+
+/**
+ * Map a single Y.Text offset to a PM position. snapRange rejects
+ * zero-width inputs by design (it's built for range highlights), so
+ * insert-only anchors need their own resolution. Walks the sorted
+ * offsets until the mapped key meets or exceeds the requested offset.
+ */
+function snapSinglePosition(
+  offset: number,
+  map: Map<number, number>,
+  doc: any,
+): number | undefined {
+  if (map.size === 0) return undefined;
+  const direct = map.get(offset);
+  if (direct !== undefined) return direct;
+  const keys: number[] = [];
+  for (const k of map.keys()) keys.push(k);
+  keys.sort((a, b) => a - b);
+  let pos: number | undefined;
+  for (const k of keys) {
+    if (k < offset) {
+      pos = map.get(k)! + (offset - k);
+      continue;
+    }
+    // First key >= offset wins if we haven't already extrapolated past.
+    if (pos === undefined) pos = map.get(k);
+    break;
+  }
+  if (pos === undefined) return undefined;
+  const max = typeof doc?.content?.size === 'number' ? doc.content.size : pos;
+  return Math.max(0, Math.min(pos, max));
 }
 
 function pmToString(doc: any): string {

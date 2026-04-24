@@ -515,8 +515,10 @@ function formatRelative(iso: string): string {
  *   2. For insert-only suggestions: the proposed inserted text, prefixed
  *      with a "+" so the user can see what's being added.
  *   3. The literal "(orphaned)" when nothing is recoverable.
+ *
+ * Exported for unit tests; the comment-list-panel has an identical copy.
  */
-function quoteLabel(t: CommentThread): string {
+export function quoteLabel(t: CommentThread): string {
   if (t.anchor.quoted_text) return `"${t.anchor.quoted_text}"`;
   const s = t.suggestion;
   if (s && s.human_readable) {

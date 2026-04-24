@@ -151,6 +151,65 @@ describe('comment-cm-extension', () => {
     view.destroy();
   });
 
+  test('zero-width suggestion anchor renders a caret widget, not nothing', () => {
+    // Regression: insert-only suggestions used to be filtered out of
+    // the decoration set (if (from >= to) continue), leaving author
+    // and reviewers with no visible in-editor indicator of the
+    // proposed change.
+    const view = makeView('hello world');
+    dispatchState(view, {
+      threads: [
+        thread({
+          id: 't-insert',
+          anchor: { start: 5, end: 5, quoted_text: '' },
+          suggestion: {
+            human_readable: { summary: 's', before_text: '', after_text: ' - 123', operations: [] },
+            author_id: 'u1',
+            author_name: 'Alice',
+            status: 'pending',
+          },
+        }),
+      ],
+    });
+    const set = view.state.field(commentCmDecorationField);
+    expect(set.size).toBe(1);
+    const iter = set.iter();
+    // Widget decorations carry the widget on spec; non-widgets carry a class.
+    const spec = (iter.value as any).spec;
+    expect(spec?.widget).toBeTruthy();
+    expect(spec?.widget?.threadId).toBe('t-insert');
+    view.destroy();
+  });
+
+  test('caret widget carries the thread id so the click handler can find it', () => {
+    // jsdom doesn't reliably mount CodeMirror widget DOM synchronously,
+    // so we inspect the widget's toDOM output directly. The extension's
+    // click handler walks up from event.target via
+    // closest('[data-comment-thread-id]') — which requires this attr.
+    const view = makeView('hello world');
+    dispatchState(view, {
+      threads: [
+        thread({
+          id: 't-caret',
+          anchor: { start: 5, end: 5, quoted_text: '' },
+          suggestion: {
+            human_readable: { summary: 's', before_text: '', after_text: 'X', operations: [] },
+            author_id: 'u1',
+            author_name: 'Alice',
+            status: 'pending',
+          },
+        }),
+      ],
+    });
+    const set = view.state.field(commentCmDecorationField);
+    const iter = set.iter();
+    const widget = (iter.value as any)?.spec?.widget;
+    expect(widget).toBeTruthy();
+    const el = widget.toDOM();
+    expect(el.getAttribute('data-comment-thread-id')).toBe('t-caret');
+    view.destroy();
+  });
+
   test('click on an anchor dispatches comment-thread-activated', () => {
     const view = makeView('hello world');
     dispatchState(view, {
