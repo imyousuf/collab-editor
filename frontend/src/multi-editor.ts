@@ -1497,6 +1497,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._suggestNoteModalOpen = false;
     this._commitPendingSuggestion(note.length > 0 ? note : null);
     this._suggestNoteDraft = '';
+    // The user submitted via the toolbar's Submit button — they expect
+    // to stay in Suggest Mode. Re-enable from the now-reset editor so
+    // the next edit is captured as a fresh suggestion.
+    if (this._suggestEngine && this._binding && this._suggestActive) {
+      const nextBefore = this._binding.getCurrentSerialized();
+      this._suggestEngine.enable(nextBefore);
+    }
   }
 
   private _handleSuggestNoteCancel(): void {
@@ -1521,12 +1528,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!this._suggestEngine.hasPendingChanges(afterText)) return;
     try {
       // commit() builds the payload, resets editorDoc (visual revert), and
-      // reopens the outbound gate. We pass the payload to the comment
-      // engine, then re-enable so the user can keep suggesting.
+      // reopens the outbound gate. Whether to re-enable Suggest Mode
+      // afterwards is the caller's decision (see _handleSuggestNoteConfirm
+      // vs _handleSuggestToggle's exit path).
       const payload = this._suggestEngine.commit(note, afterText);
       this._commentEngine.commitSuggestion(payload);
-      const nextBefore = this._binding.getCurrentSerialized();
-      this._suggestEngine.enable(nextBefore);
       this._suggestPendingCount = 0;
     } catch (err) {
       console.error('commit suggestion failed', err);
