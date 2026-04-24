@@ -106,6 +106,8 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _commentCapabilities: CommentsCapabilities | null = null;
   @state() private _resolvedThreads: CommentThread[] = [];
   @state() private _commentsListOpen = false;
+  @state() private _pendingSuggestionThreads: CommentThread[] = [];
+  @state() private _suggestionsListOpen = false;
   /**
    * In-progress comment draft. The thread isn't created on the SPI until
    * the user types and clicks Send — this avoids persisting empty,
@@ -742,9 +744,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .resolvedCommentCount=${this._resolvedThreads.length}
           .commentsListOpen=${this._commentsListOpen}
           .commentsAvailable=${this._commentsAvailable}
+          .pendingSuggestionCount=${this._pendingSuggestionThreads.length}
+          .suggestionsListOpen=${this._suggestionsListOpen}
           @version-toggle=${this._handleVersionToggle}
           @version-quick-save=${this._handleVersionSave}
           @comments-list-toggle=${this._handleCommentsListToggle}
+          @suggestions-list-toggle=${this._handleSuggestionsListToggle}
         ></editor-status-bar>
         <version-panel
           ?open=${this._versionPanelOpen}
@@ -764,6 +769,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .threads=${this._resolvedThreads}
           @comment-thread-activate=${this._handleResolvedThreadActivate}
           @comment-list-close=${this._handleCommentsListClose}
+        ></comment-list-panel>
+        <comment-list-panel
+          ?open=${this._suggestionsListOpen}
+          .threads=${this._pendingSuggestionThreads}
+          .panelTitle=${'Pending Suggestions'}
+          .emptyMessage=${'No pending suggestions.'}
+          @comment-thread-activate=${this._handlePendingSuggestionActivate}
+          @comment-list-close=${this._handleSuggestionsListClose}
         ></comment-list-panel>
       </slot>
     `;
@@ -849,7 +862,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._activeCommentThread = null;
     this._commentPanelPos = null;
     this._resolvedThreads = [];
+    this._pendingSuggestionThreads = [];
     this._commentsListOpen = false;
+    this._suggestionsListOpen = false;
     this._commentsAvailable = false;
     this._suggestAvailable = false;
     this._suggestActive = false;
@@ -1083,6 +1098,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         this._activeCommentThread = fresh ?? null;
       }
       this._resolvedThreads = threads.filter((t) => t.status === 'resolved');
+      this._pendingSuggestionThreads = threads.filter(
+        (t) =>
+          t.status === 'open' &&
+          t.suggestion &&
+          t.suggestion.status === 'pending',
+      );
     });
     this._commentCoordinator.attach(
       this._commentEngine,
@@ -1679,10 +1700,31 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   private _handleCommentsListToggle(): void {
     this._commentsListOpen = !this._commentsListOpen;
+    if (this._commentsListOpen) this._suggestionsListOpen = false;
   }
 
   private _handleCommentsListClose(): void {
     this._commentsListOpen = false;
+  }
+
+  private _handleSuggestionsListToggle(): void {
+    this._suggestionsListOpen = !this._suggestionsListOpen;
+    if (this._suggestionsListOpen) this._commentsListOpen = false;
+  }
+
+  private _handleSuggestionsListClose(): void {
+    this._suggestionsListOpen = false;
+  }
+
+  private _handlePendingSuggestionActivate(e: CustomEvent): void {
+    if (!this._commentEngine) return;
+    const thread = this._commentEngine
+      .getThreads()
+      .find((t) => t.id === e.detail.threadId);
+    if (!thread) return;
+    this._suggestionsListOpen = false;
+    this._setActiveCommentThread(thread);
+    requestAnimationFrame(() => this._positionCommentPanelNear(thread.id));
   }
 
   private _handleResolvedThreadActivate(e: CustomEvent): void {

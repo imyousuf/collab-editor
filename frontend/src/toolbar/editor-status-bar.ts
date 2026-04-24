@@ -43,6 +43,8 @@ export class EditorStatusBar extends LitElement {
   @property({ type: Number }) resolvedCommentCount = 0;
   @property({ type: Boolean }) commentsListOpen = false;
   @property({ type: Boolean }) commentsAvailable = false;
+  @property({ type: Number }) pendingSuggestionCount = 0;
+  @property({ type: Boolean }) suggestionsListOpen = false;
 
   static styles = css`
     :host {
@@ -195,6 +197,8 @@ export class EditorStatusBar extends LitElement {
     const showVersions = this.config?.showVersionHistory !== false && this.versionsAvailable;
     const showResolvedComments =
       this.config?.showResolvedComments !== false && this.commentsAvailable;
+    const showSuggestionsList =
+      this.config?.showResolvedComments !== false && this.commentsAvailable;
 
     return html`
       <div class="left">
@@ -203,6 +207,8 @@ export class EditorStatusBar extends LitElement {
         ${this.documentName ? this._renderDocName() : nothing}
         ${showVersions ? html`<span class="separator-dot">&middot;</span>` : nothing}
         ${showVersions ? this._renderVersionIndicator() : nothing}
+        ${showSuggestionsList ? html`<span class="separator-dot">&middot;</span>` : nothing}
+        ${showSuggestionsList ? this._renderSuggestionsIndicator() : nothing}
         ${showResolvedComments ? html`<span class="separator-dot">&middot;</span>` : nothing}
         ${showResolvedComments ? this._renderCommentsIndicator() : nothing}
       </div>
@@ -299,6 +305,29 @@ export class EditorStatusBar extends LitElement {
 
   private _onCommentsClick() {
     this.dispatchEvent(new CustomEvent('comments-list-toggle', {
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _renderSuggestionsIndicator() {
+    const n = this.pendingSuggestionCount;
+    const label = n > 0 ? `${n} suggestion${n === 1 ? '' : 's'}` : 'Suggestions';
+    return html`
+      <span
+        class="comments-indicator ${this.suggestionsListOpen ? 'active' : ''}"
+        part="suggestions-indicator"
+        @click=${this._onSuggestionsClick}
+        title="Pending Suggestions"
+      >
+        <span class="comments-icon">&#x270E;</span>
+        <span>${label}</span>
+      </span>
+    `;
+  }
+
+  private _onSuggestionsClick() {
+    this.dispatchEvent(new CustomEvent('suggestions-list-toggle', {
       bubbles: true,
       composed: true,
     }));

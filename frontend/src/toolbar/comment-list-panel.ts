@@ -14,6 +14,10 @@ import type { CommentThread } from '../interfaces/comments.js';
 export class CommentListPanel extends LitElement {
   @property({ type: Boolean }) open = false;
   @property({ attribute: false }) threads: CommentThread[] = [];
+  // Named `panelTitle` to avoid clashing with the native HTMLElement
+  // `title` attribute (tooltip), which Lit would otherwise reflect.
+  @property({ attribute: false }) panelTitle = 'Resolved Comments';
+  @property({ attribute: false }) emptyMessage = 'No resolved comments.';
 
   static override styles = css`
     :host {
@@ -104,11 +108,11 @@ export class CommentListPanel extends LitElement {
     return html`
       <div class="panel">
         <div class="header">
-          <span>Resolved Comments</span>
+          <span>${this.panelTitle}</span>
           <button class="close" @click=${this._onClose} title="Close">&times;</button>
         </div>
         ${this.threads.length === 0
-          ? html`<div class="empty">No resolved comments.</div>`
+          ? html`<div class="empty">${this.emptyMessage}</div>`
           : html`<div class="list">${this.threads.map(t => this._renderItem(t))}</div>`}
       </div>
     `;

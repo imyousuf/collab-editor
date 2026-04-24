@@ -250,4 +250,61 @@ describe('EditorStatusBar', () => {
 
     el.remove();
   });
+
+  test('pending suggestions indicator shows count and toggles', async () => {
+    const el = createElement();
+    el.commentsAvailable = true;
+    el.pendingSuggestionCount = 3;
+    await waitUpdate(el);
+
+    const indicator = el.shadowRoot!.querySelector(
+      '[part="suggestions-indicator"]',
+    );
+    expect(indicator).not.toBeNull();
+    expect(indicator!.textContent).toContain('3 suggestions');
+
+    let toggled = false;
+    el.addEventListener('suggestions-list-toggle', () => { toggled = true; });
+    (indicator as HTMLElement).click();
+    expect(toggled).toBe(true);
+
+    el.remove();
+  });
+
+  test('suggestions indicator hides when commentsAvailable=false', async () => {
+    const el = createElement();
+    el.commentsAvailable = false;
+    el.pendingSuggestionCount = 2;
+    await waitUpdate(el);
+    expect(
+      el.shadowRoot!.querySelector('[part="suggestions-indicator"]'),
+    ).toBeNull();
+    el.remove();
+  });
+
+  test('suggestions indicator labels the empty state', async () => {
+    const el = createElement();
+    el.commentsAvailable = true;
+    el.pendingSuggestionCount = 0;
+    await waitUpdate(el);
+    const indicator = el.shadowRoot!.querySelector(
+      '[part="suggestions-indicator"]',
+    );
+    expect(indicator!.textContent).toContain('Suggestions');
+    expect(indicator!.textContent).not.toContain('0 suggestions');
+    el.remove();
+  });
+
+  test('singular vs plural for pending suggestions', async () => {
+    const el = createElement();
+    el.commentsAvailable = true;
+    el.pendingSuggestionCount = 1;
+    await waitUpdate(el);
+    const indicator = el.shadowRoot!.querySelector(
+      '[part="suggestions-indicator"]',
+    );
+    expect(indicator!.textContent).toContain('1 suggestion');
+    expect(indicator!.textContent).not.toContain('1 suggestions');
+    el.remove();
+  });
 });
