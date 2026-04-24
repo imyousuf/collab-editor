@@ -207,13 +207,30 @@ export class CommentEngine {
         }
       }
     }
-    // Fuzzy fallback.
-    const txt = this._ytext.toString();
-    const idx = txt.indexOf(thread.anchor.quoted_text);
-    if (idx >= 0) {
-      return { from: idx, to: idx + thread.anchor.quoted_text.length };
+    const quoted = thread.anchor.quoted_text ?? '';
+    if (quoted.length > 0) {
+      // Range anchor: fuzzy-match on the captured source text. When
+      // present, this is the most accurate fallback under edits that
+      // only moved the range.
+      const txt = this._ytext.toString();
+      const idx = txt.indexOf(quoted);
+      if (idx >= 0) {
+        return { from: idx, to: idx + quoted.length };
+      }
+      // Quoted text gone → thread truly orphaned.
+      return null;
     }
-    return null;
+    // Insert-only (zero-width) anchor — quoted_text is empty so fuzzy
+    // matching is useless (indexOf('') = 0 would anchor every such
+    // suggestion at the top of the doc, which was the root cause of
+    // the "preview garbles the title" bug). Fall back to the absolute
+    // offsets stored on the anchor at creation time, clamped to the
+    // current Y.Text length. They may drift under concurrent edits but
+    // are strictly better than 0.
+    const len = this._ytext.length;
+    const storedStart = Math.max(0, Math.min(thread.anchor.start, len));
+    const storedEnd = Math.max(storedStart, Math.min(thread.anchor.end, len));
+    return { from: storedStart, to: storedEnd };
   }
 
   /**

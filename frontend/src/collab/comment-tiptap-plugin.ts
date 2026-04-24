@@ -159,10 +159,10 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
         }),
       );
     } else {
-      // Zero-width anchor (insert-only suggestion): render a small caret
-      // widget at the insert point so author and collaborators can see
-      // where the suggestion lives without the old inline "after" widget
-      // dumping proposed text into the document.
+      // Zero-width anchor (insert-only suggestion): render a small
+      // pencil-pill widget at the insert point so author and
+      // collaborators can see where the suggestion lives without
+      // dumping the proposed text inline.
       const widgetAt = snapped.from;
       decorations.push(
         Decoration.widget(widgetAt, () => {
@@ -175,14 +175,23 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
               ? 'me-comment-caret me-comment-caret--active'
               : 'me-comment-caret');
           el.setAttribute('data-comment-thread-id', thread.id);
-          el.textContent = '‸';
-          const color = hasSuggestion ? '#689f38' : '#f9a825';
+          el.setAttribute('role', 'button');
+          el.setAttribute('aria-label', hasSuggestion ? 'Open suggestion' : 'Open comment');
+          el.textContent = '✎';
+          const color = hasSuggestion ? '#558b2f' : '#f9a825';
+          const bg = hasSuggestion
+            ? (isActive ? 'rgba(174, 213, 129, 0.85)' : 'rgba(197, 225, 165, 0.55)')
+            : (isActive ? 'rgba(255, 213, 79, 0.55)' : 'rgba(255, 236, 179, 0.45)');
           el.style.cssText = `
             color: ${color};
-            font-weight: bold;
+            background-color: ${bg};
+            padding: 0 3px;
+            margin: 0 1px;
+            border-radius: 3px;
             cursor: pointer;
             display: inline-block;
-            margin: 0 1px;
+            font-size: 0.9em;
+            user-select: none;
           `;
           return el;
         }, { side: 1 }),

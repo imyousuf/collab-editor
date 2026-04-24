@@ -75,7 +75,7 @@ describe('CommentEngine — anchors', () => {
     expect(resolved).toEqual({ from: 6, to: 11 });
   });
 
-  test('returns null when quoted text no longer exists', () => {
+  test('returns null for a range anchor when quoted_text is gone', () => {
     const { engine, ytext } = setup();
     ytext.delete(0, ytext.length);
     ytext.insert(0, 'different');
@@ -88,6 +88,33 @@ describe('CommentEngine — anchors', () => {
     };
     const resolved = (engine as any).resolveAnchor(stored);
     expect(resolved).toBeNull();
+  });
+
+  test('insert-only (empty quoted_text) falls back to stored offsets, not position 0', () => {
+    // Regression: indexOf('') = 0 used to anchor every insert-only
+    // suggestion at the top of the doc, garbling the preview render.
+    const { engine, ytext } = setup();
+    const stored = {
+      anchor: { start: 7, end: 7, quoted_text: '' },
+      status: 'open' as const,
+      comments: [],
+      createdAt: new Date().toISOString(),
+    };
+    const resolved = (engine as any).resolveAnchor(stored);
+    expect(resolved).toEqual({ from: 7, to: 7 });
+    expect(ytext.length).toBeGreaterThanOrEqual(7);
+  });
+
+  test('insert-only clamps stored offsets to the current Y.Text length', () => {
+    const { engine } = setup(); // 'hello world' — length 11
+    const stored = {
+      anchor: { start: 99, end: 99, quoted_text: '' },
+      status: 'open' as const,
+      comments: [],
+      createdAt: new Date().toISOString(),
+    };
+    const resolved = (engine as any).resolveAnchor(stored);
+    expect(resolved).toEqual({ from: 11, to: 11 });
   });
 
   test('resolveAnchorById resolves a live thread', () => {

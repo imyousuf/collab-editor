@@ -74,6 +74,23 @@ describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () 
     );
   });
 
+  test('onContentChange skips pending-count update while a preview is active', () => {
+    // Regression: when the author previewed their own pending suggestion
+    // in Suggest Mode, the preview's text change fired onContentChange
+    // which misread the preview as a user draft → "1 pending change"
+    // lit up falsely.
+    const onChangeRegion = multiEditorSrc.slice(
+      multiEditorSrc.indexOf("onContentChange((content)"),
+    );
+    expect(onChangeRegion).toMatch(/if\s*\(\s*this\._previewingThreadId\s*\)/);
+    // The preview guard must appear before the hasPendingChanges check
+    // to actually suppress the count.
+    const guardIdx = onChangeRegion.indexOf('_previewingThreadId');
+    const pendingIdx = onChangeRegion.indexOf('hasPendingChanges');
+    expect(guardIdx).toBeGreaterThan(0);
+    expect(pendingIdx).toBeGreaterThan(guardIdx);
+  });
+
   test('accept handler ends preview before applying to syncText', () => {
     // Order matters: resetting editorDoc first ensures no preview residue
     // gets stacked with the incoming inbound replication of the accept op.

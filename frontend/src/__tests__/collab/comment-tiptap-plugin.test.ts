@@ -176,7 +176,7 @@ describe('comment-tiptap-plugin', () => {
     const rendered = all[0].type?.toDOM?.(editor.view, () => 0);
     expect(rendered).toBeTruthy();
     expect((rendered as HTMLElement).getAttribute('data-comment-thread-id')).toBe('t-insert');
-    expect((rendered as HTMLElement).textContent).toBe('‸');
+    expect((rendered as HTMLElement).textContent).toBe('✎');
     editor.destroy();
   });
 

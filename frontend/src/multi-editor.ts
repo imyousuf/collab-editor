@@ -1180,9 +1180,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // Subscribe to binding events
     this._binding.onContentChange((content) => {
       this._emitContentChange(content);
-      // Suggest-mode pending count: recompute on every editor change while
-      // the engine is active. The engine compares content against its
-      // enable-time snapshot.
+      // Suggest-mode pending count: recompute on every editor change
+      // while the engine is active. Skip while a suggestion preview is
+      // applied to editorDoc — the preview's content delta isn't a
+      // user-authored draft, so counting it would falsely light up
+      // "N pending changes" and block Suggest Mode's exit flow.
+      if (this._previewingThreadId) return;
       if (this._suggestEngine?.isEnabled()) {
         const serialized = this._binding?.getCurrentSerialized() ?? content;
         this._suggestPendingCount = this._suggestEngine.hasPendingChanges(serialized) ? 1 : 0;

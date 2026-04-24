@@ -90,14 +90,21 @@ class CaretMarkerWidget extends WidgetType {
       ? 'cm-comment-caret cm-comment-caret--active'
       : 'cm-comment-caret';
     el.setAttribute('data-comment-thread-id', this.threadId);
-    // Tiny visual — a colored pilcrow-ish tick showing where the
-    // insert-style suggestion is anchored.
-    el.textContent = '‸';
+    el.setAttribute('role', 'button');
+    el.setAttribute('aria-label', 'Open suggestion');
+    // Use a pencil glyph — universally rendered across fonts. The
+    // original "‸" caret is a combining diacritic in many fonts and
+    // shows as blank.
+    el.textContent = '✎';
     return el;
   }
   eq(other: CaretMarkerWidget): boolean {
     return this.threadId === other.threadId && this.active === other.active;
   }
+  // Widgets ignore events by default, but CodeMirror's domEventHandlers
+  // still fire because they listen on the EditorView's DOM. We just
+  // need the inline style to allow pointer events to reach the widget.
+  ignoreEvent(): boolean { return false; }
 }
 
 function buildDecorations(doc: any, state: CommentCmState): DecorationSet {
@@ -211,15 +218,22 @@ export const commentCmTheme = EditorView.baseTheme({
     borderBottom: '2px solid #558b2f',
   },
   '.cm-comment-caret': {
-    color: '#689f38',
-    fontWeight: 'bold',
+    color: '#558b2f',
+    backgroundColor: 'rgba(197, 225, 165, 0.55)',
+    padding: '0 3px',
+    margin: '0 1px',
+    borderRadius: '3px',
     cursor: 'pointer',
     display: 'inline-block',
-    margin: '0 1px',
+    fontSize: '0.9em',
+  },
+  '.cm-comment-caret:hover': {
+    backgroundColor: 'rgba(174, 213, 129, 0.85)',
   },
   '.cm-comment-caret--active': {
-    color: '#558b2f',
-    textShadow: '0 0 2px rgba(85, 139, 47, 0.5)',
+    color: '#33691e',
+    backgroundColor: 'rgba(174, 213, 129, 0.85)',
+    outline: '1px solid #558b2f',
   },
   '.cm-comment-gutter': {
     width: '22px',
