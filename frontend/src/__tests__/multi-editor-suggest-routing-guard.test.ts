@@ -58,6 +58,36 @@ describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () 
     );
   });
 
+  test('suggestion preview applies to editorText with outbound gate closed', () => {
+    // C9: when a reviewer activates a pending suggestion, the diff is
+    // applied to their *local* editorDoc (not syncDoc). The outbound
+    // gate must be closed so the preview never leaks to peers.
+    expect(multiEditorSrc).toMatch(/replicator\.outboundOpen\s*=\s*false/);
+    expect(multiEditorSrc).toMatch(/tryApplyTextSuggestion\s*\(\s*editorText\s*,/);
+  });
+
+  test('ending a preview resets editorDoc (no tombstone residue)', () => {
+    // _endSuggestionPreview calls resetEditorDoc() to wipe the preview
+    // ops rather than trying to undo them in place.
+    expect(multiEditorSrc).toMatch(
+      /_endSuggestionPreview\s*\(\s*\)\s*:[\s\S]{0,500}?resetEditorDoc\s*\(\s*\)/,
+    );
+  });
+
+  test('accept handler ends preview before applying to syncText', () => {
+    // Order matters: resetting editorDoc first ensures no preview residue
+    // gets stacked with the incoming inbound replication of the accept op.
+    const methodStart = multiEditorSrc.indexOf(
+      'private async _handleCommentSuggestionAccept',
+    );
+    expect(methodStart).toBeGreaterThan(0);
+    const acceptRegion = multiEditorSrc.slice(methodStart);
+    const setActiveIdx = acceptRegion.indexOf('_setActiveCommentThread(null)');
+    const tryApplyIdx = acceptRegion.indexOf('tryApplyTextSuggestion(');
+    expect(setActiveIdx).toBeGreaterThan(0);
+    expect(tryApplyIdx).toBeGreaterThan(setActiveIdx);
+  });
+
   test('discard path calls SuggestEngine.discard (not engine.clear + rebind)', () => {
     // clear() was the old API. The new API is discard() which handles
     // reset + gate reopen internally.

@@ -94,6 +94,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _suggestNoteModalOpen = false;
   @state() private _suggestNoteDraft = '';
   @state() private _activeCommentThread: CommentThread | null = null;
+  /**
+   * ID of the thread currently being *previewed* in the editor (the
+   * reviewer has activated a pending-suggestion thread and the diff
+   * has been applied to their local editorDoc). Preview is always
+   * paired with readonly-on + replicator.outboundOpen=false so nothing
+   * leaks to peers; ending the preview resets editorDoc back to syncDoc.
+   */
+  @state() private _previewingThreadId: string | null = null;
   @state() private _commentPanelPos: { x: number; y: number } | null = null;
   @state() private _commentCapabilities: CommentsCapabilities | null = null;
   @state() private _resolvedThreads: CommentThread[] = [];
@@ -837,6 +845,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // always been bound to editorText since the doc split.
     this._suggestEngine?.destroy();
     this._suggestEngine = null;
+    this._endSuggestionPreview();
     this._activeCommentThread = null;
     this._commentPanelPos = null;
     this._resolvedThreads = [];
@@ -1124,8 +1133,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         .getThreads()
         .find((t) => t.id === threadId);
       if (thread) {
-        this._activeCommentThread = thread;
-        this._commentCoordinator.setActiveThread(threadId);
+        this._setActiveCommentThread(thread);
         this._positionCommentPanelNear(threadId);
       }
     }) as EventListener;
@@ -1304,6 +1312,62 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   // --- Comments + Suggest Mode event handlers ---
 
+  /**
+   * Unified setter for the active comment thread. Handles the suggestion
+   * preview lifecycle — when the new thread has a pending suggestion,
+   * apply its diff to the local editorDoc (readonly, outbound gated);
+   * when switching away or to null, reset editorDoc so the editor
+   * restores the canonical syncDoc state.
+   */
+  private _setActiveCommentThread(thread: CommentThread | null): void {
+    const nextId = thread?.id ?? null;
+    if (this._previewingThreadId && this._previewingThreadId !== nextId) {
+      this._endSuggestionPreview();
+    }
+    this._activeCommentThread = thread;
+    this._commentCoordinator.setActiveThread(nextId);
+    if (
+      thread &&
+      thread.suggestion &&
+      thread.suggestion.status === 'pending' &&
+      !this._suggestActive &&
+      this._previewingThreadId !== thread.id
+    ) {
+      this._startSuggestionPreview(thread);
+    }
+  }
+
+  private _startSuggestionPreview(thread: CommentThread): void {
+    if (!this._commentEngine || !this._collabProvider || !this._binding) return;
+    const anchor = this._commentEngine.resolveAnchorById(thread.id);
+    if (!anchor) return;
+    // Gate the preview so it never leaks to peers, then apply the diff
+    // to editorText only. Editor goes readonly so the reviewer can read
+    // but not accidentally edit during preview.
+    this._collabProvider.replicator.outboundOpen = false;
+    const editorText = this._collabProvider.editorText;
+    tryApplyTextSuggestion(
+      editorText,
+      anchor,
+      thread.suggestion!.human_readable.after_text,
+    );
+    this._binding.setReadonly(true);
+    this._previewingThreadId = thread.id;
+  }
+
+  private _endSuggestionPreview(): void {
+    if (!this._previewingThreadId || !this._collabProvider) return;
+    // resetEditorDoc destroys the previewed editorDoc (tombstones and
+    // all) and reseeds a fresh one from syncDoc. The replicator's new
+    // outboundOpen defaults back to true.
+    this._collabProvider.resetEditorDoc();
+    // Restore writability. Mirror the top-level `readonly` attribute
+    // rather than blindly re-enabling editing — the document might
+    // have been readonly for unrelated reasons.
+    this._binding?.setReadonly(!!this.readonly);
+    this._previewingThreadId = null;
+  }
+
   private _handleCommentAdd(): void {
     if (!this._commentEngine || !this._binding || !this._collabProvider) return;
     // Selection → Y.Text offsets. Uses the shared pm-position-map so
@@ -1328,8 +1392,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       startRel,
       endRel,
     };
-    this._activeCommentThread = null;
-    this._commentCoordinator.setActiveThread(null);
+    this._setActiveCommentThread(null);
     this._positionCommentPanelAtSelection();
   }
 
@@ -1362,8 +1425,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._draftAnchor = null;
     const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
     if (thread) {
-      this._activeCommentThread = thread;
-      this._commentCoordinator.setActiveThread(threadId);
+      this._setActiveCommentThread(thread);
       requestAnimationFrame(() => this._positionCommentPanelNear(threadId));
     }
   }
@@ -1540,8 +1602,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleCommentPanelClose(): void {
-    this._activeCommentThread = null;
-    this._commentCoordinator.setActiveThread(null);
+    this._setActiveCommentThread(null);
   }
 
   private _handleCommentReply(e: CustomEvent): void {
@@ -1554,8 +1615,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // the user isn't left staring at the same thread with a Reopen
     // button. If they want to reopen, they click the anchor again.
     if (this._activeCommentThread?.id === e.detail.threadId) {
-      this._activeCommentThread = null;
-      this._commentCoordinator.setActiveThread(null);
+      this._setActiveCommentThread(null);
     }
   }
 
@@ -1566,8 +1626,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _handleCommentThreadDelete(e: CustomEvent): void {
     this._commentEngine?.deleteThread(e.detail.threadId);
     if (this._activeCommentThread?.id === e.detail.threadId) {
-      this._activeCommentThread = null;
-      this._commentCoordinator.setActiveThread(null);
+      this._setActiveCommentThread(null);
     }
   }
 
@@ -1576,6 +1635,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const threadId = e.detail.threadId;
     const thread = this._commentEngine.getThreads().find((t) => t.id === threadId);
     if (!thread?.suggestion) return;
+    // End any preview first. This resets editorDoc to syncDoc's current
+    // state (no preview residue) and reopens the outbound gate so the
+    // accept op we're about to apply on syncText will replicate back
+    // into the fresh editorDoc via the inbound listener.
+    this._setActiveCommentThread(null);
     try {
       // New-model path: apply a text-level diff to syncText. The thread's
       // anchor is resolved against the current Y.Text (surviving peer
@@ -1606,14 +1670,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       console.error('accept suggestion failed', err);
       this._commentEngine.decideSuggestion(threadId, 'not_applicable');
     }
-    this._activeCommentThread = null;
-    this._commentCoordinator.setActiveThread(null);
   }
 
   private _handleCommentSuggestionReject(e: CustomEvent): void {
     this._commentEngine?.decideSuggestion(e.detail.threadId, 'rejected');
-    this._activeCommentThread = null;
-    this._commentCoordinator.setActiveThread(null);
+    this._setActiveCommentThread(null);
   }
 
   private _handleCommentsListToggle(): void {
@@ -1631,8 +1692,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       .find((t) => t.id === e.detail.threadId);
     if (!thread) return;
     this._commentsListOpen = false;
-    this._activeCommentThread = thread;
-    this._commentCoordinator.setActiveThread(thread.id);
+    this._setActiveCommentThread(thread);
     this._positionCommentPanelNearStatusBar();
   }
 
