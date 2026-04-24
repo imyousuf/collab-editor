@@ -68,17 +68,11 @@ export interface ICollaborationProvider {
   /** Current connection status */
   readonly status: CollabStatus;
 
-  /** @deprecated Prefer `syncText`. Alias preserved during the syncDoc/editorDoc split. */
-  readonly sharedText: Y.Text;
-
   /** The shared Y.Map for metadata (lives on syncDoc — canonical shared state). */
   readonly meta: Y.Map<string>;
 
   /** Yjs awareness for cursor sharing (bound to syncDoc's transport). */
   readonly awareness: any;
-
-  /** @deprecated Prefer `syncDoc`. Alias preserved during the syncDoc/editorDoc split. */
-  readonly ydoc: Y.Doc;
 
   /** Canonical shared-truth doc. Bound to the websocket transport. All peers converge on this. */
   readonly syncDoc: Y.Doc;

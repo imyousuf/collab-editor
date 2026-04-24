@@ -51,11 +51,6 @@ export class CollaborationProvider implements ICollaborationProvider {
   get editorText(): Y.Text { return this._editorText; }
   get replicator(): DocReplicator { return this._replicator; }
 
-  /** @deprecated Use `syncDoc`. Retained for backward compatibility during the split. */
-  get ydoc(): Y.Doc { return this.syncDoc; }
-  /** @deprecated Use `syncText` or `editorText` depending on consumer. Defaults to `syncText`. */
-  get sharedText(): Y.Text { return this.syncText; }
-
   get status(): CollabStatus { return this._status; }
 
   get awareness() {

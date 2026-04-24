@@ -234,9 +234,9 @@ export class VersionCoordinator {
       this._binding.setReadonly(this._readonly);
       this._blameCoordinator?.disableVersionBlame();
 
-      // Restore live content from Y.Text
+      // Restore live content from the editor's Y.Text.
       if (this._collabProvider) {
-        this._binding.setContent(this._collabProvider.sharedText.toString());
+        this._binding.setContent(this._collabProvider.editorText.toString());
       }
     }
     this._selectedVersion = null;

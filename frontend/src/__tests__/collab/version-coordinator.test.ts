@@ -43,9 +43,12 @@ function createMockBinding() {
 }
 
 function createMockCollabProvider(doc: Y.Doc) {
+  const text = doc.getText('source');
   return {
-    sharedText: doc.getText('source'),
-    ydoc: doc,
+    syncText: text,
+    syncDoc: doc,
+    editorText: text,
+    editorDoc: doc,
     awareness: { clientID: 1, getStates: () => new Map() },
   };
 }

@@ -10,11 +10,11 @@ collaborationProviderContractTests(
 );
 
 describe('CollaborationProvider unit tests', () => {
-  test('sharedText is named "source"', () => {
+  test('syncText is named "source"', () => {
     const provider = new CollaborationProvider();
     // Verify the Y.Text is the one we expect
-    provider.sharedText.insert(0, 'test');
-    expect(provider.ydoc.getText('source').toString()).toBe('test');
+    provider.syncText.insert(0, 'test');
+    expect(provider.syncDoc.getText('source').toString()).toBe('test');
     provider.destroy();
   });
 

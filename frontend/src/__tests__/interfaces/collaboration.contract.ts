@@ -21,12 +21,12 @@ export function collaborationProviderContractTests(
       provider.destroy();
     });
 
-    test('sharedText is a Y.Text instance', () => {
+    test('syncText is a Y.Text instance', () => {
       const provider = createProvider();
-      expect(provider.sharedText).toBeDefined();
-      expect(typeof provider.sharedText.insert).toBe('function');
-      expect(typeof provider.sharedText.delete).toBe('function');
-      expect(typeof provider.sharedText.toString).toBe('function');
+      expect(provider.syncText).toBeDefined();
+      expect(typeof provider.syncText.insert).toBe('function');
+      expect(typeof provider.syncText.delete).toBe('function');
+      expect(typeof provider.syncText.toString).toBe('function');
       provider.destroy();
     });
 
@@ -38,9 +38,9 @@ export function collaborationProviderContractTests(
       provider.destroy();
     });
 
-    test('ydoc is defined', () => {
+    test('syncDoc is defined', () => {
       const provider = createProvider();
-      expect(provider.ydoc).toBeDefined();
+      expect(provider.syncDoc).toBeDefined();
       provider.destroy();
     });
 
@@ -56,13 +56,6 @@ export function collaborationProviderContractTests(
       const provider = createProvider();
       expect(provider.syncText).toBe(provider.syncDoc.getText('source'));
       expect(provider.editorText).toBe(provider.editorDoc.getText('source'));
-      provider.destroy();
-    });
-
-    test('ydoc alias points at syncDoc', () => {
-      const provider = createProvider();
-      expect(provider.ydoc).toBe(provider.syncDoc);
-      expect(provider.sharedText).toBe(provider.syncText);
       provider.destroy();
     });
 

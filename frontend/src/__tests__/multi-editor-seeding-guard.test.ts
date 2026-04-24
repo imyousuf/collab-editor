@@ -30,13 +30,14 @@ const multiEditorSrc = readFileSync(
 );
 
 describe('multi-editor seeding guard', () => {
-  test('does NOT call sharedText.insert(0, initialContent) on the client', () => {
+  test('does NOT seed initialContent into syncText or editorText on the client', () => {
     // Either form — the short method-chain or any variation — would
     // re-introduce the doubling bug.
     const forbidden = [
-      /sharedText\.insert\s*\(\s*0\s*,\s*config\.initialContent/,
-      /sharedText\.insert\s*\(\s*0\s*,\s*initial(Content)?\b/,
-      /provider\.sharedText\.insert\s*\(\s*0\s*,\s*initial/,
+      /syncText\.insert\s*\(\s*0\s*,\s*config\.initialContent/,
+      /syncText\.insert\s*\(\s*0\s*,\s*initial(Content)?\b/,
+      /editorText\.insert\s*\(\s*0\s*,\s*config\.initialContent/,
+      /editorText\.insert\s*\(\s*0\s*,\s*initial(Content)?\b/,
     ];
     for (const pattern of forbidden) {
       expect(multiEditorSrc).not.toMatch(pattern);
