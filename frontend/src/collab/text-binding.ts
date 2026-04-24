@@ -157,9 +157,17 @@ export class TextBinding {
       clearTimeout(this._syncTimer);
       this._syncTimer = null;
     }
-    const contentChanged = this._ytext.toString() !== newYText.toString();
+    // Compare against the editor's current serialized content instead of
+    // the old Y.Text's string — on the editorDoc-reset path the old
+    // Y.Text's host doc is already destroyed, and toString() would read
+    // stale/undefined state. Editor-content-vs-new-Y.Text also covers
+    // the case we care about ("do I need to re-apply?").
+    let currentContent = '';
+    try { currentContent = this._getSerializedContent(); } catch { /* fall through */ }
+    const newContent = newYText.toString();
+    const contentChanged = currentContent !== newContent;
     if (this._ytextObserver) {
-      this._ytext.unobserve(this._ytextObserver);
+      try { this._ytext.unobserve(this._ytextObserver); } catch { /* old doc destroyed */ }
     }
     this._ytext = newYText;
     if (this._ytextObserver) {

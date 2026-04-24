@@ -155,9 +155,33 @@ export class SourceEditorInstance {
     if (!this._awareness) return;
     if (newText === this._ytext) return;
     this._ytext = newText;
+
+    // Step 1: detach yCollab. Any dispatches between here and step 3
+    // produce no CRDT side-effects (nothing is bound to send updates).
     this._view.dispatch({
       effects: this._collabCompartment.reconfigure([]),
     });
+
+    // Step 2: replace the CodeMirror doc to match the new Y.Text.
+    //
+    // Without this, yCollab's ySync — which only observes *future*
+    // changes — leaves the editor showing whatever was in CodeMirror
+    // before the rebind. In the syncDoc/editorDoc split, that manifests
+    // as a Suggest-Mode submit reverting WYSIWYG correctly (TextBinding
+    // is diff-based) but leaving the source editor stuck on the
+    // discarded drafts. Doing this while yCollab is detached keeps the
+    // replace local — no ops flow to the new Y.Text.
+    const currentDoc = this._view.state.doc.toString();
+    const newContent = newText.toString();
+    if (currentDoc !== newContent) {
+      this._view.dispatch({
+        changes: { from: 0, to: this._view.state.doc.length, insert: newContent },
+      });
+    }
+
+    // Step 3: rebind. yCollab reconstructs around newText; since the
+    // editor doc now matches newText, the initial observation is a
+    // no-op.
     this._view.dispatch({
       effects: this._collabCompartment.reconfigure(yCollab(newText, this._awareness)),
     });

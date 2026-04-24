@@ -28,6 +28,7 @@ import {
   type DecorationSet,
   EditorView,
   GutterMarker,
+  WidgetType,
   gutter,
 } from '@codemirror/view';
 import type {
@@ -79,37 +80,70 @@ export const commentCmDecorationField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
+class CaretMarkerWidget extends WidgetType {
+  constructor(private readonly threadId: string, private readonly active: boolean) {
+    super();
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('span');
+    el.className = this.active
+      ? 'cm-comment-caret cm-comment-caret--active'
+      : 'cm-comment-caret';
+    el.setAttribute('data-comment-thread-id', this.threadId);
+    // Tiny visual — a colored pilcrow-ish tick showing where the
+    // insert-style suggestion is anchored.
+    el.textContent = '‸';
+    return el;
+  }
+  eq(other: CaretMarkerWidget): boolean {
+    return this.threadId === other.threadId && this.active === other.active;
+  }
+}
+
 function buildDecorations(doc: any, state: CommentCmState): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const collected: Array<{ from: number; to: number; dec: Decoration }> = [];
+  const collected: Array<{ from: number; to: number; dec: Decoration; sort: number }> = [];
 
   for (const thread of state.threads) {
     if (thread.status === 'resolved') continue;
-    // Render the anchor highlight for both plain comments and suggestion
-    // threads. The distinct class name lets the theme tint suggestions
-    // differently if desired; either way, source mode stays clean —
-    // no inline widgets, no strikethrough text.
     const from = Math.min(thread.anchor.start, doc.length);
     const to = Math.min(thread.anchor.end, doc.length);
-    if (from >= to) continue;
     const isActive = thread.id === state.activeThreadId;
     const hasSuggestion = !!(thread.suggestion && thread.suggestion.status === 'pending');
-    const classes = [
-      'cm-comment-anchor',
-      hasSuggestion ? 'cm-comment-anchor--suggestion' : '',
-      isActive ? 'cm-comment-anchor--active' : '',
-    ].filter(Boolean).join(' ');
-    collected.push({
-      from,
-      to,
-      dec: Decoration.mark({
-        class: classes,
-        attributes: { 'data-comment-thread-id': thread.id },
-      }),
-    });
+
+    if (from < to) {
+      // Range anchor: highlight the covered span.
+      const classes = [
+        'cm-comment-anchor',
+        hasSuggestion ? 'cm-comment-anchor--suggestion' : '',
+        isActive ? 'cm-comment-anchor--active' : '',
+      ].filter(Boolean).join(' ');
+      collected.push({
+        from,
+        to,
+        sort: 0,
+        dec: Decoration.mark({
+          class: classes,
+          attributes: { 'data-comment-thread-id': thread.id },
+        }),
+      });
+    } else {
+      // Zero-width anchor (insert-only suggestion): a caret widget at
+      // the insert point so the panel has something to position near
+      // and the user has a visible cue.
+      collected.push({
+        from,
+        to: from,
+        sort: 1,
+        dec: Decoration.widget({
+          widget: new CaretMarkerWidget(thread.id, isActive),
+          side: 1,
+        }),
+      });
+    }
   }
 
-  collected.sort((a, b) => a.from - b.from || a.to - b.to);
+  collected.sort((a, b) => a.from - b.from || a.to - b.to || a.sort - b.sort);
   for (const { from, to, dec } of collected) {
     builder.add(from, to, dec);
   }
@@ -175,6 +209,17 @@ export const commentCmTheme = EditorView.baseTheme({
   '.cm-comment-anchor--suggestion.cm-comment-anchor--active': {
     backgroundColor: 'rgba(174, 213, 129, 0.55)',
     borderBottom: '2px solid #558b2f',
+  },
+  '.cm-comment-caret': {
+    color: '#689f38',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    display: 'inline-block',
+    margin: '0 1px',
+  },
+  '.cm-comment-caret--active': {
+    color: '#558b2f',
+    textShadow: '0 0 2px rgba(85, 139, 47, 0.5)',
   },
   '.cm-comment-gutter': {
     width: '22px',

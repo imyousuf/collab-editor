@@ -126,35 +126,65 @@ function buildDecorations(doc: any, state: CommentPluginState): DecorationSet {
   }
   const decorations: Decoration[] = [];
 
-  // Anchor-range highlight for open threads. Suggestions get a distinct
-  // green tint; plain comments get the original yellow. Either way,
-  // WYSIWYG mode stays clean — no inline widgets, no strikethrough.
   for (const thread of state.threads) {
     if (thread.status === 'resolved') continue;
     const snapped = snapRange(thread.anchor.start, thread.anchor.end, posMap);
-    if (snapped.from === undefined || snapped.to === undefined) continue;
-    if (snapped.from >= snapped.to) continue;
+    if (snapped.from === undefined) continue;
     const isActive = thread.id === state.activeThreadId;
     const hasSuggestion = !!(thread.suggestion && thread.suggestion.status === 'pending');
-    const classes = [
-      'me-comment-anchor',
-      hasSuggestion ? 'me-comment-anchor--suggestion' : '',
-      isActive ? 'me-comment-anchor--active' : '',
-    ].filter(Boolean).join(' ');
-    const style = hasSuggestion
-      ? (isActive
-        ? 'background-color: rgba(174, 213, 129, 0.55); border-bottom: 2px solid #558b2f;'
-        : 'background-color: rgba(197, 225, 165, 0.45); border-bottom: 2px solid #689f38;')
-      : (isActive
-        ? 'background-color: rgba(255, 213, 79, 0.55); border-bottom: 2px solid #f9a825;'
-        : 'background-color: rgba(255, 236, 179, 0.45); border-bottom: 2px solid #ffca28;');
-    decorations.push(
-      Decoration.inline(snapped.from, snapped.to, {
-        class: classes,
-        'data-comment-thread-id': thread.id,
-        style,
-      }),
-    );
+
+    if (snapped.to !== undefined && snapped.to > snapped.from) {
+      // Range anchor: tint the range. Suggestions get a distinct green
+      // tint; plain comments get the original yellow.
+      const classes = [
+        'me-comment-anchor',
+        hasSuggestion ? 'me-comment-anchor--suggestion' : '',
+        isActive ? 'me-comment-anchor--active' : '',
+      ].filter(Boolean).join(' ');
+      const style = hasSuggestion
+        ? (isActive
+          ? 'background-color: rgba(174, 213, 129, 0.55); border-bottom: 2px solid #558b2f;'
+          : 'background-color: rgba(197, 225, 165, 0.45); border-bottom: 2px solid #689f38;')
+        : (isActive
+          ? 'background-color: rgba(255, 213, 79, 0.55); border-bottom: 2px solid #f9a825;'
+          : 'background-color: rgba(255, 236, 179, 0.45); border-bottom: 2px solid #ffca28;');
+      decorations.push(
+        Decoration.inline(snapped.from, snapped.to, {
+          class: classes,
+          'data-comment-thread-id': thread.id,
+          style,
+        }),
+      );
+    } else {
+      // Zero-width anchor (insert-only suggestion): render a small caret
+      // widget at the insert point so author and collaborators can see
+      // where the suggestion lives without the old inline "after" widget
+      // dumping proposed text into the document.
+      const widgetAt = snapped.from;
+      decorations.push(
+        Decoration.widget(widgetAt, () => {
+          const el = document.createElement('span');
+          el.className = hasSuggestion
+            ? (isActive
+              ? 'me-comment-caret me-comment-caret--suggestion me-comment-caret--active'
+              : 'me-comment-caret me-comment-caret--suggestion')
+            : (isActive
+              ? 'me-comment-caret me-comment-caret--active'
+              : 'me-comment-caret');
+          el.setAttribute('data-comment-thread-id', thread.id);
+          el.textContent = '‸';
+          const color = hasSuggestion ? '#689f38' : '#f9a825';
+          el.style.cssText = `
+            color: ${color};
+            font-weight: bold;
+            cursor: pointer;
+            display: inline-block;
+            margin: 0 1px;
+          `;
+          return el;
+        }, { side: 1 }),
+      );
+    }
   }
 
   return DecorationSet.create(doc, decorations);

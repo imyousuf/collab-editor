@@ -232,7 +232,7 @@ export class CommentPanel extends LitElement {
       <div class="panel">
         <div class="header">
           <span class="header-quote" title="${t.anchor.quoted_text}">
-            "${t.anchor.quoted_text || '(orphaned)'}"
+            ${quoteLabel(t)}
           </span>
           <div class="actions">
             ${isResolved
@@ -509,6 +509,26 @@ function formatRelative(iso: string): string {
  * styling minimal to stay lightweight; the full markdown pipeline runs
  * elsewhere when comments are piped through it.
  */
+/**
+ * Best-effort label for the thread's anchor header. Falls back in this order:
+ *   1. The quoted source text (present for range comments).
+ *   2. For insert-only suggestions: the proposed inserted text, prefixed
+ *      with a "+" so the user can see what's being added.
+ *   3. The literal "(orphaned)" when nothing is recoverable.
+ */
+function quoteLabel(t: CommentThread): string {
+  if (t.anchor.quoted_text) return `"${t.anchor.quoted_text}"`;
+  const s = t.suggestion;
+  if (s && s.human_readable) {
+    const after = (s.human_readable.after_text ?? '').trim();
+    if (after) {
+      const snippet = after.length > 48 ? after.slice(0, 47) + '…' : after;
+      return `+ "${snippet}"`;
+    }
+  }
+  return '(orphaned)';
+}
+
 function renderCommentContent(content: string): TemplateResult {
   const pieces: (string | TemplateResult)[] = [];
   const re = /@\[([^\]]+)\]\(([^)]+)\)/g;

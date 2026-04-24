@@ -130,10 +130,10 @@ export class CommentListPanel extends LitElement {
       'Unknown';
     const when = t.resolved_at ?? first?.created_at ?? t.suggestion?.decided_at ?? '';
     const replyCount = Math.max(0, t.comments.length - 1);
-    const quoted = t.anchor.quoted_text || '(orphaned)';
+    const quoted = quoteLabel(t);
     return html`
       <div class="item" @click=${() => this._onSelect(t.id)}>
-        <div class="quote" title="${quoted}">"${quoted}"</div>
+        <div class="quote" title="${t.anchor.quoted_text}">${quoted}</div>
         <div class="meta">
           <span>${author}${replyCount > 0 ? ` · ${replyCount} repl${replyCount === 1 ? 'y' : 'ies'}` : ''}</span>
           <span>${formatRelative(when)}</span>
@@ -156,6 +156,20 @@ export class CommentListPanel extends LitElement {
       composed: true,
     }));
   }
+}
+
+/** Label for a thread's anchor. Mirrors comment-panel.quoteLabel. */
+function quoteLabel(t: CommentThread): string {
+  if (t.anchor.quoted_text) return `"${t.anchor.quoted_text}"`;
+  const s = t.suggestion;
+  if (s && s.human_readable) {
+    const after = (s.human_readable.after_text ?? '').trim();
+    if (after) {
+      const snippet = after.length > 48 ? after.slice(0, 47) + '…' : after;
+      return `+ "${snippet}"`;
+    }
+  }
+  return '(orphaned)';
 }
 
 function formatRelative(iso: string): string {

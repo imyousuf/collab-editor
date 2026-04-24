@@ -1347,15 +1347,18 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     }
     this._activeCommentThread = thread;
     this._commentCoordinator.setActiveThread(nextId);
-    if (
-      thread &&
-      thread.suggestion &&
-      thread.suggestion.status === 'pending' &&
-      !this._suggestActive &&
-      this._previewingThreadId !== thread.id
-    ) {
-      this._startSuggestionPreview(thread);
+    if (!thread || !thread.suggestion || thread.suggestion.status !== 'pending') return;
+    if (this._previewingThreadId === thread.id) return;
+    // Preview is safe when the reviewer (a) is not in Suggest Mode at
+    // all, or (b) is in Suggest Mode but hasn't drafted anything yet —
+    // resetting editorDoc during the preview wouldn't clobber local
+    // work. If they're mid-draft, skip the in-place preview to avoid
+    // wiping their edits; the comment panel still shows the diff.
+    if (this._suggestActive) {
+      const current = this._binding?.getCurrentSerialized() ?? '';
+      if (this._suggestEngine?.hasPendingChanges(current)) return;
     }
+    this._startSuggestionPreview(thread);
   }
 
   private _startSuggestionPreview(thread: CommentThread): void {
@@ -1382,6 +1385,15 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // all) and reseeds a fresh one from syncDoc. The replicator's new
     // outboundOpen defaults back to true.
     this._collabProvider.resetEditorDoc();
+    // If Suggest Mode is still active, restore its gate + textAtEnable.
+    // The fresh editorDoc matches syncDoc, so that's the correct
+    // baseline for a continuing suggestion session.
+    if (this._suggestActive && this._suggestEngine && this._binding) {
+      this._collabProvider.replicator.outboundOpen = false;
+      const baseline = this._binding.getCurrentSerialized();
+      this._suggestEngine.disable();
+      this._suggestEngine.enable(baseline);
+    }
     // Restore writability. Mirror the top-level `readonly` attribute
     // rather than blindly re-enabling editing — the document might
     // have been readonly for unrelated reasons.
