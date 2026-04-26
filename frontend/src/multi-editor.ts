@@ -560,7 +560,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     return html`
       ${toolbarOnTop && toolbarVisible ? this._renderToolbarSlot() : nothing}
-      ${this._activeCommentThread?.suggestion ? this._renderSuggestionDiffBar() : nothing}
+      ${this._activeCommentThread?.suggestion && !this._previewingThreadId
+        ? this._renderSuggestionDiffBar()
+        : nothing}
       <div class="editor-wrapper" style="position: relative;">
         <div id="editor-root" class="editor-root" part="editor-area"></div>
         ${statusBarVisible ? this._renderStatusBarSlot() : nothing}
@@ -1368,6 +1370,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!this._commentEngine || !this._collabProvider || !this._binding) return;
     const anchor = this._commentEngine.resolveAnchorById(thread.id);
     if (!anchor) return;
+    // Mute decorations BEFORE we apply the preview. Caret + anchor
+    // positions are computed against syncText; once editorText
+    // diverges, they'd drift visually. Ending the preview unmutes.
+    this._commentCoordinator.setDecorationsMuted(true);
     // Gate the preview so it never leaks to peers, then apply the diff
     // to editorText only. Editor goes readonly so the reviewer can read
     // but not accidentally edit during preview.
@@ -1402,6 +1408,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // have been readonly for unrelated reasons.
     this._binding?.setReadonly(!!this.readonly);
     this._previewingThreadId = null;
+    // Carets / anchor highlights come back now that the rendered PM
+    // doc matches syncText again (editorDoc was reseeded).
+    this._commentCoordinator.setDecorationsMuted(false);
   }
 
   private _handleCommentAdd(): void {

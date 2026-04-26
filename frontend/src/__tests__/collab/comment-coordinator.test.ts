@@ -107,6 +107,43 @@ describe('CommentCoordinator', () => {
     expect(update?.[3]).toBe(id);
   });
 
+  test('setDecorationsMuted=true makes the next push send empty arrays', () => {
+    const { coord, engine, binding } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    engine.createThread(anchor, startRel, endRel, 'hi', null);
+
+    binding._calls.length = 0;
+    coord.setDecorationsMuted(true);
+
+    const update = binding._calls.find((c) => c[0] === 'update');
+    expect(update).toBeDefined();
+    expect(update![1]).toBe(0); // threads
+    expect(update![2]).toBe(0); // overlays
+    expect(update![3]).toBeNull(); // activeThreadId
+  });
+
+  test('setDecorationsMuted=false restores thread decorations', () => {
+    const { coord, engine, binding } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    engine.createThread(anchor, startRel, endRel, 'hi', null);
+
+    coord.setDecorationsMuted(true);
+    binding._calls.length = 0;
+    coord.setDecorationsMuted(false);
+
+    const update = binding._calls.find((c) => c[0] === 'update');
+    expect(update).toBeDefined();
+    expect(update![1]).toBe(1); // thread is back
+  });
+
+  test('setDecorationsMuted is idempotent', () => {
+    const { coord, binding } = setup();
+    coord.setDecorationsMuted(true);
+    binding._calls.length = 0;
+    coord.setDecorationsMuted(true); // same value
+    expect(binding._calls.length).toBe(0);
+  });
+
   test('detach disables binding and clears state', () => {
     const { coord, binding } = setup();
     coord.detach();

@@ -105,6 +105,29 @@ describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () 
     expect(tryApplyIdx).toBeGreaterThan(setActiveIdx);
   });
 
+  test('preview start mutes decorations, end unmutes them', () => {
+    // Carets and anchor highlights are computed against syncText; once
+    // editorText diverges (preview), they drift. Muting the coordinator
+    // hides them for the duration of the preview.
+    const startRegion = multiEditorSrc.slice(
+      multiEditorSrc.indexOf('_startSuggestionPreview'),
+    );
+    expect(startRegion).toMatch(/setDecorationsMuted\s*\(\s*true\s*\)/);
+
+    const endRegion = multiEditorSrc.slice(
+      multiEditorSrc.indexOf('_endSuggestionPreview'),
+    );
+    expect(endRegion).toMatch(/setDecorationsMuted\s*\(\s*false\s*\)/);
+  });
+
+  test('top suggestion diff bar is hidden during preview', () => {
+    // The editor itself shows the previewed change in-place, so the
+    // top diff bar duplicating that information is confusing.
+    expect(multiEditorSrc).toMatch(
+      /_activeCommentThread\?\.suggestion\s*&&\s*!this\._previewingThreadId/,
+    );
+  });
+
   test('discard path calls SuggestEngine.discard (not engine.clear + rebind)', () => {
     // clear() was the old API. The new API is discard() which handles
     // reset + gate reopen internally.

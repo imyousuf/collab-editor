@@ -45,6 +45,14 @@ function paletteColor(userId: string): string {
 export class CommentCoordinator {
   private _engine: CommentEngine | null = null;
   private _binding: (IEditorBinding & ICommentCapability) | null = null;
+  /**
+   * When set, _pushDecorations sends an empty thread+overlay payload to
+   * the binding. Used during reviewer-side suggestion preview to hide
+   * carets and anchor highlights — their positions would otherwise
+   * drift, since the PM doc shows the previewed editorText while the
+   * comment plugin's position map is built from syncText.
+   */
+  private _decorationsMuted = false;
   private _ydoc: Y.Doc | null = null;
   private _awareness: Awareness | null = null;
   private _config: CommentCoordinatorConfig = {};
@@ -192,6 +200,11 @@ export class CommentCoordinator {
 
   private _pushDecorations(): void {
     if (!this._engine || !this._binding || !this._commentsActive) return;
+    const ytext = this._ydoc?.getText('source');
+    if (this._decorationsMuted) {
+      this._binding.updateComments([], [], null, null, ytext);
+      return;
+    }
     const threads = this._engine.getThreads();
     const overlays = this._engine.getSuggestionOverlays(
       this._config.userColor ?? paletteColor,
@@ -200,7 +213,6 @@ export class CommentCoordinator {
     // against the true Markdown/HTML source. Without this the plugin
     // falls back to serializing the PM doc, which strips the syntax
     // chars and makes stored Y.Text offsets land on wrong PM positions.
-    const ytext = this._ydoc?.getText('source');
     this._binding.updateComments(
       threads,
       overlays,
@@ -208,6 +220,20 @@ export class CommentCoordinator {
       this._pendingOverlay,
       ytext,
     );
+  }
+
+  /**
+   * Mute (or un-mute) thread/overlay decorations. While muted, the
+   * binding sees no caret or anchor highlights — used by the
+   * reviewer-side preview flow so position drift between the rendered
+   * PM doc (editorText with preview applied) and the comment plugin's
+   * position map (built from syncText) doesn't manifest as carets
+   * jumping around.
+   */
+  setDecorationsMuted(muted: boolean): void {
+    if (this._decorationsMuted === muted) return;
+    this._decorationsMuted = muted;
+    this._pushDecorations();
   }
 
   // Suggest Mode toggling is owned here but the SuggestEngine itself is
