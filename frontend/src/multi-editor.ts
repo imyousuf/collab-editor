@@ -1363,6 +1363,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       const current = this._binding?.getCurrentSerialized() ?? '';
       if (this._suggestEngine?.hasPendingChanges(current)) return;
     }
+    // Position the comment panel relative to the caret/anchor BEFORE
+    // muting decorations. Once muted, the DOM anchor is gone and the
+    // measurement falls back to a top-left default that overlaps the
+    // document title.
+    this._positionCommentPanelNear(thread.id);
     this._startSuggestionPreview(thread);
   }
 

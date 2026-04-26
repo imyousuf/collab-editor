@@ -105,6 +105,21 @@ describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () 
     expect(tryApplyIdx).toBeGreaterThan(setActiveIdx);
   });
 
+  test('panel position is captured BEFORE the preview mutes carets', () => {
+    // Regression: muting decorations removed the DOM anchor that
+    // _positionCommentPanelNear measures. The panel then fell back to
+    // the top-left default and covered the document title.
+    const setActiveRegion = multiEditorSrc.slice(
+      multiEditorSrc.indexOf('_setActiveCommentThread('),
+    );
+    const positionIdx = setActiveRegion.indexOf(
+      '_positionCommentPanelNear(thread.id)',
+    );
+    const startPreviewIdx = setActiveRegion.indexOf('_startSuggestionPreview(thread)');
+    expect(positionIdx).toBeGreaterThan(0);
+    expect(startPreviewIdx).toBeGreaterThan(positionIdx);
+  });
+
   test('preview start mutes decorations, end unmutes them', () => {
     // Carets and anchor highlights are computed against syncText; once
     // editorText diverges (preview), they drift. Muting the coordinator
