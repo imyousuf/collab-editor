@@ -19,6 +19,7 @@
  */
 
 import * as Y from 'yjs';
+import { dlog } from './debug-log.js';
 import type {
   Comment,
   CommentAnchor,
@@ -601,6 +602,12 @@ export class CommentEngine {
     };
     this._lastPollAt = body.server_time ?? new Date().toISOString();
     const changes = body.changes ?? [];
+    if (changes.length > 0) {
+      dlog('comments-poll', 'pollOnce — applying changes', {
+        count: changes.length,
+        actions: changes.map((c) => `${c.action}:${c.thread_id}`),
+      });
+    }
     for (const change of changes) {
       await this._reconcileChange(change);
     }

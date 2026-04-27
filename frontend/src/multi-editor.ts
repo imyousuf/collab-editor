@@ -47,6 +47,7 @@ import { CommentCoordinator } from './collab/comment-coordinator.js';
 import { CommentEngine } from './collab/comment-engine.js';
 import { SuggestEngine } from './collab/suggest-engine.js';
 import { computeLineDiff } from './collab/diff-engine.js';
+import { dlog, snapText } from './collab/debug-log.js';
 import type { VersionListEntry, VersionEntry, DiffLine } from './collab/version-manager.js';
 import type {
   CommentThread,
@@ -1181,6 +1182,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     // Subscribe to binding events
     this._binding.onContentChange((content) => {
+      dlog('content-change', 'binding emitted', {
+        content: snapText(content),
+        previewing: this._previewingThreadId,
+        suggestActive: this._suggestActive,
+        editorText: snapText(this._collabProvider?.editorText.toString() ?? ''),
+        syncText: snapText(this._collabProvider?.syncText.toString() ?? ''),
+      });
       this._emitContentChange(content);
       // Suggest-mode pending count: recompute on every editor change
       // while the engine is active. Skip while a suggestion preview is
@@ -1374,7 +1382,17 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   private _startSuggestionPreview(thread: CommentThread): void {
     if (!this._commentEngine || !this._collabProvider || !this._binding) return;
     const anchor = this._commentEngine.resolveAnchorById(thread.id);
-    if (!anchor) return;
+    if (!anchor) {
+      dlog('preview', 'startSuggestionPreview ABORTED (no anchor)', { threadId: thread.id });
+      return;
+    }
+    dlog('preview', 'startSuggestionPreview', {
+      threadId: thread.id,
+      anchor,
+      afterText: thread.suggestion?.human_readable.after_text,
+      sync: snapText(this._collabProvider.syncText.toString()),
+      editor: snapText(this._collabProvider.editorText.toString()),
+    });
     // Mute decorations BEFORE we apply the preview. Caret + anchor
     // positions are computed against syncText; once editorText
     // diverges, they'd drift visually. Ending the preview unmutes.
@@ -1391,10 +1409,20 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     );
     this._binding.setReadonly(true);
     this._previewingThreadId = thread.id;
+    dlog('preview', 'startSuggestionPreview DONE', {
+      sync: snapText(this._collabProvider.syncText.toString()),
+      editor: snapText(this._collabProvider.editorText.toString()),
+    });
   }
 
   private _endSuggestionPreview(): void {
     if (!this._previewingThreadId || !this._collabProvider) return;
+    dlog('preview', 'endSuggestionPreview', {
+      threadId: this._previewingThreadId,
+      sync: snapText(this._collabProvider.syncText.toString()),
+      editor: snapText(this._collabProvider.editorText.toString()),
+      suggestActive: this._suggestActive,
+    });
     // resetEditorDoc destroys the previewed editorDoc (tombstones and
     // all) and reseeds a fresh one from syncDoc. The replicator's new
     // outboundOpen defaults back to true.

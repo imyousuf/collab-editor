@@ -70,7 +70,7 @@ describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () 
     // _endSuggestionPreview calls resetEditorDoc() to wipe the preview
     // ops rather than trying to undo them in place.
     expect(multiEditorSrc).toMatch(
-      /_endSuggestionPreview\s*\(\s*\)\s*:[\s\S]{0,500}?resetEditorDoc\s*\(\s*\)/,
+      /_endSuggestionPreview\s*\(\s*\)\s*:[\s\S]{0,1000}?resetEditorDoc\s*\(\s*\)/,
     );
   });
 

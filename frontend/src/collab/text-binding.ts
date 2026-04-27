@@ -15,6 +15,7 @@
 import type { Editor } from '@tiptap/core';
 import * as Y from 'yjs';
 import type { IContentHandler } from '../interfaces/content-handler.js';
+import { dlog, snapText } from './debug-log.js';
 
 export class TextBinding {
   private _editor: Editor;
@@ -68,7 +69,14 @@ export class TextBinding {
       // Skip when paused (source mode active — yCollab handles sync).
       if (this._paused) return;
       // Skip events triggered by our own Y.Text→Tiptap application.
-      if (this._applyingFromYText) return;
+      if (this._applyingFromYText) {
+        dlog('text-binding', 'editor update SKIPPED (applyingFromYText)', {});
+        return;
+      }
+      dlog('text-binding', 'editor update — debouncing write-back', {
+        editor: snapText(this._getSerializedContent()),
+        ytext: snapText(this._ytext.toString()),
+      });
 
       if (this._syncTimer) clearTimeout(this._syncTimer);
       this._syncTimer = setTimeout(() => {
@@ -83,10 +91,20 @@ export class TextBinding {
     this._ytextPendingApply = false;
     this._ytextObserver = (event) => {
       // Skip our own writes
-      if (event.transaction.origin === this._origin) return;
+      if (event.transaction.origin === this._origin) {
+        dlog('text-binding', 'ytext observer SKIPPED (own origin)', {});
+        return;
+      }
       // When paused, skip Y.Text→Tiptap sync entirely.
       // The hidden Tiptap will get a single sync when setPaused(false) is called.
-      if (this._paused) return;
+      if (this._paused) {
+        dlog('text-binding', 'ytext observer SKIPPED (paused)', {});
+        return;
+      }
+      dlog('text-binding', 'ytext changed — scheduling apply to editor', {
+        origin: String(event.transaction.origin?.toString?.() ?? event.transaction.origin),
+        ytext: snapText(this._ytext.toString()),
+      });
       if (!this._ytextPendingApply) {
         this._ytextPendingApply = true;
         queueMicrotask(() => {
@@ -189,18 +207,40 @@ export class TextBinding {
 
     // Skip if content matches what was last applied from Y.Text.
     // This prevents the echo: Y.Text → Tiptap → (normalized) → Y.Text
-    if (serialized === current) return;
-    if (serialized === this._lastAppliedFromYText) return;
+    if (serialized === current) {
+      dlog('text-binding', 'editor→ytext SKIPPED (matches ytext)', {});
+      return;
+    }
+    if (serialized === this._lastAppliedFromYText) {
+      dlog('text-binding', 'editor→ytext SKIPPED (matches lastApplied)', {
+        lastApplied: snapText(this._lastAppliedFromYText),
+      });
+      return;
+    }
+    dlog('text-binding', 'editor→ytext WRITING DIFF', {
+      ytextBefore: snapText(current),
+      editorSerialized: snapText(serialized),
+      lastAppliedFromYText: snapText(this._lastAppliedFromYText),
+    });
 
     // Only write if content actually differs from Y.Text
     this._ytext.doc?.transact(() => {
       applyStringDiff(this._ytext, current, serialized);
     }, this._origin);
+    dlog('text-binding', 'editor→ytext done', {
+      ytextAfter: snapText(this._ytext.toString()),
+    });
   }
 
   private _applyYTextToEditor(): void {
     const text = this._ytext.toString();
     if (!text && this._ytext.length === 0) return;
+
+    dlog('text-binding', 'ytext→editor START', {
+      ytext: snapText(text),
+      editorBefore: snapText(this._getSerializedContent()),
+      pendingTimer: this._syncTimer !== null,
+    });
 
     // Cancel any pending Tiptap → Y.Text write-back before applying remote content.
     // Without this, the old debounce could fire after setContent and write Tiptap's
@@ -221,6 +261,9 @@ export class TextBinding {
     // This is a secondary echo prevention: if a debounce somehow starts,
     // _applyEditorToYText() will see the match and skip the write.
     this._lastAppliedFromYText = this._getSerializedContent();
+    dlog('text-binding', 'ytext→editor DONE', {
+      lastApplied: snapText(this._lastAppliedFromYText),
+    });
   }
 
   private _applyContentToEditor(text: string): void {

@@ -26,6 +26,7 @@ import { yCollab } from 'y-codemirror.next';
 import * as Y from 'yjs';
 import type { CollaborationContext } from '../interfaces/editor-binding.js';
 import { cssVarTheme } from './_cm-theme.js';
+import { dlog, snapText } from '../collab/debug-log.js';
 
 export interface SourceEditorOptions {
   language: string;
@@ -97,6 +98,19 @@ export class SourceEditorInstance {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const content = update.state.doc.toString();
+            // Identify the user-action signature on each transaction so
+            // we can pin down whether undo/redo is responsible for the
+            // content vanishing.
+            const userEvents = update.transactions
+              .map((tr) => (tr.annotation as any)?.value ?? tr.isUserEvent?.('') ?? null)
+              .filter(Boolean);
+            dlog('cm-update', 'doc changed', {
+              ytextLength: this._ytext?.length ?? 0,
+              cmDoc: snapText(content),
+              ytextContent: snapText(this._ytext?.toString() ?? ''),
+              userEvents,
+              changesCount: update.transactions.length,
+            });
             this._updateCallbacks.forEach(cb => cb(content));
           }
         }),
@@ -154,6 +168,11 @@ export class SourceEditorInstance {
   rebindSharedText(newText: Y.Text): void {
     if (!this._awareness) return;
     if (newText === this._ytext) return;
+    dlog('source-editor', 'rebindSharedText', {
+      cmDocBefore: snapText(this._view.state.doc.toString()),
+      newYTextContent: snapText(newText.toString()),
+      sameContent: this._view.state.doc.toString() === newText.toString(),
+    });
     this._ytext = newText;
 
     // Step 1: detach yCollab. Any dispatches between here and step 3

@@ -160,6 +160,13 @@ export class VersionManager {
     this._snapshotInFlight = true;
     try {
       const content = this._ydoc.getText('source').toString();
+      // Lazy require to avoid a cyclic-import worry; debug-log is leaf.
+      const { dlog, snapText } = await import('./debug-log.js');
+      dlog('version-mgr', 'AUTO-SNAPSHOT firing — uses _ydoc content', {
+        ydocIsEditor: 'unknown — version-coordinator wires editorDoc here',
+        content: snapText(content),
+        contentLength: content.length,
+      });
       const resp = await this._fetch('POST', '/documents/versions', {
         content,
         type: 'auto',

@@ -13,6 +13,7 @@
  * symbol. This is the standard Yjs pattern.
  */
 import * as Y from 'yjs';
+import { dlog, snapText } from './debug-log.js';
 
 export class DocReplicator {
   readonly syncDoc: Y.Doc;
@@ -36,15 +37,45 @@ export class DocReplicator {
     this._onSyncUpdate = (update, origin) => {
       if (this._destroyed) return;
       if (origin === this._origin) return;
-      if (!this.inboundOpen) return;
+      if (!this.inboundOpen) {
+        dlog('replicator', 'INBOUND BLOCKED (gate closed)', {
+          origin: String(origin?.constructor?.name ?? origin),
+          updateBytes: update.byteLength,
+        });
+        return;
+      }
+      dlog('replicator', 'sync→editor propagating', {
+        origin: String(origin?.constructor?.name ?? origin),
+        updateBytes: update.byteLength,
+        syncBefore: snapText(this.syncDoc.getText('source').toString()),
+        editorBefore: snapText(this.editorDoc.getText('source').toString()),
+      });
       Y.applyUpdate(this.editorDoc, update, this._origin);
+      dlog('replicator', 'sync→editor done', {
+        editorAfter: snapText(this.editorDoc.getText('source').toString()),
+      });
     };
 
     this._onEditorUpdate = (update, origin) => {
       if (this._destroyed) return;
       if (origin === this._origin) return;
-      if (!this.outboundOpen) return;
+      if (!this.outboundOpen) {
+        dlog('replicator', 'OUTBOUND BLOCKED (gate closed)', {
+          origin: String(origin?.constructor?.name ?? origin),
+          updateBytes: update.byteLength,
+        });
+        return;
+      }
+      dlog('replicator', 'editor→sync propagating', {
+        origin: String(origin?.constructor?.name ?? origin),
+        updateBytes: update.byteLength,
+        editorBefore: snapText(this.editorDoc.getText('source').toString()),
+        syncBefore: snapText(this.syncDoc.getText('source').toString()),
+      });
       Y.applyUpdate(this.syncDoc, update, this._origin);
+      dlog('replicator', 'editor→sync done', {
+        syncAfter: snapText(this.syncDoc.getText('source').toString()),
+      });
     };
 
     this.syncDoc.on('update', this._onSyncUpdate);

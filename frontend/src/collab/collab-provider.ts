@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import { SocketIOProvider } from './socketio-provider.js';
 import { DocReplicator } from './doc-replicator.js';
+import { dlog, snapText } from './debug-log.js';
 import type {
   ICollaborationProvider,
   CollaborationConfig,
@@ -192,6 +193,12 @@ export class CollaborationProvider implements ICollaborationProvider {
   }
 
   resetEditorDoc(): void {
+    dlog('provider', 'resetEditorDoc start', {
+      sync: snapText(this.syncText.toString()),
+      editor: snapText(this._editorText.toString()),
+      outboundOpen: this._replicator.outboundOpen,
+      inboundOpen: this._replicator.inboundOpen,
+    });
     const oldReplicator = this._replicator;
     const oldEditorDoc = this._editorDoc;
 
@@ -215,6 +222,11 @@ export class CollaborationProvider implements ICollaborationProvider {
     oldEditorDoc.destroy();
 
     // Notify subscribers (bindings) so they can rebind to the new editorText.
+    dlog('provider', 'resetEditorDoc done — firing callbacks', {
+      sync: snapText(this.syncText.toString()),
+      editor: snapText(this._editorText.toString()),
+      callbacks: this._editorResetCallbacks.size,
+    });
     this._editorResetCallbacks.forEach(cb => { try { cb(); } catch { /* swallow */ } });
   }
 
