@@ -73,9 +73,25 @@ export class TextBinding {
         dlog('text-binding', 'editor update SKIPPED (applyingFromYText)', {});
         return;
       }
+      // Capture which steps caused the docChange so we can tell user
+      // typing apart from internal/programmatic mutations.
+      const stepDescriptions: string[] = [];
+      try {
+        const steps = transaction?.steps ?? [];
+        for (const s of steps) {
+          const stepObj = s.toJSON?.() ?? {};
+          stepDescriptions.push(JSON.stringify(stepObj).slice(0, 200));
+        }
+      } catch { /* swallow */ }
       dlog('text-binding', 'editor update — debouncing write-back', {
         editor: snapText(this._getSerializedContent()),
         ytext: snapText(this._ytext.toString()),
+        stepCount: transaction?.steps?.length ?? 0,
+        stepsHead: stepDescriptions.slice(0, 4),
+        userEvent: transaction?.getMeta?.('uiEvent') ?? null,
+        addToHistory: transaction?.getMeta?.('addToHistory') ?? null,
+        pointer: transaction?.getMeta?.('pointer') ?? null,
+        paste: transaction?.getMeta?.('paste') ?? null,
       });
 
       if (this._syncTimer) clearTimeout(this._syncTimer);

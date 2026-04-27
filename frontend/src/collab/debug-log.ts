@@ -23,15 +23,17 @@ declare global {
 let _enabled: DebugFlag = false;
 
 function bootEnabled(): DebugFlag {
-  if (typeof window === 'undefined') return false;
+  // Default-on while we diagnose the "preview-then-wait corruption"
+  // bug. Toggle off via window.__ME_DEBUG__ = false or ?debug=0.
+  if (typeof window === 'undefined') return true;
   if (typeof window.__ME_DEBUG__ !== 'undefined') return window.__ME_DEBUG__;
   try {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('debug') === '1') return true;
+    if (params.get('debug') === '0') return false;
   } catch {
     /* swallow */
   }
-  return false;
+  return true;
 }
 
 _enabled = bootEnabled();
@@ -61,13 +63,29 @@ function ts(): string {
 
 export function dlog(category: string, message: string, data?: unknown): void {
   if (!isEnabled(category)) return;
-  // eslint-disable-next-line no-console
+  let line = `[ME ${ts()}] ${category} | ${message}`;
   if (data !== undefined) {
-    console.log(`[ME ${ts()}] ${category} | ${message}`, data);
-  } else {
-    // eslint-disable-next-line no-console
-    console.log(`[ME ${ts()}] ${category} | ${message}`);
+    // Inline-stringify the payload. ATR's console capture drops the
+    // second argument to console.log, so passing data as a separate
+    // arg loses every snapshot we care about. JSON.stringify keeps
+    // the trace intact in the captured stream.
+    let payload: string;
+    try {
+      payload = JSON.stringify(data, (_k, v) => {
+        if (typeof v === 'symbol') return v.description ? `Symbol(${v.description})` : 'Symbol()';
+        if (v instanceof Uint8Array) return `Uint8Array(${v.byteLength})`;
+        return v;
+      });
+    } catch {
+      payload = String(data);
+    }
+    if (payload && payload.length > 1500) {
+      payload = payload.slice(0, 1500) + '…[truncated]';
+    }
+    line += ` ${payload}`;
   }
+  // eslint-disable-next-line no-console
+  console.log(line);
 }
 
 /**
