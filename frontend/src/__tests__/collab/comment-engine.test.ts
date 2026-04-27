@@ -387,6 +387,217 @@ describe('CommentEngine — persistence', () => {
   });
 });
 
+describe('CommentEngine — suggestion decision persistence (Bug A)', () => {
+  test('decideSuggestion emits POST /suggestion/decision with the decision payload', async () => {
+    // Bug A regression: the only PATCH the persistence loop sent on
+    // accept/reject was {status: resolved, resolved_by: ...}. The
+    // suggestion's accepted/rejected state was never persisted, so on
+    // reload everything came back labeled "pending".
+    const { engine, fetchMock } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    const id = engine.createThread(anchor, startRel, endRel, null, {
+      yjs_payload: '',
+      human_readable: { summary: 's', before_text: 'hello', after_text: 'HI', operations: [] },
+      author_id: 'u2',
+      author_name: 'Bob',
+      status: 'pending',
+    });
+    await engine.flushNow();
+    fetchMock.mockClear();
+
+    engine.decideSuggestion(id, 'accepted', 'v42');
+    await engine.flushNow();
+
+    const decisionCall = fetchMock.mock.calls.find((c) => {
+      const url = String(c[0] ?? '');
+      const init = c[1] as RequestInit | undefined;
+      return init?.method === 'POST' && /suggestion\/decision/.test(url);
+    });
+    expect(decisionCall).toBeDefined();
+    const body = JSON.parse(String((decisionCall![1] as RequestInit).body));
+    expect(body.decision).toBe('accepted');
+    expect(body.decided_by).toBe('u1');
+    expect(body.applied_version_id).toBe('v42');
+  });
+
+  test('rejected decision also persists via the decision endpoint', async () => {
+    const { engine, fetchMock } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    const id = engine.createThread(anchor, startRel, endRel, null, {
+      yjs_payload: '',
+      human_readable: { summary: 's', before_text: 'hello', after_text: 'HI', operations: [] },
+      author_id: 'u2',
+      author_name: 'Bob',
+      status: 'pending',
+    });
+    await engine.flushNow();
+    fetchMock.mockClear();
+
+    engine.decideSuggestion(id, 'rejected');
+    await engine.flushNow();
+
+    const decisionCall = fetchMock.mock.calls.find((c) => {
+      const url = String(c[0] ?? '');
+      return /suggestion\/decision/.test(url);
+    });
+    expect(decisionCall).toBeDefined();
+    const body = JSON.parse(String((decisionCall![1] as RequestInit).body));
+    expect(body.decision).toBe('rejected');
+  });
+
+  test('decision endpoint is NOT called for plain resolveThread on a non-suggestion thread', async () => {
+    // Guard against accidental over-firing: only suggestion decisions
+    // should hit the decision endpoint.
+    const { engine, fetchMock } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    const id = engine.createThread(anchor, startRel, endRel, 'just a comment', null);
+    await engine.flushNow();
+    fetchMock.mockClear();
+
+    engine.resolveThread(id);
+    await engine.flushNow();
+
+    const decisionCall = fetchMock.mock.calls.find((c) => /suggestion\/decision/.test(String(c[0])));
+    expect(decisionCall).toBeUndefined();
+  });
+
+  test('newly-created suggestion (status=pending) does NOT trigger a decision call', async () => {
+    // The condition stored.suggestion.status !== 'pending' guards
+    // the create path from spuriously POSTing /suggestion/decision.
+    const { engine, fetchMock } = setup();
+    fetchMock.mockClear();
+
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    engine.createThread(anchor, startRel, endRel, null, {
+      yjs_payload: '',
+      human_readable: { summary: 's', before_text: '', after_text: 'X', operations: [] },
+      author_id: 'u2',
+      author_name: 'Bob',
+      status: 'pending',
+    });
+    await engine.flushNow();
+
+    const decisionCall = fetchMock.mock.calls.find((c) => /suggestion\/decision/.test(String(c[0])));
+    expect(decisionCall).toBeUndefined();
+  });
+
+  test('loadFromSPI re-hydrates suggestion.status from server state', async () => {
+    // After Bug A is fixed, the SPI should carry the decision through
+    // a reload — i.e., a thread arriving with suggestion.status='accepted'
+    // shows up that way locally.
+    const { engine, fetchMock } = setup();
+    fetchMock
+      .mockImplementationOnce(async () =>
+        new Response(
+          JSON.stringify({
+            threads: [
+              { id: 't-decided', anchor: { start: 0, end: 5, quoted_text: 'hello' },
+                status: 'resolved', created_at: '2026-01-01T00:00:00Z',
+                comment_count: 0, has_suggestion: true },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockImplementationOnce(async () =>
+        new Response(
+          JSON.stringify({
+            id: 't-decided',
+            document_id: 'doc.md',
+            anchor: { start: 0, end: 5, quoted_text: 'hello' },
+            status: 'resolved',
+            created_at: '2026-01-01T00:00:00Z',
+            resolved_at: '2026-01-02T00:00:00Z',
+            resolved_by: 'reviewer',
+            comments: [],
+            suggestion: {
+              yjs_payload: '',
+              human_readable: { summary: 's', before_text: 'hello', after_text: 'HI', operations: [] },
+              author_id: 'u2',
+              author_name: 'Bob',
+              status: 'accepted',
+              decided_by: 'reviewer',
+              decided_at: '2026-01-02T00:00:00Z',
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    await engine.loadFromSPI();
+
+    const t = engine.getThreads().find((x) => x.id === 't-decided');
+    expect(t).toBeDefined();
+    expect(t!.suggestion?.status).toBe('accepted');
+    expect(t!.suggestion?.decided_by).toBe('reviewer');
+  });
+
+  test('poll race: a locally-decided suggestion is NOT clobbered by stale-pending server state', async () => {
+    // After decideSuggestion runs, the local Y.Map has
+    // suggestion.status='accepted'. If a poll fires before the
+    // decision PATCH lands on the server, the server still returns
+    // the suggestion as 'pending'. _insertThreadFromWire would
+    // otherwise overwrite the local decision.
+    const originalHasFocus = document.hasFocus;
+    document.hasFocus = () => true;
+    try {
+      const { engine, fetchMock } = setup();
+      const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+      const id = engine.createThread(anchor, startRel, endRel, null, {
+        yjs_payload: '',
+        human_readable: { summary: 's', before_text: 'hello', after_text: 'HI', operations: [] },
+        author_id: 'u2',
+        author_name: 'Bob',
+        status: 'pending',
+      });
+      await engine.flushNow();
+      // Locally accept while the persist flush hasn't happened yet.
+      engine.decideSuggestion(id, 'accepted');
+      // (Don't flushNow — simulate the in-flight window.)
+      fetchMock.mockClear();
+
+      // Poll arrives with the same thread, but server still has it as
+      // pending (decision hasn't been delivered yet).
+      fetchMock
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              changes: [{ thread_id: id, action: 'updated', by: 'self', at: '2026-01-02T00:00:00Z' }],
+              server_time: '2026-01-02T00:00:01Z',
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              id,
+              document_id: 'doc.md',
+              anchor: { start: 0, end: 5, quoted_text: 'hello' },
+              status: 'open',
+              created_at: '2026-01-01T00:00:00Z',
+              comments: [],
+              suggestion: {
+                yjs_payload: '',
+                human_readable: { summary: 's', before_text: 'hello', after_text: 'HI', operations: [] },
+                author_id: 'u2',
+                author_name: 'Bob',
+                status: 'pending', // server hasn't seen the decision yet
+              },
+            }),
+            { status: 200 },
+          ),
+        );
+      await engine.pollOnce();
+
+      const t = engine.getThreads().find((x) => x.id === id);
+      expect(t?.suggestion?.status).toBe('accepted');
+    } finally {
+      document.hasFocus = originalHasFocus;
+    }
+  });
+});
+
 describe('CommentEngine — mentions', () => {
   test('extractMentions parses @[Display](user-id) tokens', () => {
     const mentions = extractMentions('hey @[Alice](u1) and @[Bob](u2)');

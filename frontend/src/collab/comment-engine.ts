@@ -792,6 +792,37 @@ export class CommentEngine {
             );
             if (!resp.ok) throw new Error(`status ${key}: ${resp.status}`);
           }
+
+          // Bug A: persist accept/reject decisions. The thread-status
+          // PATCH above only carries {status, resolved_by} — it does
+          // not transport the suggestion sub-object. The dedicated
+          // /suggestion/decision endpoint records the
+          // accepted/rejected outcome plus decided_by + applied_version_id.
+          // Skip when the suggestion is still pending (covers the
+          // create path, which already POST'd the suggestion via the
+          // thread-create body).
+          const prevSuggestionStatus = prevThread?.suggestion?.status;
+          const newSuggestionStatus = stored.suggestion?.status;
+          if (
+            stored.suggestion &&
+            newSuggestionStatus &&
+            newSuggestionStatus !== 'pending' &&
+            prevSuggestionStatus !== newSuggestionStatus
+          ) {
+            const resp = await this._doFetch(
+              `/api/documents/comments/${encodeURIComponent(key)}/suggestion/decision?path=${encodeURIComponent(this._config.documentId)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  decision: newSuggestionStatus,
+                  decided_by: stored.suggestion.decided_by ?? '',
+                  applied_version_id: stored.suggestion.applied_version_id,
+                }),
+              },
+            );
+            if (!resp.ok) throw new Error(`decide ${key}: ${resp.status}`);
+          }
         }
         this._lastPersisted.set(key, snapshot);
         succeeded = true;
@@ -853,6 +884,25 @@ export class CommentEngine {
   }
 
   private _insertThreadFromWire(thread: CommentThread, markDirty: boolean): void {
+    // Bug A poll-race guard: if the local Y.Map already has a
+    // suggestion with a non-pending decision (accepted/rejected),
+    // and the wire response still carries it as 'pending' — the
+    // server hasn't applied our in-flight POST /suggestion/decision
+    // yet. Overwriting would clobber the local decision, which then
+    // never gets re-persisted (POLL_ORIGIN suppresses dirty-marking).
+    // Preserve the local decision; the next persist flush will catch
+    // the server up.
+    const existing = asStoredThread(this._ymap.get(thread.id));
+    const localDecided =
+      existing?.suggestion &&
+      existing.suggestion.status !== 'pending';
+    const wirePending =
+      !thread.suggestion || thread.suggestion.status === 'pending';
+    let suggestionToStore = thread.suggestion;
+    if (localDecided && wirePending) {
+      suggestionToStore = existing!.suggestion;
+    }
+
     const stored: StoredThread = {
       anchor: thread.anchor,
       status: thread.status,
@@ -860,14 +910,24 @@ export class CommentEngine {
       resolvedAt: thread.resolved_at,
       comments: thread.comments,
       reactions: thread.reactions,
-      suggestion: thread.suggestion,
+      suggestion: suggestionToStore,
       createdAt: thread.created_at,
     };
     this._ymap.set(thread.id, stored);
     // Record the persisted snapshot so the persistence loop doesn't
-    // treat the freshly-loaded thread as "new, needs POST".
-    this._lastPersisted.set(thread.id, JSON.stringify(stored));
+    // treat the freshly-loaded thread as "new, needs POST". Use the
+    // wire shape (not the locally-merged shape) so the in-flight
+    // decision still looks "dirty" relative to last-persisted on the
+    // next flush.
+    const wireSnapshot: StoredThread = { ...stored, suggestion: thread.suggestion };
+    this._lastPersisted.set(thread.id, JSON.stringify(wireSnapshot));
     if (!markDirty) this._dirty.delete(thread.id);
+    // If we preserved a local decision, mark the thread dirty so the
+    // next flush re-sends the decision.
+    if (localDecided && wirePending) {
+      this._dirty.add(thread.id);
+      if (this._config.persistEnabled) this._schedulePersist();
+    }
   }
 
   // --- Internal: HTTP ---
