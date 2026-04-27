@@ -220,9 +220,27 @@ func (fs *FileStore) LoadDocument(docID string) (*spi.LoadResponse, error) {
 		return nil, fmt.Errorf("reading document: %w", err)
 	}
 
-	// Check journal for the latest versioned content pointer.
-	// If found, return the versioned file's content instead of the seed.
+	// Resolve the most recent content. Two write paths can produce
+	// post-seed content for this document:
+	//   (a) Store() — the relay's flush writes a versioned file under
+	//       .versions/{docID}/{versionID}/{docID} and appends a
+	//       VERSION: pointer to .yjs/{docID}.yjs. Use the journal's
+	//       mtime as the "last Store()" timestamp.
+	//   (b) CreateVersion() — the frontend's auto-snapshot / "Save"
+	//       button writes a formal version entry as
+	//       .versions/{docID}/{versionID}.json with a CreatedAt field.
+	//       Pre-fix this path was invisible to Load — every reload
+	//       returned the seed even after the user accepted a change.
+	//
+	// Whichever source is newer wins.
 	content := string(data)
+	type candidate struct {
+		ts      time.Time
+		body    string
+		present bool
+	}
+	var fromJournal, fromVersionDir candidate
+
 	journalFile := fs.yjsPath(docID)
 	if f, err := os.Open(journalFile); err == nil {
 		defer f.Close()
@@ -238,14 +256,65 @@ func (fs *FileStore) LoadDocument(docID string) (*spi.LoadResponse, error) {
 		if lastVersionPath != "" {
 			versionData, vErr := os.ReadFile(filepath.Join(fs.baseDir, lastVersionPath))
 			if vErr == nil {
-				content = string(versionData)
+				ts := time.Time{}
+				if info, statErr := os.Stat(journalFile); statErr == nil {
+					ts = info.ModTime()
+				}
+				fromJournal = candidate{ts: ts, body: string(versionData), present: true}
 			}
 		}
+	}
+
+	if entry := fs.latestFormalVersion(docID); entry != nil {
+		fromVersionDir = candidate{ts: entry.CreatedAt, body: entry.Content, present: true}
+	}
+
+	switch {
+	case fromJournal.present && fromVersionDir.present:
+		if fromVersionDir.ts.After(fromJournal.ts) {
+			content = fromVersionDir.body
+		} else {
+			content = fromJournal.body
+		}
+	case fromJournal.present:
+		content = fromJournal.body
+	case fromVersionDir.present:
+		content = fromVersionDir.body
 	}
 
 	return &spi.LoadResponse{
 		Content: content,
 	}, nil
+}
+
+// latestFormalVersion returns the most recently created VersionEntry from
+// .versions/{docID}/{id}.json, or nil if none exist or the directory
+// is unreadable.
+func (fs *FileStore) latestFormalVersion(docID string) *spi.VersionEntry {
+	dir := fs.versionsDir(docID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var newest *spi.VersionEntry
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, rErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if rErr != nil {
+			continue
+		}
+		var entry spi.VersionEntry
+		if jErr := json.Unmarshal(data, &entry); jErr != nil {
+			continue
+		}
+		if newest == nil || entry.CreatedAt.After(newest.CreatedAt) {
+			cp := entry
+			newest = &cp
+		}
+	}
+	return newest
 }
 
 // CompactDocument is a no-op for this simple file-based provider.
