@@ -523,6 +523,137 @@ describe('CommentEngine — polling', () => {
     }
   });
 
+  test('loadFromSPI fires onThreadsChange so the UI sees server threads after reload', async () => {
+    // Bug C regression: observeDeep used to skip POLL_ORIGIN events
+    // entirely, so loadFromSPI populated the Y.Map silently and the
+    // multi-editor's _resolvedThreads / _pendingSuggestionThreads
+    // arrays stayed empty after a fresh page load.
+    const { engine, fetchMock } = setup();
+    fetchMock.mockClear();
+    const seenThreadIds: string[][] = [];
+    engine.onThreadsChange((threads) => {
+      seenThreadIds.push(threads.map((t) => t.id));
+    });
+
+    fetchMock
+      .mockImplementationOnce(async () =>
+        new Response(
+          JSON.stringify({
+            threads: [
+              { id: 't-loaded', anchor: { start: 0, end: 5, quoted_text: 'hello' },
+                status: 'resolved', created_at: '2026-01-01T00:00:00Z',
+                comment_count: 0, has_suggestion: false },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockImplementationOnce(async () =>
+        new Response(
+          JSON.stringify({
+            id: 't-loaded',
+            document_id: 'doc.md',
+            anchor: { start: 0, end: 5, quoted_text: 'hello' },
+            status: 'resolved',
+            created_at: '2026-01-01T00:00:00Z',
+            resolved_at: '2026-01-02T00:00:00Z',
+            resolved_by: 'other',
+            comments: [],
+          }),
+          { status: 200 },
+        ),
+      );
+
+    await engine.loadFromSPI();
+
+    // At least one emission must have included the loaded thread.
+    const sawIt = seenThreadIds.some((ids) => ids.includes('t-loaded'));
+    expect(sawIt).toBe(true);
+  });
+
+  test('pollOnce that applies a real change fires onThreadsChange but does NOT persist', async () => {
+    // Bug C regression + existing echo guard: poll-driven changes
+    // must show up in the UI (listener) but must not feed back to
+    // the SPI (no fetch calls during flushNow).
+    const originalHasFocus = document.hasFocus;
+    document.hasFocus = () => true;
+    try {
+      const { engine, fetchMock } = setup();
+      fetchMock.mockClear();
+      const emissions: number[] = [];
+      engine.onThreadsChange((threads) => {
+        emissions.push(threads.length);
+      });
+
+      const id = 'poll-created-thread';
+      fetchMock
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              changes: [
+                { thread_id: id, action: 'created', by: 'peer', at: '2026-01-02T00:00:00Z' },
+              ],
+              server_time: '2026-01-02T00:00:01Z',
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockImplementationOnce(async () =>
+          new Response(
+            JSON.stringify({
+              id,
+              document_id: 'doc.md',
+              anchor: { start: 0, end: 5, quoted_text: 'hello' },
+              status: 'open',
+              created_at: '2026-01-02T00:00:00Z',
+              comments: [],
+            }),
+            { status: 200 },
+          ),
+        );
+      await engine.pollOnce();
+
+      // Listener fired with the new thread.
+      expect(emissions.length).toBeGreaterThan(0);
+      expect(emissions.at(-1)).toBe(1);
+
+      // No persistence echo: flushing right after a poll should not
+      // POST anything back. We've already exhausted the mock's poll +
+      // detail responses; any extra call would either trigger the
+      // default '{}' response or reveal an attempted POST.
+      const callsBefore = fetchMock.mock.calls.length;
+      await engine.flushNow();
+      const newCallsAfterFlush = fetchMock.mock.calls.slice(callsBefore);
+      const persistAttempts = newCallsAfterFlush.filter((c) => {
+        const init = c[1] as RequestInit | undefined;
+        return init?.method === 'POST' || init?.method === 'PATCH';
+      });
+      expect(persistAttempts).toHaveLength(0);
+    } finally {
+      document.hasFocus = originalHasFocus;
+    }
+  });
+
+  test('user-originated mutations still fire onThreadsChange AND schedule persist', async () => {
+    // Symmetric counterpart to the Bug C regression tests: confirm
+    // the fix didn't accidentally break the user-driven path.
+    const { engine, fetchMock } = setup();
+    fetchMock.mockClear();
+    const emissions: number[] = [];
+    engine.onThreadsChange((threads) => {
+      emissions.push(threads.length);
+    });
+
+    const { anchor, startRel, endRel } = engine.createAnchor(0, 5);
+    engine.createThread(anchor, startRel, endRel, 'hi', null);
+
+    expect(emissions.at(-1)).toBe(1);
+
+    await engine.flushNow();
+    const posts = fetchMock.mock.calls.filter((c) => (c[1] as RequestInit)?.method === 'POST');
+    expect(posts.length).toBeGreaterThanOrEqual(1);
+  });
+
   test('pollOnce reconciliation does not feed back to the persistence loop', async () => {
     const originalHasFocus = document.hasFocus;
     document.hasFocus = () => true;

@@ -122,13 +122,20 @@ export class CommentEngine {
     };
 
     // Observe Y.Map mutations to notify listeners + mark dirty threads.
+    //
+    // POLL_ORIGIN events MUST NOT mark keys dirty or schedule persist —
+    // that would echo the server's state right back at it. But they
+    // still need to fire UI listeners so panels driven by
+    // onThreadsChange (resolved list, pending suggestions, status-bar
+    // counts) reflect freshly-loaded server state. Splitting the two
+    // flags keeps both invariants.
     this._ymap.observeDeep((events) => {
-      let changed = false;
+      let anyChange = false;
+      let userOriginatedChange = false;
       for (const e of events) {
-        // Skip mutations we caused ourselves during poll reconciliation;
-        // they're already persisted upstream.
+        anyChange = true;
         if (e.transaction.origin === POLL_ORIGIN) continue;
-        changed = true;
+        userOriginatedChange = true;
         // Top-level map changes mark the added/updated keys dirty.
         if ((e.target as any) === this._ymap) {
           for (const k of e.keys.keys()) this._dirty.add(k);
@@ -138,10 +145,8 @@ export class CommentEngine {
           if (threadId) this._dirty.add(threadId);
         }
       }
-      if (changed) {
-        this._notifyListeners();
-        if (this._config.persistEnabled) this._schedulePersist();
-      }
+      if (anyChange) this._notifyListeners();
+      if (userOriginatedChange && this._config.persistEnabled) this._schedulePersist();
     });
   }
 
