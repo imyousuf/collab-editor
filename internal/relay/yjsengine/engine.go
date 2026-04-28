@@ -80,6 +80,15 @@ type Engine interface {
 	GetText(ctx context.Context, docID, name string) (string, error)
 }
 
+// Sync-message sub-types — y-protocols/sync's varuint header values
+// the relay uses for routing decisions (broadcast vs. reply-only) and
+// for filtering Update frames into the persistence buffer.
+const (
+	MsgSyncStep1 byte = 0
+	MsgSyncStep2 byte = 1
+	MsgUpdate    byte = 2
+)
+
 // Sentinel errors. Implementations wrap with %w so callers can use
 // errors.Is.
 var (

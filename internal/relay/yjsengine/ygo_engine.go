@@ -102,7 +102,7 @@ func (e *YgoEngine) SyncMessage(_ context.Context, docID string, syncBody []byte
 	if err != nil {
 		return 0, nil, err
 	}
-	msgType, _, readErr := ysync.ReadSyncMessage(syncBody)
+	msgType, _, readErr := ReadSyncSubMessage(syncBody)
 	if readErr != nil {
 		return 0, nil, fmt.Errorf("yjsengine: invalid sync message: %w", readErr)
 	}
@@ -112,9 +112,9 @@ func (e *YgoEngine) SyncMessage(_ context.Context, docID string, syncBody []byte
 		// intact so the caller can distinguish Update (recoverable —
 		// still broadcast the raw bytes) from SyncStep1/2 (fatal —
 		// reply would be derived from a stale doc).
-		return byte(msgType), nil, fmt.Errorf("%w: %v", ErrApplyFailed, applyErr)
+		return msgType, nil, fmt.Errorf("%w: %v", ErrApplyFailed, applyErr)
 	}
-	return byte(msgType), reply, nil
+	return msgType, reply, nil
 }
 
 // EncodeStateAsUpdate returns the doc's full state as a Yjs V1 update.

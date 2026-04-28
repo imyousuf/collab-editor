@@ -10,7 +10,6 @@ import (
 
 	"github.com/imyousuf/collab-editor/internal/relay/yjsengine"
 	"github.com/imyousuf/collab-editor/pkg/spi"
-	ysync "github.com/reearth/ygo/sync"
 )
 
 // ServerClientID is the Yjs ClientID the relay uses when it generates
@@ -275,7 +274,7 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 	}
 	syncMsg := frame[1:]
 
-	msgType, _, readErr := ysync.ReadSyncMessage(syncMsg)
+	msgType, _, readErr := yjsengine.ReadSyncSubMessage(syncMsg)
 	if readErr != nil {
 		slog.Warn("invalid sync message", "doc", r.documentID, "err", readErr)
 		return
@@ -283,7 +282,7 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 
 	r.engMu.Lock()
 	engineMsgType, reply, applyErr := r.engine.SyncMessage(context.Background(), r.documentID, syncMsg)
-	if applyErr == nil && engineMsgType == byte(ysync.MsgUpdate) {
+	if applyErr == nil && engineMsgType == byte(yjsengine.MsgUpdate) {
 		r.dirty = true
 	}
 	r.engMu.Unlock()
@@ -306,7 +305,7 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 			preview = preview[:1024]
 		}
 		slog.Warn("sync apply failed", "doc", r.documentID, "type", msgType, "err", applyErr, "frame_hex", fmt.Sprintf("%x", preview), "frame_len", len(frame))
-		if msgType != ysync.MsgUpdate {
+		if msgType != yjsengine.MsgUpdate {
 			return
 		}
 		// Fall through to the broadcast/buffer path with reply==nil.
@@ -329,7 +328,7 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 	}
 
 	switch msgType {
-	case ysync.MsgUpdate:
+	case yjsengine.MsgUpdate:
 		// Live edit from a peer — fan out to everyone else, buffer for
 		// persistence. SyncStep1/2 are session-specific and are NOT
 		// broadcast; they only travel between the requesting peer and
@@ -352,7 +351,7 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 		// with a short timeout so a slow or flapping Redis can't block
 		// the hot path — the room's in-memory Y.Doc is authoritative;
 		// the log is the durability tail.
-		if _, payload, err := ysync.ReadSyncMessage(frame[1:]); err == nil && len(payload) > 0 {
+		if _, payload, err := yjsengine.ReadSyncSubMessage(frame[1:]); err == nil && len(payload) > 0 {
 			appendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			go func(update []byte) {
 				defer cancel()

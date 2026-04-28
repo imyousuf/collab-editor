@@ -24,11 +24,16 @@ type Config struct {
 
 // EngineConfig selects the per-room CRDT backend.
 //
-//   - kind="ygo"     — in-process reearth/ygo (default for now; will
-//                      flip to "sidecar" in a follow-up commit once
-//                      the deployment story is settled).
 //   - kind="sidecar" — out-of-process Node child running the canonical
-//                      yjs npm package, talked to over a Unix socket.
+//                      yjs npm package, talked to over a Unix socket
+//                      (default; the only mode with full wire-format
+//                      parity with the browser).
+//   - kind="ygo"     — in-process reearth/ygo backend. Available for
+//                      bare-metal Go-only deploys without Node and for
+//                      the cross-implementation contract tests; not
+//                      recommended for production because the Y.Map
+//                      integration semantics drift from lib0/yjs in
+//                      ways that cause silent client-side corruption.
 //
 // Sidecar* fields apply only when kind="sidecar".
 type EngineConfig struct {
