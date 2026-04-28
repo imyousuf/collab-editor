@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/imyousuf/collab-editor/internal/relay/yjsengine"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -15,13 +16,21 @@ type RoomManager struct {
 	config  RoomConfig
 	flusher *Flusher
 	metrics *Metrics
+	engine  yjsengine.Engine // shared by all rooms; per-doc state lives inside
 }
 
-func NewRoomManager(cfg RoomConfig, flusher *Flusher, metrics *Metrics) *RoomManager {
+// NewRoomManager builds a RoomManager that hands the given engine to
+// every Room it creates. Pass nil to fall back to an in-process ygo
+// engine (typical for tests).
+func NewRoomManager(cfg RoomConfig, flusher *Flusher, metrics *Metrics, engine yjsengine.Engine) *RoomManager {
+	if engine == nil {
+		engine = yjsengine.NewYgoEngine()
+	}
 	return &RoomManager{
 		config:  cfg,
 		flusher: flusher,
 		metrics: metrics,
+		engine:  engine,
 	}
 }
 
@@ -37,7 +46,7 @@ func (rm *RoomManager) GetOrCreate(documentID string, bootstrap func(*Room) erro
 			return v.(*Room), nil
 		}
 
-		room := NewRoom(documentID, rm.config, rm.flusher, rm.metrics)
+		room := NewRoom(documentID, rm.config, rm.flusher, rm.metrics, rm.engine)
 		if err := bootstrap(room); err != nil {
 			return nil, err
 		}

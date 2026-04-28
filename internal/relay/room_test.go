@@ -113,7 +113,7 @@ func newTestRoom(t *testing.T) (*Room, *httptest.Server) {
 		IdleTimeout:     1 * time.Second,
 		MaxPeersPerRoom: 50,
 	}
-	room := NewRoom("test-doc", cfg, flusher, metrics)
+	room := NewRoom("test-doc", cfg, flusher, metrics, nil)
 	return room, srv
 }
 
@@ -551,7 +551,7 @@ func TestRoom_BootstrapFromSnapshot_RebuildsState(t *testing.T) {
 	// for the multi-pod-autoscale case where pod B spins up after pod
 	// A has been serving edits, and an incoming peer on pod B must see
 	// current state, not an empty room.
-	authoritative := crdt.New(crdt.WithClientID(serverClientID))
+	authoritative := crdt.New(crdt.WithClientID(crdt.ClientID(ServerClientID)))
 	text := authoritative.GetText(sharedTextName)
 	authoritative.Transact(func(txn *crdt.Transaction) {
 		text.Insert(txn, 0, "Current state", nil)
@@ -858,5 +858,89 @@ func TestRoom_Awareness_BroadcastsButDoesNotBuffer(t *testing.T) {
 
 	if room.buffer.Len() != 0 {
 		t.Errorf("awareness must not be buffered for persistence, buffer len=%d", room.buffer.Len())
+	}
+}
+
+// encodeVarUintTest matches lib0's varuint format used by sync framing.
+func encodeVarUintTest(n uint64) []byte {
+	out := []byte{}
+	for n >= 0x80 {
+		out = append(out, byte(n)|0x80)
+		n >>= 7
+	}
+	out = append(out, byte(n))
+	return out
+}
+
+// buildBadSyncUpdate returns a sync-framed Update message whose inner
+// payload will fail ygo's ApplySyncMessage. Empirically `[0x01]` triggers
+// "crdt: invalid update" — sufficient to exercise the apply-error branch
+// without depending on a specific lib0 Any tag we'd have to handcraft.
+func buildBadSyncUpdate() []byte {
+	innerPayload := []byte{0x01}
+	body := append([]byte{0x02}, encodeVarUintTest(uint64(len(innerPayload)))...) // sync sub-type 2 = MsgUpdate
+	body = append(body, innerPayload...)
+	return append([]byte{msgTypeSync}, body...)
+}
+
+// TestRoom_HandleMessage_TolerateApplyFailure_Broadcast asserts that when
+// the relay's in-memory ygo cannot apply an Update (e.g. lib0 emits an
+// Any tag ygo does not recognise — the "unknown Any tag" failure mode
+// observed in production), the relay still forwards the raw bytes to
+// other peers. Dropping silently was leaving peers desynced and the
+// server's next SyncStep2 reply derived from a stale ydoc was corrupting
+// content (see internal docs / "0203" bug report).
+func TestRoom_HandleMessage_TolerateApplyFailure_Broadcast(t *testing.T) {
+	room, _ := newTestRoom(t)
+	connA := newMockConn()
+	peerA := newPeer(connA, room)
+	room.AddPeer(peerA)
+
+	connB := newMockConn()
+	peerB := newPeer(connB, room)
+	room.AddPeer(peerB)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go peerB.writeLoop(ctx)
+
+	bad := buildBadSyncUpdate()
+	// Sanity: our payload really does fail apply.
+	if _, err := ysync.ApplySyncMessage(crdt.New(), bad[1:], nil); err == nil {
+		t.Fatalf("test fixture broken — payload was supposed to fail apply, got nil err")
+	}
+
+	room.handleMessage(peerA, bad)
+
+	select {
+	case got := <-connB.writeCh:
+		if string(got) != string(bad) {
+			t.Errorf("peer B got %v, want %v", got, bad)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer B did not receive forwarded update — relay dropped it on apply failure")
+	}
+}
+
+// TestRoom_HandleMessage_TolerateApplyFailure_Buffer asserts the
+// persistence buffer captures Updates the relay couldn't parse so the
+// SPI flush can still attempt to store them (or, at minimum, the bytes
+// aren't silently lost). Without this, every accept-during-Suggest-Mode
+// produces a snapshot whose content is the last successfully-applied
+// state, not what the user actually committed.
+func TestRoom_HandleMessage_TolerateApplyFailure_Buffer(t *testing.T) {
+	room, _ := newTestRoom(t)
+	connA := newMockConn()
+	peerA := newPeer(connA, room)
+	room.AddPeer(peerA)
+
+	bad := buildBadSyncUpdate()
+
+	before := room.buffer.Len()
+	room.handleMessage(peerA, bad)
+	after := room.buffer.Len()
+
+	if after-before != 1 {
+		t.Errorf("buffer.Len delta = %d, want 1 (apply-failed Update should still buffer for persistence retry)", after-before)
 	}
 }

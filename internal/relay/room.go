@@ -3,14 +3,29 @@ package relay
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/imyousuf/collab-editor/internal/relay/yjsengine"
 	"github.com/imyousuf/collab-editor/pkg/spi"
-	"github.com/reearth/ygo/crdt"
 	ysync "github.com/reearth/ygo/sync"
 )
+
+// ServerClientID is the Yjs ClientID the relay uses when it generates
+// its own updates (specifically the synthetic insert it does when
+// bootstrapping a room from plain-text content). Pinning this to a
+// constant means two relay instances cold-starting the same room from
+// the same provider content produce byte-identical seed updates; the
+// YATA merge dedupes them as the same operation, so the broker peer
+// relaying between instances cannot double-seed. Clients use random
+// 53-bit client IDs and will effectively never collide with this
+// reserved value.
+//
+// Exported (capital-S) so test fixtures and the Engine implementations
+// can reference the same constant without duplicating it.
+const ServerClientID = 1
 
 // y-websocket message type envelope bytes (first byte of each frame).
 const (
@@ -18,16 +33,6 @@ const (
 	msgTypeAwareness       byte = 0x01 // y-protocols awareness message — broadcast only
 	msgTypeApplicationEvt  byte = 0x03 // custom application event (e.g., version-created) — broadcast only
 )
-
-// serverClientID is the Yjs ClientID the relay uses when it generates its
-// own updates (specifically the synthetic insert it does when bootstrapping
-// a room from plain-text content). Pinning this to a constant means two
-// relay instances that cold-start the same room from the same provider
-// content produce byte-identical seed updates; the YATA merge dedupes them
-// as the same operation, so the broker peer relaying between instances
-// cannot double-seed. Clients use random 53-bit client IDs and will
-// effectively never collide with this reserved value.
-const serverClientID crdt.ClientID = 1
 
 // Y.Text field that the editor binds to. Kept in sync with the frontend's
 // CollaborationProvider, which calls `ydoc.getText('source')`.
@@ -43,15 +48,23 @@ type Room struct {
 	closeCh    chan struct{}
 	closeOnce  sync.Once
 
-	// Server-side Y.Doc. This is the authoritative in-memory state for
-	// the room; SyncStep1 responses and Update merges go through it. A
-	// single mutex serializes all writes because ygo's *crdt.Doc is not
-	// safe for concurrent mutation.
-	ydoc   *crdt.Doc
-	ydocMu sync.Mutex
+	// Server-side CRDT state lives behind the Engine interface — either
+	// in-process ygo (YgoEngine) or out-of-process via the Node
+	// yjs-engine sidecar (SidecarEngine). A single mutex serialises
+	// all calls into the engine for THIS document; engine
+	// implementations are not safe for concurrent use per docID.
+	engine yjsengine.Engine
+	engMu  sync.Mutex
+
+	// Tracks whether the engine's state has changed since the last
+	// snapshot was written. flushBuffer skips the (potentially large)
+	// EncodeStateAsUpdate RPC when nothing has changed, which matters
+	// for the SidecarEngine path where every encode is a socket
+	// round-trip.
+	dirty bool
 
 	// Phase 2: durable event log for multi-pod cold-start. Every Update
-	// applied to ydoc is also appended via stateStore.AppendUpdate.
+	// applied to the engine is also appended via stateStore.AppendUpdate.
 	// Nil when Redis isn't configured (single-pod mode); behaves as a
 	// noop in that case.
 	stateStore StateStore
@@ -62,19 +75,32 @@ type Room struct {
 	flushCh chan struct{} // signaled when buffer exceeds FlushMaxBytes
 }
 
-func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metrics) *Room {
-	return &Room{
+func NewRoom(documentID string, cfg RoomConfig, flusher *Flusher, metrics *Metrics, engine yjsengine.Engine) *Room {
+	if engine == nil {
+		// Tests that don't supply an engine get a fresh in-process ygo
+		// engine. Production callers always pass one in.
+		engine = yjsengine.NewYgoEngine()
+	}
+	r := &Room{
 		documentID: documentID,
 		peers:      make(map[*Peer]struct{}),
 		config:     cfg,
 		metrics:    metrics,
 		closeCh:    make(chan struct{}),
-		ydoc:       crdt.New(crdt.WithClientID(serverClientID)),
+		engine:     engine,
 		stateStore: NewNoopStateStore(),
 		buffer:     NewUpdateBuffer(),
 		flusher:    flusher,
 		flushCh:    make(chan struct{}, 1),
 	}
+	// Open the doc on the engine. Idempotent — if the engine already
+	// has a doc for this ID (e.g. after a sidecar reconnect re-opens
+	// existing rooms), Open is a no-op. Errors here would mean the
+	// engine is unusable; fail loud rather than crash on first use.
+	if err := r.engine.Open(context.Background(), documentID); err != nil {
+		slog.Error("engine.Open failed at room creation", "doc", documentID, "err", err)
+	}
+	return r
 }
 
 // SetStateStore installs a StateStore for durable event log + snapshot
@@ -95,15 +121,13 @@ func (r *Room) BootstrapContent(content string) {
 	if content == "" {
 		return
 	}
-	r.ydocMu.Lock()
-	defer r.ydocMu.Unlock()
-	text := r.ydoc.GetText(sharedTextName)
-	if text.Len() > 0 {
+	r.engMu.Lock()
+	defer r.engMu.Unlock()
+	if err := r.engine.BootstrapText(context.Background(), r.documentID, sharedTextName, content); err != nil {
+		slog.Warn("engine.BootstrapText failed", "doc", r.documentID, "err", err)
 		return
 	}
-	r.ydoc.Transact(func(txn *crdt.Transaction) {
-		text.Insert(txn, 0, content, nil)
-	})
+	r.dirty = true
 }
 
 // BootstrapFromSnapshot applies a Yjs-encoded state to the room's
@@ -115,12 +139,19 @@ func (r *Room) BootstrapFromSnapshot(state []byte) error {
 	if len(state) == 0 {
 		return nil
 	}
-	r.ydocMu.Lock()
-	defer r.ydocMu.Unlock()
-	if r.ydoc.GetText(sharedTextName).Len() > 0 {
+	r.engMu.Lock()
+	defer r.engMu.Unlock()
+	// Skip if any content already present — a sibling pod or an
+	// earlier code path beat us. Mirrors the previous direct-ygo
+	// behaviour.
+	if existing, err := r.engine.GetText(context.Background(), r.documentID, sharedTextName); err == nil && existing != "" {
 		return nil
 	}
-	return r.ydoc.ApplyUpdate(state)
+	if err := r.engine.ApplyUpdate(context.Background(), r.documentID, state); err != nil {
+		return err
+	}
+	r.dirty = true
+	return nil
 }
 
 // ApplyLogEntry applies a single Yjs Update (a log-tail entry) to the
@@ -131,17 +162,28 @@ func (r *Room) ApplyLogEntry(update []byte) error {
 	if len(update) == 0 {
 		return nil
 	}
-	r.ydocMu.Lock()
-	defer r.ydocMu.Unlock()
-	return r.ydoc.ApplyUpdate(update)
+	r.engMu.Lock()
+	defer r.engMu.Unlock()
+	if err := r.engine.ApplyUpdate(context.Background(), r.documentID, update); err != nil {
+		return err
+	}
+	r.dirty = true
+	return nil
 }
 
 // YDocState returns the current Y.Doc state encoded as a Yjs V1 update,
 // suitable for persistence or for bootstrapping another relay instance.
+// Returns nil on engine errors — callers must treat nil as "skip
+// snapshot this round" rather than "doc is empty".
 func (r *Room) YDocState() []byte {
-	r.ydocMu.Lock()
-	defer r.ydocMu.Unlock()
-	return r.ydoc.EncodeStateAsUpdate()
+	r.engMu.Lock()
+	defer r.engMu.Unlock()
+	state, err := r.engine.EncodeStateAsUpdate(context.Background(), r.documentID)
+	if err != nil {
+		slog.Warn("engine.EncodeStateAsUpdate failed", "doc", r.documentID, "err", err)
+		return nil
+	}
+	return state
 }
 
 // AddPeer adds a peer to the room.
@@ -239,18 +281,50 @@ func (r *Room) handleSyncMessage(sender *Peer, frame []byte) {
 		return
 	}
 
-	r.ydocMu.Lock()
-	reply, applyErr := ysync.ApplySyncMessage(r.ydoc, syncMsg, nil)
-	r.ydocMu.Unlock()
+	r.engMu.Lock()
+	engineMsgType, reply, applyErr := r.engine.SyncMessage(context.Background(), r.documentID, syncMsg)
+	if applyErr == nil && engineMsgType == byte(ysync.MsgUpdate) {
+		r.dirty = true
+	}
+	r.engMu.Unlock()
+	_ = engineMsgType
+	// applyErr is non-fatal for Update frames. ygo's decoder rejects valid
+	// Yjs updates that contain Any tags it doesn't recognise (e.g. tag 122
+	// — bigint64, emitted by lib0). Dropping silently leaves peers desynced
+	// and lets a stale `r.ydoc` answer SyncStep1 with a SyncStep2 that
+	// rolls clients back. For Update frames we still broadcast and buffer
+	// the raw bytes so peers stay in sync and persistence can retry.
+	// SyncStep1/2 replies CAN'T be salvaged when apply fails because the
+	// reply itself comes from `r.ydoc`'s state, which is what failed.
 	if applyErr != nil {
-		slog.Warn("sync apply failed", "doc", r.documentID, "type", msgType, "err", applyErr)
-		return
+		// Hex-prefix dump helps identify the offending Any tag in the
+		// payload (lib0 emits tag 122 for bigint, which ygo v1.1.2 does
+		// not handle). Truncated to keep logs readable; full frame is
+		// needed to spot tags deep in nested objects.
+		preview := frame
+		if len(preview) > 1024 {
+			preview = preview[:1024]
+		}
+		slog.Warn("sync apply failed", "doc", r.documentID, "type", msgType, "err", applyErr, "frame_hex", fmt.Sprintf("%x", preview), "frame_len", len(frame))
+		if msgType != ysync.MsgUpdate {
+			return
+		}
+		// Fall through to the broadcast/buffer path with reply==nil.
 	}
 
 	if len(reply) > 0 {
 		framed := make([]byte, 1+len(reply))
 		framed[0] = msgTypeSync
 		copy(framed[1:], reply)
+		preview := framed
+		if len(preview) > 256 {
+			preview = preview[:256]
+		}
+		slog.Info("sync reply sent",
+			"doc", r.documentID,
+			"in_msg_type", msgType,
+			"reply_len", len(framed),
+			"reply_hex", fmt.Sprintf("%x", preview))
 		sender.Send(framed)
 	}
 
@@ -364,7 +438,9 @@ func encodeVersionCreatedMessage(entry *spi.VersionListEntry) []byte {
 	return msg
 }
 
-// Close cleans up the room when it's being removed.
+// Close cleans up the room when it's being removed. Closes the engine
+// doc to release per-room state held in the sidecar (or in the
+// in-process ygo store).
 func (r *Room) Close() {
 	r.closeOnce.Do(func() {
 		close(r.closeCh)
@@ -374,5 +450,19 @@ func (r *Room) Close() {
 			p.Close()
 		}
 		r.mu.RUnlock()
+
+		// Release per-doc state in the engine. Errors are logged but
+		// don't block shutdown — the engine's process may already be
+		// gone or the doc may already be closed.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := r.engine.Close(ctx, r.documentID); err != nil {
+			slog.Warn("engine.Close failed", "doc", r.documentID, "err", err)
+		}
 	})
 }
+
+// Engine exposes the room's engine handle. Used by the supervisor's
+// reconnect hook to re-bootstrap state into a fresh sidecar after a
+// crash. Per-doc serialisation is still the caller's responsibility.
+func (r *Room) Engine() yjsengine.Engine { return r.engine }

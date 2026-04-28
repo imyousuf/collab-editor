@@ -104,10 +104,15 @@ func main() {
 		slog.Error("unknown engine.kind", "kind", cfg.Engine.Kind)
 		os.Exit(1)
 	}
-	_ = sidecarSup // wired into Room via the Server in C5
-
-	// Create server
-	srv := relay.NewServer(&cfg, providerClient, breaker, metrics)
+	// Create server. When the sidecar is configured, hand it the
+	// supervised Engine; otherwise the Server falls back to an
+	// in-process ygo engine.
+	var srv *relay.Server
+	if sidecarSup != nil {
+		srv = relay.NewServerWithEngine(&cfg, providerClient, breaker, metrics, sidecarSup.Engine())
+	} else {
+		srv = relay.NewServer(&cfg, providerClient, breaker, metrics)
+	}
 
 	// Set up Redis broker and flush lock if enabled
 	if cfg.Redis.Enabled {

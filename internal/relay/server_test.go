@@ -14,6 +14,19 @@ import (
 	"github.com/reearth/ygo/crdt"
 )
 
+// getRoomText asks the room's engine for the named Y.Text (the
+// post-engine-refactor replacement for direct `room.ydoc.GetText(...)`
+// reads in tests). Failures fail the test — engines we use here are
+// in-process YgoEngines that don't error on healthy reads.
+func getRoomText(t *testing.T, room *Room) string {
+	t.Helper()
+	got, err := room.Engine().GetText(context.Background(), room.documentID, sharedTextName)
+	if err != nil {
+		t.Fatalf("engine.GetText: %v", err)
+	}
+	return got
+}
+
 // --- Stubs ---
 
 type stubStateStore struct {
@@ -106,7 +119,7 @@ func TestServer_BootstrapRoom_PrefersSnapshotOverProvider(t *testing.T) {
 	srv, provider, _ := newTestServer(t, "from provider")
 
 	// Seed a snapshot representing "from snapshot".
-	seed := crdt.New(crdt.WithClientID(serverClientID))
+	seed := crdt.New(crdt.WithClientID(crdt.ClientID(ServerClientID)))
 	seedText := seed.GetText(sharedTextName)
 	seed.Transact(func(txn *crdt.Transaction) {
 		seedText.Insert(txn, 0, "from snapshot", nil)
@@ -114,10 +127,10 @@ func TestServer_BootstrapRoom_PrefersSnapshotOverProvider(t *testing.T) {
 	stub := &stubStateStore{snapshot: seed.EncodeStateAsUpdate()}
 	srv.SetStateStore(stub)
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
-	if got := room.ydoc.GetText(sharedTextName).ToString(); got != "from snapshot" {
+	if got := getRoomText(t, room); got != "from snapshot" {
 		t.Errorf("content: got %q, want %q (snapshot must win over provider)", got, "from snapshot")
 	}
 	if got := provider.loadCalls.Load(); got != 0 {
@@ -140,10 +153,10 @@ func TestServer_BootstrapRoom_FallsBackToProviderWhenNoSnapshot(t *testing.T) {
 	stub := &stubStateStore{} // no snapshot
 	srv.SetStateStore(stub)
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
-	if got := room.ydoc.GetText(sharedTextName).ToString(); got != "from provider" {
+	if got := getRoomText(t, room); got != "from provider" {
 		t.Errorf("content: got %q, want %q", got, "from provider")
 	}
 	if got := provider.loadCalls.Load(); got != 1 {
@@ -161,7 +174,7 @@ func TestServer_BootstrapRoom_ReplaysLogTailOnTopOfSnapshot(t *testing.T) {
 	// between flush-time and pod-boot-time would be missing.
 	srv, _, _ := newTestServer(t, "ignored")
 
-	seed := crdt.New(crdt.WithClientID(serverClientID))
+	seed := crdt.New(crdt.WithClientID(crdt.ClientID(ServerClientID)))
 	seedText := seed.GetText(sharedTextName)
 	seed.Transact(func(txn *crdt.Transaction) {
 		seedText.Insert(txn, 0, "snap ", nil)
@@ -176,10 +189,10 @@ func TestServer_BootstrapRoom_ReplaysLogTailOnTopOfSnapshot(t *testing.T) {
 	stub := &stubStateStore{snapshot: snap, logTail: [][]byte{tailEntry}}
 	srv.SetStateStore(stub)
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
-	if got := room.ydoc.GetText(sharedTextName).ToString(); got != "snap + tail" {
+	if got := getRoomText(t, room); got != "snap + tail" {
 		t.Errorf("log-tail replay: got %q, want %q", got, "snap + tail")
 	}
 }
@@ -192,10 +205,10 @@ func TestServer_BootstrapRoom_SnapshotErrorFallsThroughToProvider(t *testing.T) 
 	stub := &stubStateStore{readErr: context.DeadlineExceeded}
 	srv.SetStateStore(stub)
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
-	if got := room.ydoc.GetText(sharedTextName).ToString(); got != "from provider" {
+	if got := getRoomText(t, room); got != "from provider" {
 		t.Errorf("content on snapshot-read-error: got %q, want %q", got, "from provider")
 	}
 	if got := provider.loadCalls.Load(); got != 1 {
@@ -210,7 +223,7 @@ func TestServer_BootstrapRoom_InstallsStateStoreOnRoom(t *testing.T) {
 	stub := &stubStateStore{}
 	srv.SetStateStore(stub)
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
 	if room.stateStore != StateStore(stub) {
@@ -230,7 +243,7 @@ func TestServer_SetStateStore_WiresThroughToBootstrap(t *testing.T) {
 	stub := &stubStateStore{}
 	srv.SetStateStore(stub)
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
 	if room.stateStore != StateStore(stub) {
@@ -247,7 +260,7 @@ func TestServer_BootstrapRoom_FallsBackToNoopWhenStateStoreUnset(t *testing.T) {
 	srv, _, _ := newTestServer(t, "hello")
 	// Deliberately leave s.stateStore nil.
 
-	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics)
+	room := NewRoom("doc", srv.config.Room, srv.Flusher(), srv.metrics, nil)
 	srv.bootstrapRoom(context.Background(), room, "doc")
 
 	if room.stateStore == nil {
@@ -255,7 +268,7 @@ func TestServer_BootstrapRoom_FallsBackToNoopWhenStateStoreUnset(t *testing.T) {
 	}
 	// Noop ReadSnapshot returns nothing, so we should have fallen
 	// through to provider.
-	if got := room.ydoc.GetText(sharedTextName).ToString(); got != "hello" {
+	if got := getRoomText(t, room); got != "hello" {
 		t.Errorf("noop state store should have triggered provider load; got %q", got)
 	}
 }

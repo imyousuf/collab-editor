@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/imyousuf/collab-editor/internal/provider"
+	"github.com/imyousuf/collab-editor/internal/relay/yjsengine"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -24,7 +25,17 @@ type Server struct {
 	stateStore StateStore    // optional: durable event log + snapshot for multi-pod
 }
 
+// NewServer wires the Server with its dependencies. The engine is
+// optional — pass nil to fall back to an in-process ygo engine. Use
+// NewServerWithEngine when injecting the supervised sidecar engine
+// from cmd/relay/main.go.
 func NewServer(cfg *Config, providerClient *provider.Client, breaker *CircuitBreaker, metrics *Metrics) *Server {
+	return NewServerWithEngine(cfg, providerClient, breaker, metrics, nil)
+}
+
+// NewServerWithEngine is the engine-aware constructor used by main.go
+// when the relay is configured to run with the sidecar.
+func NewServerWithEngine(cfg *Config, providerClient *provider.Client, breaker *CircuitBreaker, metrics *Metrics, engine yjsengine.Engine) *Server {
 	flusher := NewFlusher(
 		providerClient, breaker, metrics,
 		cfg.Storage.Retry.MaxAttempts,
@@ -33,7 +44,7 @@ func NewServer(cfg *Config, providerClient *provider.Client, breaker *CircuitBre
 
 	return &Server{
 		config:   cfg,
-		rooms:    NewRoomManager(cfg.Room, flusher, metrics),
+		rooms:    NewRoomManager(cfg.Room, flusher, metrics, engine),
 		provider: providerClient,
 		breaker:  breaker,
 		metrics:  metrics,

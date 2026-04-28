@@ -272,26 +272,44 @@ func TestRedisStateStore_MultiPod_ColdStartHasCurrentState(t *testing.T) {
 
 // makeInsertAtEndUpdate modifies the room's Y.Doc by appending content
 // and returns the Yjs Update payload that represents the change.
+//
+// Implementation note: post-Engine-refactor the test reaches through
+// the Engine interface. We construct a sibling ygo Doc, prime it with
+// the engine's current state, mutate it locally, and ship the
+// resulting update back to the engine via ApplyUpdate. The returned
+// bytes are the full doc state (YATA dedupes on apply so this is
+// safe for test purposes).
 func makeInsertAtEndUpdate(t *testing.T, room *Room, content string) []byte {
 	t.Helper()
-	room.ydocMu.Lock()
-	defer room.ydocMu.Unlock()
-	before := room.ydoc.EncodeStateAsUpdate()
-	text := room.ydoc.GetText(sharedTextName)
-	room.ydoc.Transact(func(txn *crdt.Transaction) {
+	ctx := context.Background()
+	current, err := room.Engine().EncodeStateAsUpdate(ctx, room.documentID)
+	if err != nil {
+		t.Fatalf("engine.EncodeStateAsUpdate: %v", err)
+	}
+	tmp := crdt.New(crdt.WithClientID(crdt.ClientID(ServerClientID)))
+	if len(current) > 0 {
+		if err := tmp.ApplyUpdate(current); err != nil {
+			t.Fatalf("tmp.ApplyUpdate: %v", err)
+		}
+	}
+	text := tmp.GetText(sharedTextName)
+	tmp.Transact(func(txn *crdt.Transaction) {
 		text.Insert(txn, text.Len(), content, nil)
 	})
-	// Return the full state; YATA dedupes on apply so replaying full
-	// state entries is safe for test purposes.
-	_ = before
-	return room.ydoc.EncodeStateAsUpdate()
+	full := tmp.EncodeStateAsUpdate()
+	if err := room.Engine().ApplyUpdate(ctx, room.documentID, full); err != nil {
+		t.Fatalf("engine.ApplyUpdate: %v", err)
+	}
+	return full
 }
 
 func extractText(t *testing.T, room *Room) string {
 	t.Helper()
-	room.ydocMu.Lock()
-	defer room.ydocMu.Unlock()
-	return room.ydoc.GetText(sharedTextName).ToString()
+	got, err := room.Engine().GetText(context.Background(), room.documentID, sharedTextName)
+	if err != nil {
+		t.Fatalf("engine.GetText: %v", err)
+	}
+	return got
 }
 
 // recordingBroker captures Publish calls for side-effect tests.
