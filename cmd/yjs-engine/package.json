@@ -1,0 +1,18 @@
+{
+  "name": "@imyousuf/collab-editor-yjs-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Out-of-process Y.Doc host for the collab-editor relay. Speaks a length-prefixed binary protocol over a Unix domain socket; relay (Go) is the only client.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "yjs": "^13.6.18"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
