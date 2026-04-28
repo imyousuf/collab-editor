@@ -210,3 +210,61 @@ describe('SuggestEngine — destroy', () => {
     collab.destroy();
   });
 });
+
+describe('SuggestEngine — rebase (stale-baseline regression)', () => {
+  // Regression: while Suggest Mode is active, accepting a peer's
+  // suggestion mutates syncText (and via the replicator, editorText) but
+  // leaves _textAtEnable pointing at the pre-accept content. The next
+  // hasPendingChanges() call then false-positives, and the toolbar's
+  // "Exit" button surfaces a "submit pending suggestions?" prompt for
+  // changes the user never drafted. The fix is to rebase the engine's
+  // baseline to the post-accept state without leaving Suggest Mode.
+  test('rebase updates the captured baseline without exiting Suggest Mode', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    expect(engine.hasPendingChanges('hello earth')).toBe(true);
+
+    engine.rebase('hello earth');
+
+    expect(engine.hasPendingChanges('hello earth')).toBe(false);
+    expect(engine.isEnabled()).toBe(true);
+    expect(collab.replicator.outboundOpen).toBe(false);
+    collab.destroy();
+  });
+
+  test('rebase is a no-op when Suggest Mode is disabled', () => {
+    const { collab, engine } = setup();
+    engine.rebase('hello earth');
+    expect(engine.getBeforeText()).toBe('');
+    expect(engine.isEnabled()).toBe(false);
+    collab.destroy();
+  });
+
+  test('rebase preserves outbound gate (does NOT reopen it)', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    engine.rebase('hello earth');
+    // Gate must stay closed — the user is still drafting suggestions
+    // and we don't want their next keystroke to replicate.
+    expect(collab.replicator.outboundOpen).toBe(false);
+    collab.destroy();
+  });
+
+  test('hasPendingChanges flips back to true once the user drafts past the rebased baseline', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    engine.rebase('hello earth');
+    expect(engine.hasPendingChanges('hello earth!')).toBe(true);
+    collab.destroy();
+  });
+
+  test('buildSuggestion uses the rebased baseline as before-text', () => {
+    const { collab, engine } = setup('hello world');
+    engine.enable('hello world');
+    engine.rebase('hello earth');
+    const payload = engine.buildSuggestion(null, 'hello earth!');
+    expect(payload.view.before_text).toBe('');
+    expect(payload.view.after_text).toBe('!');
+    collab.destroy();
+  });
+});

@@ -79,6 +79,24 @@ export class SuggestEngine {
   }
 
   /**
+   * Update the captured baseline without exiting Suggest Mode.
+   *
+   * Why: when an external mutation lands on syncText (e.g. the reviewer
+   * accepts a peer's suggestion via `applyStringDiff`), the replicator
+   * mirrors it into editorText. The user did not draft that change, but
+   * `_textAtEnable` still points at the pre-mutation text, so the next
+   * `hasPendingChanges()` would false-positive and the toolbar's "Exit"
+   * button would surface a "submit pending suggestions?" prompt for
+   * changes the user never made. Callers re-baseline after the
+   * mutation so the engine tracks only genuine local drafts going
+   * forward. The outbound gate stays closed — Suggest Mode is unchanged.
+   */
+  rebase(newBaseline: string): void {
+    if (!this._enabled) return;
+    this._textAtEnable = newBaseline;
+  }
+
+  /**
    * Build a submission payload from the current editor text. Does NOT
    * reset the editor or reopen the gate — use `commit()` to do both.
    */

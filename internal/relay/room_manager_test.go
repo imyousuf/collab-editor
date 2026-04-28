@@ -36,7 +36,7 @@ func newTestRoomManager(t *testing.T) *RoomManager {
 		IdleTimeout:     100 * time.Millisecond,
 		MaxPeersPerRoom: 50,
 	}
-	return NewRoomManager(cfg, flusher, metrics)
+	return NewRoomManager(cfg, flusher, metrics, nil)
 }
 
 func TestRoomManager_GetOrCreate(t *testing.T) {

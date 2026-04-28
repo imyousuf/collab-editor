@@ -62,9 +62,12 @@ export class EditorToolbar extends LitElement {
   @property({ type: Boolean }) readonly: boolean = false;
   @property({ type: Boolean }) blameActive: boolean = false;
   @property({ type: Boolean }) blameAvailable: boolean = false;
+  @property({ type: Boolean }) blameDisabled: boolean = false;
   @property({ type: Boolean }) commentsAvailable: boolean = false;
+  @property({ type: Boolean }) commentAddDisabled: boolean = false;
   @property({ type: Boolean }) suggestAvailable: boolean = false;
   @property({ type: Boolean }) suggestActive: boolean = false;
+  @property({ type: Boolean }) suggestDisabled: boolean = false;
 
   static styles = css`
     :host {
@@ -212,7 +215,8 @@ export class EditorToolbar extends LitElement {
       <button
         class="fmt-btn"
         part="comment-button"
-        title="Add comment"
+        title="${this.commentAddDisabled ? 'Exit Blame or Suggest Mode to add a comment' : 'Add comment'}"
+        ?disabled=${this.commentAddDisabled}
         @click=${this._dispatchCommentAdd}
       >
         <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -225,7 +229,10 @@ export class EditorToolbar extends LitElement {
       <button
         class="fmt-btn ${this.suggestActive ? 'active' : ''}"
         part="suggest-button"
-        title="${this.suggestActive ? 'Exit Suggest Mode' : 'Enter Suggest Mode'}"
+        title="${this.suggestDisabled
+          ? 'Close Blame View or any open comment to enter Suggest Mode'
+          : this.suggestActive ? 'Exit Suggest Mode' : 'Enter Suggest Mode'}"
+        ?disabled=${this.suggestDisabled && !this.suggestActive}
         @click=${this._dispatchSuggestToggle}
       >
         <svg viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
@@ -330,7 +337,10 @@ export class EditorToolbar extends LitElement {
       <button
         class="fmt-btn ${this.blameActive ? 'active' : ''}"
         part="blame-button"
-        title="${this.blameActive ? 'Disable Blame View' : 'Enable Blame View'}"
+        title="${this.blameDisabled
+          ? 'Exit Suggest Mode or close any open comment to enable Blame View'
+          : this.blameActive ? 'Disable Blame View' : 'Enable Blame View'}"
+        ?disabled=${this.blameDisabled && !this.blameActive}
         @click=${this._dispatchBlameToggle}
       >
         <svg viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"></path></svg>

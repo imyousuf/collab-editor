@@ -1,6 +1,9 @@
 FROM golang:1.26-alpine AS builder
 WORKDIR /build
+# Mirrors relay.Dockerfile: third_party/ygo is the local patched ygo fork
+# referenced by `replace` in go.mod. Must be on disk before `go mod download`.
 COPY go.mod go.sum ./
+COPY third_party ./third_party
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /provider ./cmd/demo-provider

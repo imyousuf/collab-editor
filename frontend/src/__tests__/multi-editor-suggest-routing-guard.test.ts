@@ -143,6 +143,23 @@ describe('multi-editor suggest-mode wiring guard (syncDoc/editorDoc split)', () 
     );
   });
 
+  test('accept handler refreshes SuggestEngine baseline (stale-baseline regression)', () => {
+    // Regression: when a reviewer in Suggest Mode accepts a peer's
+    // suggestion, applyStringDiff lands on syncText and (via the
+    // replicator) editorText. The SuggestEngine's _textAtEnable stays
+    // pinned to the pre-accept text, so hasPendingChanges() then
+    // false-positives and the next toolbar "Exit" surfaces a
+    // "submit pending suggestions?" prompt for nothing. The fix is to
+    // call rebase() (or equivalent disable()/enable()) inside the
+    // accept handler after the diff lands.
+    const acceptStart = multiEditorSrc.indexOf(
+      'private async _handleCommentSuggestionAccept',
+    );
+    expect(acceptStart).toBeGreaterThan(0);
+    const acceptRegion = multiEditorSrc.slice(acceptStart, acceptStart + 3000);
+    expect(acceptRegion).toMatch(/this\._suggestEngine\.rebase\s*\(/);
+  });
+
   test('discard path calls SuggestEngine.discard (not engine.clear + rebind)', () => {
     // clear() was the old API. The new API is discard() which handles
     // reset + gate reopen internally.
