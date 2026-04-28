@@ -19,6 +19,33 @@ type Config struct {
 	Redis    RedisConfig    `koanf:"redis"`
 	Metrics  MetricsConfig  `koanf:"metrics"`
 	Log      LogConfig      `koanf:"log"`
+	Engine   EngineConfig   `koanf:"engine"`
+}
+
+// EngineConfig selects the per-room CRDT backend.
+//
+//   - kind="ygo"     — in-process reearth/ygo (default for now; will
+//                      flip to "sidecar" in a follow-up commit once
+//                      the deployment story is settled).
+//   - kind="sidecar" — out-of-process Node child running the canonical
+//                      yjs npm package, talked to over a Unix socket.
+//
+// Sidecar* fields apply only when kind="sidecar".
+type EngineConfig struct {
+	Kind            string        `koanf:"kind"`
+	SidecarNodeBin  string        `koanf:"sidecar_node_bin"`
+	SidecarDir      string        `koanf:"sidecar_dir"`
+	SidecarSocket   string        `koanf:"sidecar_socket"`
+	SidecarReadyTO  time.Duration `koanf:"sidecar_ready_timeout"`
+	SidecarRestart  RestartConfig `koanf:"sidecar_restart"`
+}
+
+// RestartConfig controls the sidecar supervisor's exponential-backoff
+// restart loop.
+type RestartConfig struct {
+	InitialBackoff       time.Duration `koanf:"initial_backoff"`
+	MaxBackoff           time.Duration `koanf:"max_backoff"`
+	MaxRestartsPerMinute int           `koanf:"max_restarts_per_minute"`
 }
 
 // CommentsConfig configures the optional Comments Provider the relay
@@ -133,6 +160,18 @@ func DefaultConfig() Config {
 		Log: LogConfig{
 			Level:  "info",
 			Format: "json",
+		},
+		Engine: EngineConfig{
+			Kind:           "ygo",
+			SidecarNodeBin: "node",
+			SidecarDir:     "/usr/local/share/collab-editor/yjs-engine",
+			SidecarSocket:  "/tmp/yjs-engine.sock",
+			SidecarReadyTO: 10 * time.Second,
+			SidecarRestart: RestartConfig{
+				InitialBackoff:       200 * time.Millisecond,
+				MaxBackoff:           10 * time.Second,
+				MaxRestartsPerMinute: 10,
+			},
 		},
 	}
 }

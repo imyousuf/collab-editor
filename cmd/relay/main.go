@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/imyousuf/collab-editor/internal/provider"
 	"github.com/imyousuf/collab-editor/internal/relay"
+	"github.com/imyousuf/collab-editor/internal/relay/yjsengine"
 	"github.com/imyousuf/collab-editor/pkg/spi"
 	"github.com/redis/go-redis/v9"
 )
@@ -71,6 +72,39 @@ func main() {
 		cfg.Storage.HealthCheck.Interval,
 		metrics,
 	)
+
+	// Engine: ygo (in-process) or sidecar (Node child running canonical
+	// yjs). Spawn the supervisor before the server so Room construction
+	// in C5 can grab the Engine via cfg or a wiring helper. The
+	// supervisor handles restart on crash and forwards sidecar
+	// stdout/stderr through slog.
+	var sidecarSup *yjsengine.Supervisor
+	switch cfg.Engine.Kind {
+	case "", "ygo":
+		// Default in-process backend; nothing to spawn.
+	case "sidecar":
+		sup, err := yjsengine.StartSupervisor(context.Background(), yjsengine.SupervisorConfig{
+			NodeBin:              cfg.Engine.SidecarNodeBin,
+			SidecarDir:           cfg.Engine.SidecarDir,
+			SocketPath:           cfg.Engine.SidecarSocket,
+			ReadyTimeout:         cfg.Engine.SidecarReadyTO,
+			InitialBackoff:       cfg.Engine.SidecarRestart.InitialBackoff,
+			MaxBackoff:           cfg.Engine.SidecarRestart.MaxBackoff,
+			MaxRestartsPerMinute: cfg.Engine.SidecarRestart.MaxRestartsPerMinute,
+			Logger:               slog.Default(),
+		})
+		if err != nil {
+			slog.Error("yjs-engine sidecar failed to start", "err", err)
+			os.Exit(1)
+		}
+		sidecarSup = sup
+		slog.Info("yjs-engine sidecar started",
+			"sock", cfg.Engine.SidecarSocket, "dir", cfg.Engine.SidecarDir)
+	default:
+		slog.Error("unknown engine.kind", "kind", cfg.Engine.Kind)
+		os.Exit(1)
+	}
+	_ = sidecarSup // wired into Room via the Server in C5
 
 	// Create server
 	srv := relay.NewServer(&cfg, providerClient, breaker, metrics)
@@ -328,6 +362,12 @@ func main() {
 
 	// Graceful shutdown: flush all rooms
 	srv.Shutdown()
+
+	if sidecarSup != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		_ = sidecarSup.Shutdown(shutdownCtx)
+	}
 
 	time.Sleep(100 * time.Millisecond) // Brief pause for final flushes
 	slog.Info("relay shutdown complete")
