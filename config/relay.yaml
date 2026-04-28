@@ -29,3 +29,17 @@ metrics:
 log:
   level: "info"
   format: "json"
+
+# CRDT engine: "sidecar" runs canonical yjs in a Node child for
+# wire-format parity with the browser; "ygo" uses the in-process Go
+# port (kept for bare-metal Go-only deploys without Node).
+engine:
+  kind: "sidecar"
+  sidecar_node_bin: "node"
+  sidecar_dir: "/usr/local/share/collab-editor/yjs-engine"
+  sidecar_socket: "/tmp/yjs-engine.sock"
+  sidecar_ready_timeout: 10s
+  sidecar_restart:
+    initial_backoff: 200ms
+    max_backoff: 10s
+    max_restarts_per_minute: 10

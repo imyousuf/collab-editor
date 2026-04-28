@@ -17,6 +17,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Node + the yjs-engine sidecar's deps. The relay's tests spawn
+      # the sidecar as a real child process; without these the
+      # sidecar contract tests skip (which is fine for local dev but
+      # we want full coverage in CI).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: cmd/yjs-engine/package-lock.json
+      - name: Install yjs-engine sidecar deps
+        working-directory: cmd/yjs-engine
+        run: npm ci --omit=dev
       - run: go mod download
       - run: go vet ./...
       - run: go test -race -count=1 ./...

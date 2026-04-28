@@ -162,7 +162,7 @@ func DefaultConfig() Config {
 			Format: "json",
 		},
 		Engine: EngineConfig{
-			Kind:           "ygo",
+			Kind:           "sidecar",
 			SidecarNodeBin: "node",
 			SidecarDir:     "/usr/local/share/collab-editor/yjs-engine",
 			SidecarSocket:  "/tmp/yjs-engine.sock",
