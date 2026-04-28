@@ -167,6 +167,98 @@ describe('comment-panel', () => {
     expect(acceptReceived?.threadId).toBe('t1');
   });
 
+  describe('orphaned suggestion (anchor lost after undo + GC)', () => {
+    // A pending suggestion whose anchor's underlying Y.Text items have
+    // been deleted (via accept-overwrite or undo+retype) and GC'd is
+    // "orphaned": resolveAnchor returns null and the quoted_text fallback
+    // can't find the original substring. Applying it would either no-op
+    // or splat into the wrong location. The panel surfaces this case
+    // explicitly: stale banner, Accept disabled, Reject swapped for
+    // Dismiss (decideSuggestion('not_applicable')).
+
+    function orphanedSuggestionThread() {
+      return makeThread({
+        suggestion: {
+          human_readable: {
+            summary: 'Change "1234" to "Hola!"',
+            before_text: '1234',
+            after_text: 'Hola!',
+            operations: [],
+          },
+          author_id: 'u1',
+          author_name: 'Alice',
+          status: 'pending',
+        } as any,
+      });
+    }
+
+    function suggestionsCaps() {
+      return {
+        comment_edit: false,
+        comment_delete: false,
+        reactions: [],
+        mentions: false,
+        suggestions: true,
+        max_comment_size: 10240,
+        poll_supported: false,
+      };
+    }
+
+    test('renders the stale banner when the orphaned flag is set', async () => {
+      const panel = await mountPanel({
+        thread: orphanedSuggestionThread(),
+        orphaned: true,
+      });
+      const banner = panel.shadowRoot!.querySelector('.suggestion-orphan-banner');
+      expect(banner, 'orphan banner should render').not.toBeNull();
+      expect(banner!.textContent ?? '').toMatch(/no longer apply|original text/i);
+    });
+
+    test('Accept button is disabled when orphaned', async () => {
+      const panel = await mountPanel({
+        thread: orphanedSuggestionThread(),
+        orphaned: true,
+      });
+      const accept = panel.shadowRoot!.querySelector(
+        '.suggestion-actions .primary',
+      ) as HTMLButtonElement | null;
+      // Either the button is rendered as disabled, or it's omitted
+      // entirely. Either is acceptable; the contract is "user cannot
+      // click Accept on an orphaned suggestion."
+      if (accept !== null) {
+        expect(accept.disabled).toBe(true);
+      }
+    });
+
+    test('Dismiss button fires comment-suggestion-dismiss with the threadId', async () => {
+      const panel = await mountPanel({
+        thread: orphanedSuggestionThread(),
+        capabilities: suggestionsCaps(),
+        orphaned: true,
+      });
+      let dismissed: any = null;
+      panel.addEventListener('comment-suggestion-dismiss', (e: any) => {
+        dismissed = e.detail;
+      });
+      const dismiss = panel.shadowRoot!.querySelector(
+        '.suggestion-actions .dismiss',
+      ) as HTMLButtonElement;
+      expect(dismiss, 'Dismiss button should render in place of Reject').not.toBeNull();
+      dismiss.click();
+      expect(dismissed?.threadId).toBe('t1');
+    });
+
+    test('non-orphaned thread does not render the banner or Dismiss', async () => {
+      const panel = await mountPanel({
+        thread: orphanedSuggestionThread(),
+        capabilities: suggestionsCaps(),
+        // No `orphaned` prop set → defaults to false.
+      });
+      expect(panel.shadowRoot!.querySelector('.suggestion-orphan-banner')).toBeNull();
+      expect(panel.shadowRoot!.querySelector('.suggestion-actions .dismiss')).toBeNull();
+    });
+  });
+
   test('@-mention autocomplete asks parent to resolve candidates', async () => {
     const panel = await mountPanel({ thread: makeThread() });
     panel.addEventListener('comment-mention-search', (e: any) => {

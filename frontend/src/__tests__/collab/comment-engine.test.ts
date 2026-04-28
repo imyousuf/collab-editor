@@ -136,6 +136,73 @@ describe('CommentEngine — anchors', () => {
   });
 });
 
+describe('CommentEngine — orphan detection (post-undo+GC suggestions)', () => {
+  // Regression: a suggestion's Y.RelativePosition can become dangling
+  // when the items it anchors to are deleted (e.g., via undo+retype or
+  // a later accept that overwrote the range) and Yjs's default GC
+  // removes them. resolveAnchor returns null in that case AND the
+  // quoted-text fallback can't find the original substring. The UX
+  // needs to detect this so the suggestion can be visually marked
+  // "stale" and the user given a one-click way to dismiss it.
+
+  test('isThreadOrphaned returns false for a thread with a live anchor', () => {
+    const { engine } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(6, 11); // "world"
+    const id = engine.createThread(anchor, startRel, endRel, 'hey', null);
+    expect(engine.isThreadOrphaned(id)).toBe(false);
+  });
+
+  test('isThreadOrphaned returns true when both relpos and quoted-text fallback fail', () => {
+    const { engine, ytext } = setup();
+    // Anchor "world" with quoted_text="world".
+    const { anchor, startRel, endRel } = engine.createAnchor(6, 11);
+    const id = engine.createThread(anchor, startRel, endRel, 'hey', null);
+
+    // Reproduce the post-accept-and-overwrite condition: clear the
+    // entire ytext and replace with content that DOES NOT contain
+    // "world". The original "world" items are deleted (and would be
+    // GC'd in a long-running doc); fuzzy substring search also fails.
+    ytext.delete(0, ytext.length);
+    ytext.insert(0, 'no match here');
+    expect(engine.isThreadOrphaned(id)).toBe(true);
+  });
+
+  test('isThreadOrphaned returns false for an unknown threadId (not orphan, just absent)', () => {
+    // Subtle but important: we don't want the orphan banner to flash
+    // when a thread id is briefly stale during a poll round-trip.
+    const { engine } = setup();
+    expect(engine.isThreadOrphaned('does-not-exist')).toBe(false);
+  });
+
+  test('isThreadOrphaned returns false when the relpos still resolves even after surrounding edits', () => {
+    const { engine, ytext } = setup();
+    const { anchor, startRel, endRel } = engine.createAnchor(6, 11);
+    const id = engine.createThread(anchor, startRel, endRel, 'hey', null);
+    // Insert text before AND after the anchor — anchored items still live.
+    ytext.insert(0, 'OH, ');
+    ytext.insert(ytext.length, '!!!');
+    expect(engine.isThreadOrphaned(id)).toBe(false);
+  });
+
+  test('isThreadOrphaned returns true when the relpos points at items that have been replaced (anchor lost, quoted-text gone)', () => {
+    // Mirrors the production reproduction: a suggestion was committed
+    // when the title held "1234" (so quoted_text="1234"); a later
+    // accept overwrote "1234" with "Hola"; the suggestion is now
+    // referencing items that have been tombstoned with no fuzzy match.
+    const { engine, ytext } = setup();
+    ytext.delete(0, ytext.length);
+    ytext.insert(0, '# Welcome 1234 done');
+    const { anchor, startRel, endRel } = engine.createAnchor(10, 14); // "1234"
+    const id = engine.createThread(anchor, startRel, endRel, 'note', null);
+
+    // Now replace "1234" with "Hola" (the production accept's diff).
+    ytext.delete(10, 4);
+    ytext.insert(10, 'Hola');
+
+    expect(engine.isThreadOrphaned(id)).toBe(true);
+  });
+});
+
 describe('CommentEngine — CRUD writes to Y.Map', () => {
   test('createThread inserts into Y.Map and fires listener', () => {
     const { ydoc, engine } = setup();

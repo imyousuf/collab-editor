@@ -44,6 +44,22 @@ export class CommentPanel extends LitElement {
    */
   @property({ attribute: false }) draftAnchor: { quoted_text: string } | null = null;
 
+  /**
+   * Whether the active thread's suggestion can no longer be applied
+   * because its anchor's `quoted_text` is gone from the document
+   * (post-undo + Yjs-GC, or overwritten by a later accept). When
+   * true and the thread holds a `pending` suggestion, the panel
+   * renders a "no longer applicable" banner, disables Accept, and
+   * swaps Reject for Dismiss (which dispatches
+   * `comment-suggestion-dismiss` so the parent can mark the
+   * suggestion `not_applicable`).
+   *
+   * The parent (multi-editor) computes this from
+   * `commentEngine.isThreadOrphaned(threadId)` whenever the active
+   * thread changes or the doc text changes.
+   */
+  @property({ type: Boolean }) orphaned = false;
+
   @state() private _replyDraft = '';
   @state() private _mentionOptions: MentionCandidate[] = [];
   @state() private _mentionActive = false;
@@ -115,6 +131,20 @@ export class CommentPanel extends LitElement {
       text-transform: uppercase;
       background: var(--me-suggest-badge-bg, #e3f2fd);
       color: var(--me-suggest-badge-color, #1565c0);
+    }
+    .suggestion-orphan-banner {
+      margin: 4px 0 8px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: var(--me-orphan-banner-bg, rgba(255, 167, 38, 0.12));
+      border-left: 3px solid var(--me-orphan-banner-border, #ffa726);
+      color: var(--me-orphan-banner-color, #663c00);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .suggestion-actions .dismiss {
+      border-color: var(--me-orphan-banner-border, #ffa726);
+      color: var(--me-orphan-banner-color, #663c00);
     }
     .suggestion-diff {
       display: grid;
@@ -292,6 +322,8 @@ export class CommentPanel extends LitElement {
 
   private _renderSuggestion(s: NonNullable<CommentThread['suggestion']>): TemplateResult {
     const canDecide = this.capabilities?.suggestions ?? false;
+    const isPending = s.status === 'pending';
+    const isOrphaned = isPending && this.orphaned;
     const decidedLabel =
       s.status === 'accepted' || s.status === 'rejected'
         ? `${s.status} by ${s.decided_by_name ?? s.decided_by ?? 'unknown'}`
@@ -309,11 +341,34 @@ export class CommentPanel extends LitElement {
           suggested by ${s.author_name || s.author_id || 'unknown'}
           ${decidedLabel ? html` · ${decidedLabel}` : nothing}
         </div>
-        ${s.status === 'pending' && canDecide
+        ${isOrphaned
+          ? html`
+              <div class="suggestion-orphan-banner" part="suggestion-orphan-banner">
+                The original text this suggestion targeted is no longer in
+                the document. It can no longer apply — Dismiss to clear it.
+              </div>
+            `
+          : nothing}
+        ${isPending && canDecide
           ? html`
               <div class="suggestion-actions">
-                <button class="primary" @click=${() => this._dispatch('comment-suggestion-accept', { threadId: this.thread?.id })}>Accept</button>
-                <button @click=${() => this._dispatch('comment-suggestion-reject', { threadId: this.thread?.id })}>Reject</button>
+                <button
+                  class="primary"
+                  ?disabled=${isOrphaned}
+                  @click=${() => this._dispatch('comment-suggestion-accept', { threadId: this.thread?.id })}
+                >Accept</button>
+                ${isOrphaned
+                  ? html`
+                      <button
+                        class="dismiss"
+                        @click=${() => this._dispatch('comment-suggestion-dismiss', { threadId: this.thread?.id })}
+                      >Dismiss</button>
+                    `
+                  : html`
+                      <button
+                        @click=${() => this._dispatch('comment-suggestion-reject', { threadId: this.thread?.id })}
+                      >Reject</button>
+                    `}
               </div>
             `
           : nothing}

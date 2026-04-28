@@ -685,6 +685,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
             : null}
           .capabilities=${this._commentCapabilities}
           .currentUserId=${this.collaboration?.user?.name ?? ''}
+          .orphaned=${this._activeCommentThread &&
+                       this._commentEngine?.isThreadOrphaned(
+                         this._activeCommentThread.id,
+                       ) === true}
           @comment-panel-close=${this._handleCommentPanelClose}
           @comment-reply=${this._handleCommentReply}
           @comment-thread-resolve=${this._handleCommentThreadResolve}
@@ -692,6 +696,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           @comment-thread-delete=${this._handleCommentThreadDelete}
           @comment-suggestion-accept=${this._handleCommentSuggestionAccept}
           @comment-suggestion-reject=${this._handleCommentSuggestionReject}
+          @comment-suggestion-dismiss=${this._handleCommentSuggestionDismiss}
           @comment-mention-search=${this._handleCommentMentionSearch}
           @comment-draft-submit=${this._handleCommentDraftSubmit}
           @comment-draft-cancel=${this._handleCommentDraftCancel}
@@ -715,9 +720,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
           .readonly=${this.readonly}
           .blameActive=${this._blameActive}
           .blameAvailable=${this._blameCoordinator.available}
+          .blameDisabled=${this._suggestActive || this._isCommentsModeActive()}
           .commentsAvailable=${this._commentsAvailable}
+          .commentAddDisabled=${this._blameActive || this._suggestActive}
           .suggestAvailable=${this._suggestAvailable}
           .suggestActive=${this._suggestActive}
+          .suggestDisabled=${this._blameActive || this._isCommentsModeActive()}
           @toolbar-command=${this._handleToolbarCommand}
           @toolbar-mode-switch=${this._handleToolbarModeSwitch}
           @toolbar-document-switch=${this._handleToolbarDocumentSwitch}
@@ -1105,7 +1113,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         (t) =>
           t.status === 'open' &&
           t.suggestion &&
-          t.suggestion.status === 'pending',
+          t.suggestion.status === 'pending' &&
+          // Drop orphans (post-undo+GC suggestions whose target text is
+          // no longer in the doc) from the pending list so the badge
+          // count reflects only applicable suggestions. Orphans remain
+          // discoverable via the comment thread itself; if the user
+          // opens one, the panel shows the stale banner + Dismiss.
+          !this._commentEngine!.isThreadOrphaned(t.id),
       );
     });
     this._commentCoordinator.attach(
@@ -1341,7 +1355,70 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleBlameToggle(e: CustomEvent): void {
+    if (e.detail.active) {
+      this._activateFeatureMode('blame');
+    }
     this._blameCoordinator.toggle(e.detail.active);
+  }
+
+  /**
+   * Whether comments-related UI currently owns the editor surface.
+   * Comments mode is "on" whenever a specific thread is open or one of
+   * the list panels (comments, pending suggestions) is shown — that's
+   * when the editor displays a preview, the panel, or filtered threads.
+   * Anchor decorations alone do NOT count: those are persistent and
+   * coexist with the other modes.
+   */
+  private _isCommentsModeActive(): boolean {
+    return (
+      this._activeCommentThread !== null ||
+      this._commentsListOpen ||
+      this._suggestionsListOpen
+    );
+  }
+
+  /**
+   * Switch the editor to a single feature mode, exiting the others.
+   *
+   * Why: Blame, Suggest Mode, and Comments mode each manipulate the
+   * editor surface in incompatible ways — blame paints decorations
+   * across the whole doc; suggest gates the replicator + treats edits
+   * as drafts; comments opens a thread panel and (for pending
+   * suggestions) applies a preview to editorDoc. Letting them stack
+   * produces decoration fights and ambiguous accept/reject targets.
+   *
+   * How to apply: every toggle handler that ENTERS one of these modes
+   * must call this method first. Handlers that EXIT a mode do not need
+   * to call it (they're shrinking the active set, not switching).
+   *
+   * Pending Suggest-Mode drafts: this method silently discards them.
+   * The toolbar disables conflicting buttons via `*Disabled` props so
+   * the user shouldn't normally reach this path with pending changes;
+   * if they do (e.g., via a keyboard shortcut or a future entry point),
+   * we choose data loss avoidance — silent discard — over confusing
+   * mode-switch behaviour. Add a confirm prompt here if the UX bites.
+   */
+  private _activateFeatureMode(mode: 'blame' | 'suggest' | 'comments'): void {
+    if (mode !== 'blame' && this._blameActive) {
+      this._blameCoordinator.toggle(false);
+    }
+    if (mode !== 'suggest' && this._suggestActive && this._suggestEngine) {
+      // Quietly discard any pending draft and exit. Toolbar disabling
+      // should make this branch rare in practice.
+      this._suggestEngine.discard();
+      this._suggestActive = false;
+      this._suggestPendingCount = 0;
+      this._commentCoordinator.setSuggestActive(false);
+    }
+    if (mode !== 'comments' && this._isCommentsModeActive()) {
+      this._activeCommentThread = null;
+      this._commentCoordinator.setActiveThread(null);
+      this._commentsListOpen = false;
+      this._suggestionsListOpen = false;
+      if (this._previewingThreadId) {
+        this._endSuggestionPreview();
+      }
+    }
   }
 
   // --- Comments + Suggest Mode event handlers ---
@@ -1355,6 +1432,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
    */
   private _setActiveCommentThread(thread: CommentThread | null): void {
     const nextId = thread?.id ?? null;
+    if (thread !== null) {
+      // Opening a thread enters comments mode — exit blame and any
+      // pending suggest draft before claiming the surface.
+      this._activateFeatureMode('comments');
+    }
     if (this._previewingThreadId && this._previewingThreadId !== nextId) {
       this._endSuggestionPreview();
     }
@@ -1590,6 +1672,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     if (!this._suggestEngine || !this._binding || !this._collabProvider) return;
     const active = !!e.detail.active;
     if (active) {
+      // Exit any conflicting feature mode (blame, open thread, list
+      // panels) before claiming the editor surface for drafting.
+      this._activateFeatureMode('suggest');
       // Close the replicator's outbound gate so local edits stay off the
       // wire. The editor continues to write to editorText — no rebind.
       // Pass the editor's current serialized form as the enable-time
@@ -1744,6 +1829,22 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
         Y.applyUpdate(this._collabProvider.syncDoc, payload);
       }
       this._commentEngine.decideSuggestion(threadId, 'accepted');
+
+      // The accept's text mutation propagates through editorDoc into the
+      // editor view (synchronously for source/preview bindings; via a
+      // microtask for the WYSIWYG TextBinding). If Suggest Mode is still
+      // active, the engine's _textAtEnable was captured before the
+      // mutation and now misreads the accepted text as a local draft.
+      // Re-baseline so hasPendingChanges() and the toolbar's Exit prompt
+      // reflect only genuine drafts.
+      if (this._suggestActive && this._suggestEngine && this._binding) {
+        // Drain Tiptap's queued ytext→editor sync so getCurrentSerialized
+        // reads the post-accept content, not the pre-accept snapshot.
+        await Promise.resolve();
+        if (this._suggestActive && this._suggestEngine && this._binding) {
+          this._suggestEngine.rebase(this._binding.getCurrentSerialized());
+        }
+      }
     } catch (err) {
       console.error('accept suggestion failed', err);
       this._commentEngine.decideSuggestion(threadId, 'not_applicable');
@@ -1755,8 +1856,27 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._setActiveCommentThread(null);
   }
 
+  /**
+   * Dismiss path for orphaned suggestions. Fired by the comment panel
+   * when the user clicks Dismiss on a suggestion whose anchor's
+   * `quoted_text` is no longer in the document (post-undo + Yjs-GC,
+   * or overwritten by a later accept). We mark it
+   * `not_applicable` — same status used by the accept handler when
+   * `tryApplyTextSuggestion` fails — so the orphan disappears from
+   * the pending list everywhere.
+   */
+  private _handleCommentSuggestionDismiss(e: CustomEvent): void {
+    this._commentEngine?.decideSuggestion(e.detail.threadId, 'not_applicable');
+    this._setActiveCommentThread(null);
+  }
+
   private _handleCommentsListToggle(): void {
-    this._commentsListOpen = !this._commentsListOpen;
+    const willOpen = !this._commentsListOpen;
+    if (willOpen) {
+      // Opening the panel enters comments mode — exit blame/suggest.
+      this._activateFeatureMode('comments');
+    }
+    this._commentsListOpen = willOpen;
     if (this._commentsListOpen) this._suggestionsListOpen = false;
   }
 
@@ -1765,7 +1885,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   }
 
   private _handleSuggestionsListToggle(): void {
-    this._suggestionsListOpen = !this._suggestionsListOpen;
+    const willOpen = !this._suggestionsListOpen;
+    if (willOpen) {
+      this._activateFeatureMode('comments');
+    }
+    this._suggestionsListOpen = willOpen;
     if (this._suggestionsListOpen) this._commentsListOpen = false;
   }
 

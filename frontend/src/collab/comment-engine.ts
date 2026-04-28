@@ -251,6 +251,58 @@ export class CommentEngine {
     return this.resolveAnchor(thread);
   }
 
+  /**
+   * Whether the thread's anchor is unresolvable in the current Y.Text.
+   *
+   * A suggestion becomes orphaned when EITHER:
+   *   (a) `resolveAnchor` returns null — both the stored
+   *       Y.RelativePosition and the fuzzy `quoted_text` fallback
+   *       failed (no match anywhere in current syncText), OR
+   *   (b) `resolveAnchor` returns a range, but the substring of
+   *       syncText at that range no longer matches the captured
+   *       `quoted_text`. This second case is the one that surfaced
+   *       in production: after the original items get tombstoned and
+   *       GC'd, Yjs's RelativePosition resolution still walks to a
+   *       nearby live position (often `from=0, to=N`) and pretends
+   *       to resolve. The substring check catches that.
+   *
+   * Production trigger: a user committed a suggestion against text
+   * "X"; later, an accept on a different suggestion (or an undo +
+   * retype that wrote through the same range) deleted the "X" items.
+   * After GC, isThreadOrphaned returns true and the panel renders a
+   * "no longer applicable" banner with a Dismiss action.
+   *
+   * Insert-only (zero-width) suggestions where `quoted_text` is empty
+   * are never reported as orphaned — the clamped fallback in
+   * `resolveAnchor` always returns a position, and we have no way to
+   * validate "this position is still meaningful" without more context.
+   *
+   * Returns false for unknown thread ids — those are typically just
+   * a brief stale state during a poll round-trip and shouldn't flash
+   * the orphan banner.
+   */
+  isThreadOrphaned(threadId: string): boolean {
+    const raw = this._ymap.get(threadId);
+    const thread = asStoredThread(raw);
+    if (!thread) return false;
+    const quoted = thread.anchor.quoted_text ?? '';
+    if (quoted.length === 0) {
+      // Insert-only (zero-width) suggestion — nothing to match against.
+      // The clamped fallback in resolveAnchor always returns a
+      // position, so by this definition such suggestions are never
+      // "orphaned": the user can still pick where to insert.
+      return false;
+    }
+    // The user-facing semantics: "I proposed changing X" is orphaned
+    // iff X is no longer anywhere in the document. We don't trust the
+    // RelativePosition's `index` here because lib0/yjs may walk to a
+    // neighbouring live position when the original items have been
+    // tombstoned-and-GC'd, so a "resolved" range can read entirely
+    // unrelated text. The substring search is the same primitive
+    // resolveAnchor's fuzzy fallback uses for orphan detection.
+    return !this._ytext.toString().includes(quoted);
+  }
+
   // --- Public: thread CRUD (writes to Y.Map, debounce-persists to SPI) ---
 
   /** Create a new thread. Returns the newly-generated thread id. */
