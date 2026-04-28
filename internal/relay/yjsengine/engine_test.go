@@ -11,20 +11,28 @@ import (
 )
 
 // engineFactory constructs a fresh Engine for one test. Each test gets
-// its own engine to keep state isolated; in C3 we'll add a sidecar
-// factory that boots a Node child against a temp socket.
+// its own engine to keep state isolated. C3 added the sidecar factory
+// (see sidecar_client_test.go) which spawns a Node child per-test.
 type engineFactory struct {
 	name string
 	make func(t *testing.T) yjsengine.Engine
 }
 
-// allEngines returns the set of factories the contract tests run
-// against. C3 will append a sidecar factory here.
-func allEngines() []engineFactory {
-	return []engineFactory{
-		{name: "ygo", make: func(*testing.T) yjsengine.Engine { return yjsengine.NewYgoEngine() }},
-	}
+// engineFactories holds the set of Engine implementations the contract
+// tests run against. Modified in init() by sidecar_client_test.go to
+// append the sidecar factory when its prerequisites are present.
+var engineFactories = []engineFactory{
+	{name: "ygo", make: func(*testing.T) yjsengine.Engine { return yjsengine.NewYgoEngine() }},
 }
+
+// addEngineFactory appends a factory. Called from init() in
+// sidecar_client_test.go — keep this loose so future implementations
+// can register themselves the same way.
+func addEngineFactory(f engineFactory) {
+	engineFactories = append(engineFactories, f)
+}
+
+func allEngines() []engineFactory { return engineFactories }
 
 // runContract invokes test against every Engine implementation. Use
 // t.Run subtests so each implementation reports its own pass/fail.
