@@ -20,11 +20,20 @@ import type {
   SuggestionOverlayRegion,
 } from '../interfaces/comments.js';
 import type { PendingSuggestOverlay } from '../interfaces/suggest.js';
+import { MermaidCodeBlock } from '../collab/mermaid-codeblock-extension.js';
+import type { MermaidEditRequestDetail } from '../collab/mermaid-codeblock-extension.js';
+import type { MermaidEditDialog } from '../toolbar/mermaid-edit-dialog.js';
 
 export interface WysiwygEditorOptions {
   readonly: boolean;
   theme: 'light' | 'dark';
   placeholder?: string;
+  /**
+   * When true (default), `language="mermaid"` fenced code blocks render
+   * as Mermaid diagrams with a pencil button → modal editor. When false,
+   * Mermaid blocks render as plain code blocks.
+   */
+  mermaidEnabled?: boolean;
 }
 
 /**
@@ -38,6 +47,13 @@ export class WysiwygEditorInstance {
   private _ready: Promise<void>;
   private _blameActive = false;
   private _commentsActive = false;
+  private _container: HTMLElement;
+  private _mermaidEnabled: boolean;
+  private _mermaidDialog: MermaidEditDialog | null = null;
+  private _mermaidEditRange: { from: number; to: number } | null = null;
+  private _onMermaidEditRequest = (e: Event) => this._handleMermaidEditRequest(e);
+  private _onMermaidSave = (e: Event) => this._handleMermaidSave(e);
+  private _onMermaidCancel = () => this._closeMermaidDialog();
   private _lastCommentState: {
     threads: CommentThread[];
     overlays: SuggestionOverlayRegion[];
@@ -52,12 +68,25 @@ export class WysiwygEditorInstance {
     options: WysiwygEditorOptions,
   ) {
     this._contentHandler = contentHandler;
+    this._container = container;
+    this._mermaidEnabled = options.mermaidEnabled !== false;
+
+    const extensions = this._mermaidEnabled
+      ? [StarterKit.configure({ codeBlock: false }), Markdown, MermaidCodeBlock]
+      : [StarterKit, Markdown];
 
     this._editor = new Editor({
       element: container,
-      extensions: [StarterKit, Markdown],
+      extensions,
       editable: !options.readonly,
     });
+
+    if (this._mermaidEnabled) {
+      // The mermaid node view dispatches `mermaid-edit-request` as a
+      // bubbling/composed CustomEvent; we listen on the editor's
+      // container so we get every block in this editor.
+      container.addEventListener('mermaid-edit-request', this._onMermaidEditRequest);
+    }
 
     // Wait for Tiptap to be fully initialized
     this._ready = new Promise<void>((resolve) => {
@@ -207,7 +236,67 @@ export class WysiwygEditorInstance {
   }
 
   destroy(): void {
+    if (this._mermaidEnabled) {
+      this._container.removeEventListener('mermaid-edit-request', this._onMermaidEditRequest);
+      this._closeMermaidDialog();
+    }
     this._editor.destroy();
     this._updateCallbacks.clear();
+  }
+
+  private _handleMermaidEditRequest(e: Event): void {
+    const detail = (e as CustomEvent<MermaidEditRequestDetail>).detail;
+    if (!detail) return;
+    this._mermaidEditRange = { from: detail.from, to: detail.to };
+    this._openMermaidDialog(detail.source);
+  }
+
+  private async _openMermaidDialog(source: string): Promise<void> {
+    if (!this._mermaidDialog) {
+      // Side-effect import registers the <mermaid-edit-dialog> custom element.
+      await import('../toolbar/mermaid-edit-dialog.js');
+      const el = document.createElement('mermaid-edit-dialog') as MermaidEditDialog;
+      el.addEventListener('mermaid-save', this._onMermaidSave);
+      el.addEventListener('mermaid-cancel', this._onMermaidCancel);
+      document.body.appendChild(el);
+      this._mermaidDialog = el;
+    }
+    this._mermaidDialog.source = source;
+    this._mermaidDialog.open = true;
+  }
+
+  private _closeMermaidDialog(): void {
+    if (!this._mermaidDialog) return;
+    this._mermaidDialog.open = false;
+    this._mermaidDialog.removeEventListener('mermaid-save', this._onMermaidSave);
+    this._mermaidDialog.removeEventListener('mermaid-cancel', this._onMermaidCancel);
+    this._mermaidDialog.remove();
+    this._mermaidDialog = null;
+    this._mermaidEditRange = null;
+  }
+
+  private _handleMermaidSave(e: Event): void {
+    const range = this._mermaidEditRange;
+    if (!range) {
+      this._closeMermaidDialog();
+      return;
+    }
+    const detail = (e as CustomEvent<{ source: string }>).detail;
+    const newSource = detail?.source ?? '';
+    const { state, view } = this._editor;
+    const { schema } = state;
+    const codeBlockType = schema.nodes.codeBlock;
+    if (!codeBlockType) {
+      this._closeMermaidDialog();
+      return;
+    }
+    // Replace the whole block (a stable replace at the node boundary
+    // keeps the language attribute and doesn't churn surrounding nodes).
+    const tr = state.tr;
+    const content = newSource.length > 0 ? schema.text(newSource) : null;
+    const node = codeBlockType.create({ language: 'mermaid' }, content);
+    tr.replaceRangeWith(range.from, range.to, node);
+    view.dispatch(tr);
+    this._closeMermaidDialog();
   }
 }

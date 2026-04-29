@@ -53,9 +53,16 @@ export class DualModeBinding
   private _remoteCallbacks = new Set<RemoteChangeCallback>();
   private _formattingCallbacks = new Set<(state: FormattingState) => void>();
 
-  constructor(contentHandler: IContentHandler, language: string) {
+  private _mermaidEnabled: boolean;
+
+  constructor(
+    contentHandler: IContentHandler,
+    language: string,
+    options?: { mermaidEnabled?: boolean },
+  ) {
     this._contentHandler = contentHandler;
     this._language = language;
+    this._mermaidEnabled = options?.mermaidEnabled !== false;
   }
 
   get activeMode(): EditorMode | null { return this._activeMode; }
@@ -97,7 +104,12 @@ export class DualModeBinding
     this._wysiwygEditor = new WysiwygEditorInstance(
       this._wysiwygContainer,
       this._contentHandler,
-      { readonly: options.readonly, theme: options.theme, placeholder: options.placeholder },
+      {
+        readonly: options.readonly,
+        theme: options.theme,
+        placeholder: options.placeholder,
+        mermaidEnabled: this._mermaidEnabled,
+      },
     );
     await this._wysiwygEditor.whenReady();
 
