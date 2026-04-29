@@ -1,0 +1,57 @@
+Navigate to http://localhost:3000
+Wait for the status indicator to show "Connected"
+Verify the document dropdown shows "welcome.md" as the selected option
+
+Click the "Source" button to switch to source mode
+Click into the source editor
+Press Control+a then Delete to clear all content
+Type "# Mermaid demo"
+Press Enter twice
+Type "```mermaid"
+Press Enter
+Type "graph TD"
+Press Enter
+Type "  A-->B"
+Press Enter
+Type "  B-->C"
+Press Enter
+Type "```"
+Press Enter
+
+Click the "WYSIWYG" button to switch to WYSIWYG mode
+Wait 1 second for the Mermaid runtime to load and render
+Verify a rendered SVG diagram is visible inside the WYSIWYG editor (look for the .me-mermaid-block element with an <svg> child)
+Verify the rendered diagram contains nodes labelled "A", "B", and "C"
+
+Hover over the rendered Mermaid diagram
+Verify a small pencil-shaped edit button appears in the top-right corner of the block (the .me-mermaid-edit-btn element)
+Click the pencil edit button
+Verify a modal dialog appears titled "Edit Mermaid diagram"
+Verify the modal's textarea contains the original source: "graph TD" with "A-->B" and "B-->C"
+Verify the modal's preview pane shows a rendered SVG of the same diagram
+
+Click into the textarea
+Press Control+a then Delete to clear it
+Type "graph LR"
+Press Enter
+Type "  X-->Y"
+Press Enter
+Type "  Y-->Z"
+Wait 500 milliseconds for the live preview to debounce and re-render
+Verify the modal's preview pane updates to show the new diagram with X, Y, Z nodes
+
+Click the "Save" button in the modal
+Verify the modal closes
+Verify the rendered SVG inside the WYSIWYG editor updates to show the X-->Y-->Z diagram
+
+Click the "Source" button to switch back to source mode
+Verify the source editor shows the updated fenced block: "```mermaid" then "graph LR" then "  X-->Y" then "  Y-->Z" then "```"
+Verify the source no longer contains the original "A-->B" or "B-->C" content
+
+Click the "WYSIWYG" button to switch to WYSIWYG mode again
+Hover the Mermaid block and click the pencil edit button
+Verify the modal opens with the updated source
+
+Press the Escape key
+Verify the modal closes without modifying the diagram
+Verify the rendered SVG still shows the X-->Y-->Z diagram (Cancel did not save changes)
