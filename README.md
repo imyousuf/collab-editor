@@ -1,6 +1,6 @@
 # collab-editor
 
-A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agnostic web component with a Go relay server and multi-language provider SDKs.
+A real-time collaborative editor built on Yjs CRDTs, packaged as a framework-agnostic web component with a Go relay server (with a Node yjs-engine sidecar for canonical CRDT semantics on the wire) and multi-language provider SDKs.
 
 ## Features
 
@@ -30,23 +30,27 @@ docker compose up --build
 
 ```
 Browser ──WebSocket──> Go Relay ──HTTP──> Storage Provider (SPI)
-                           │
-                      Redis pub/sub
-                    (multi-instance)
+                          │  │
+                          │  └── unix socket ──> yjs-engine sidecar (Node)
+                          │                      (canonical Y.Doc per room)
+                          │
+                       Redis pub/sub
+                     (multi-instance)
 
 Browser ──Socket.io──> ws-gateway ──gRPC──> Go Relay
 ```
 
-**Four components:**
+**Five components:**
 
 | Component | Language | Purpose |
 |-----------|----------|---------|
 | `<multi-editor>` | TypeScript (Lit) | Web component with Tiptap + CodeMirror + Yjs |
 | Relay Server | Go | WebSocket + gRPC relay, room management, buffer/flush |
+| yjs-engine Sidecar | Node.js | Out-of-process Y.Doc host on Unix socket; canonical lib0/yjs wire format |
 | Storage Provider | Any | REST SPI for document persistence |
 | Provider SDKs | Go, TS, Python | Handle Yjs diffs, HTTP routing, Y.Doc caching |
 
-The relay is stateless — it does NOT maintain server-side Y.Docs. Peers sync directly through it via the y-websocket protocol. All persistence is delegated to the storage provider via HTTP REST.
+The relay forwards live wire traffic through the sidecar so per-room Y.Doc state uses canonical lib0/yjs semantics. Persistence is delegated to the storage provider via HTTP REST. See [Document Flow Architecture](docs/architecture-doc-flow.md) for the browser-side state model (`syncDoc` / `editorDoc` / replicator gate) and [`cmd/yjs-engine/README.md`](cmd/yjs-engine/README.md) for the sidecar's protocol.
 
 ## Usage
 
@@ -212,11 +216,11 @@ make proto              # Generate gRPC stubs (requires buf CLI)
 cd frontend && npm install
 npm run dev             # Dev server on :5173
 npm run build           # Production build (tsc + vite)
-npm test                # Run vitest (269 tests)
+npm test                # Run vitest (656 tests)
 
 # Provider SDKs
-cd packages/provider-sdk-ts && npm test    # 41 tests
-cd packages/provider-sdk-py && pytest -v   # 52 tests
+cd packages/provider-sdk-ts && npm test    # 60 tests
+cd packages/provider-sdk-py && pytest -v   # 69 tests
 cd packages/grpc-client-ts && npm test     # 4 tests
 
 # Full stack
@@ -249,17 +253,22 @@ CI publishes `:dev` / `@dev` on every push to main. Release tags publish version
 | React Wrapper | @lit/react |
 | JSX/TSX Preview | Babel standalone + React 18 (iframe) |
 | Relay Server | Go (coder/websocket, gRPC, chi, koanf, Prometheus) |
+| Y.Doc host (relay-side) | Node sidecar running canonical `yjs` over a Unix socket |
 | Multi-instance | Redis pub/sub (go-redis) |
 | Provider SDK (TS) | yjs + lib0 (Yjs diff application) |
 | Provider SDK (Py) | pycrdt (Rust Yjs bindings) |
-| Provider SDK (Go) | net/http (opaque update passthrough) |
-| Frontend Tests | Vitest (269 tests across 14 files) |
+| Provider SDK (Go) | reearth/ygo (locally patched in `third_party/ygo` for SDK flush-time text resolution) |
+| Frontend Tests | Vitest (656 tests across 39 files) |
 | Backend Tests | Go testing + miniredis |
 | CI/CD | GitHub Actions (CI, npm publish, PyPI publish, Docker publish, proto lint) |
 
 ## Documentation
 
+- [Document Flow Architecture](docs/architecture-doc-flow.md) — Browser-side three-layer model: Y.Text canonical → `syncDoc` on the wire → `editorDoc` fronted by the replicator gate. Read this before touching the editor or Suggest Mode internals.
 - [Provider SDK Guide](docs/provider-sdk.md) — Go, TypeScript, Python SDKs for building storage providers
+- [yjs-engine Sidecar](cmd/yjs-engine/README.md) — Node sidecar protocol: relay ↔ Y.Doc over Unix socket
+- [SDK Y.Map LWW Audit](docs/sdk-ymap-lww-audit.md) — Risk audit confirming the SDK side is unaffected by the ygo divergence that drove the sidecar pivot
+- [Open Items](docs/Open_Items.md) — Known limitations and trade-offs to monitor
 - [HTTP Storage Provider SPI](docs/research/collab-editor-http-spi.md) — Full REST contract specification
 - [Editor Architecture Research](docs/research/collaborative-editor-architecture.md) — Design decisions and architecture overview
 

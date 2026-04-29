@@ -81,7 +81,17 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _formattingState: FormattingState = emptyFormattingState();
   @state() private _availableCommands: FormattingCommand[] = [];
   @state() private _collaborators: CollaboratorInfo[] = [];
-  @state() private _blameActive = false;
+  /**
+   * Single source of truth for the Blame ⊥ Suggest ⊥ Comments mutex.
+   * The three modes own the editor surface in incompatible ways
+   * (decorations, replicator gate, preview), so at most one is active.
+   * `_blameActive`, `_suggestActive`, and `_isCommentsModeActive()` are
+   * derived from this. Comments mode has independent sub-state
+   * (`_activeCommentThread`, `_commentsListOpen`, `_suggestionsListOpen`)
+   * tracked separately; entering any of them flips this to 'comments',
+   * and emptying all of them flips it back to 'none'.
+   */
+  @state() private _activeFeatureMode: 'none' | 'blame' | 'suggest' | 'comments' = 'none';
   @state() private _versionPanelOpen = false;
   @state() private _versions: VersionListEntry[] = [];
   @state() private _selectedVersion: VersionEntry | null = null;
@@ -89,7 +99,6 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @state() private _viewingVersion = false;
   @state() private _commentsAvailable = false;
   @state() private _suggestAvailable = false;
-  @state() private _suggestActive = false;
   @state() private _suggestPendingCount = 0;
   /** When set, renders the submit-suggestion modal with a note field. */
   @state() private _suggestNoteModalOpen = false;
@@ -121,6 +130,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     startRel: Uint8Array;
     endRel: Uint8Array;
   } | null = null;
+
+  private get _blameActive(): boolean {
+    return this._activeFeatureMode === 'blame';
+  }
+  private get _suggestActive(): boolean {
+    return this._activeFeatureMode === 'suggest';
+  }
 
   private _factory: EditorBindingFactory;
   private _binding: IEditorBinding | null = null;
@@ -854,7 +870,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     // Tear down previous state
     this._blameCoordinator.detach();
-    this._blameActive = false;
+    this._activeFeatureMode = 'none';
     this._versionCoordinator.detach();
     this._versionPanelOpen = false;
     this._viewingVersion = false;
@@ -878,7 +894,6 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     this._suggestionsListOpen = false;
     this._commentsAvailable = false;
     this._suggestAvailable = false;
-    this._suggestActive = false;
     this._suggestPendingCount = 0;
     this._binding?.destroy();
     this._binding = null;
@@ -972,7 +987,16 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       const docId = config.collaboration.roomName;
 
       // Blame coordinator — walks items on the editor doc (what the user sees).
-      this._blameCoordinator.onActiveChange((active) => { this._blameActive = active; });
+      // Mirror coordinator state into the feature-mode mutex. We only flip
+      // mode='blame' when activating; deactivation drops to 'none' only if
+      // we were in blame (avoids stomping a transition into another mode).
+      this._blameCoordinator.onActiveChange((active) => {
+        if (active) {
+          this._activeFeatureMode = 'blame';
+        } else if (this._activeFeatureMode === 'blame') {
+          this._activeFeatureMode = 'none';
+        }
+      });
       this._blameCoordinator.attach(
         this._binding,
         this._collabProvider.editorDoc,
@@ -1363,18 +1387,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   /**
    * Whether comments-related UI currently owns the editor surface.
-   * Comments mode is "on" whenever a specific thread is open or one of
-   * the list panels (comments, pending suggestions) is shown — that's
-   * when the editor displays a preview, the panel, or filtered threads.
+   * Derived from the mutex enum; comments mode is entered whenever a
+   * thread or list panel opens, and auto-exits via
+   * `_maybeExitCommentsMode` when all sub-state empties.
    * Anchor decorations alone do NOT count: those are persistent and
    * coexist with the other modes.
    */
   private _isCommentsModeActive(): boolean {
-    return (
-      this._activeCommentThread !== null ||
-      this._commentsListOpen ||
-      this._suggestionsListOpen
-    );
+    return this._activeFeatureMode === 'comments';
   }
 
   /**
@@ -1399,18 +1419,21 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
    * mode-switch behaviour. Add a confirm prompt here if the UX bites.
    */
   private _activateFeatureMode(mode: 'blame' | 'suggest' | 'comments'): void {
-    if (mode !== 'blame' && this._blameActive) {
+    const prev = this._activeFeatureMode;
+    if (prev === mode) return;
+    // Set the new mode FIRST so callbacks (e.g. blame coordinator's
+    // onActiveChange firing during exit-cleanup) see the post-transition
+    // value and don't stomp it back to 'none'.
+    this._activeFeatureMode = mode;
+    if (prev === 'blame') {
       this._blameCoordinator.toggle(false);
-    }
-    if (mode !== 'suggest' && this._suggestActive && this._suggestEngine) {
-      // Quietly discard any pending draft and exit. Toolbar disabling
-      // should make this branch rare in practice.
+    } else if (prev === 'suggest' && this._suggestEngine) {
+      // Quietly discard any pending draft. Toolbar disabling should
+      // make this branch rare in practice.
       this._suggestEngine.discard();
-      this._suggestActive = false;
       this._suggestPendingCount = 0;
       this._commentCoordinator.setSuggestActive(false);
-    }
-    if (mode !== 'comments' && this._isCommentsModeActive()) {
+    } else if (prev === 'comments') {
       this._activeCommentThread = null;
       this._commentCoordinator.setActiveThread(null);
       this._commentsListOpen = false;
@@ -1418,6 +1441,23 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       if (this._previewingThreadId) {
         this._endSuggestionPreview();
       }
+    }
+  }
+
+  /**
+   * If we're in comments mode but every comments sub-state has emptied
+   * (no active thread, both list panels closed), drop back to 'none' so
+   * the toolbar mutex releases blame/suggest. Call after any close path
+   * that clears one of the three sub-states.
+   */
+  private _maybeExitCommentsMode(): void {
+    if (
+      this._activeFeatureMode === 'comments' &&
+      this._activeCommentThread === null &&
+      !this._commentsListOpen &&
+      !this._suggestionsListOpen
+    ) {
+      this._activeFeatureMode = 'none';
     }
   }
 
@@ -1442,6 +1482,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     }
     this._activeCommentThread = thread;
     this._commentCoordinator.setActiveThread(nextId);
+    if (thread === null) this._maybeExitCommentsMode();
     if (!thread || !thread.suggestion || thread.suggestion.status !== 'pending') return;
     if (this._previewingThreadId === thread.id) return;
     // Preview is safe when the reviewer (a) is not in Suggest Mode at
@@ -1682,7 +1723,6 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       // (same serializer on both sides).
       const currentText = this._binding.getCurrentSerialized();
       this._suggestEngine.enable(currentText);
-      this._suggestActive = true;
       this._commentCoordinator.setSuggestActive(true);
       // Clicking the Suggest-Mode toggle button transferred focus to
       // the toolbar. Restore it so the first keystroke lands on the
@@ -1703,7 +1743,7 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       } else {
         this._suggestEngine.disable();
       }
-      this._suggestActive = false;
+      this._activeFeatureMode = 'none';
       this._suggestPendingCount = 0;
       this._commentCoordinator.setSuggestActive(false);
     }
@@ -1878,10 +1918,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     }
     this._commentsListOpen = willOpen;
     if (this._commentsListOpen) this._suggestionsListOpen = false;
+    this._maybeExitCommentsMode();
   }
 
   private _handleCommentsListClose(): void {
     this._commentsListOpen = false;
+    this._maybeExitCommentsMode();
   }
 
   private _handleSuggestionsListToggle(): void {
@@ -1891,10 +1933,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     }
     this._suggestionsListOpen = willOpen;
     if (this._suggestionsListOpen) this._commentsListOpen = false;
+    this._maybeExitCommentsMode();
   }
 
   private _handleSuggestionsListClose(): void {
     this._suggestionsListOpen = false;
+    this._maybeExitCommentsMode();
   }
 
   private _handlePendingSuggestionActivate(e: CustomEvent): void {

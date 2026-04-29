@@ -2,18 +2,25 @@
 
 ## Project Overview
 
-A collaborative editor system with five components:
+A collaborative editor system with six components:
 1. **Web Component** (`<multi-editor>`) — Lit-based custom element with Tiptap v3 (WYSIWYG) and CodeMirror 6 (source editing), using Yjs CRDTs for real-time collaboration. Built-in configurable toolbar, status bar, formatting buttons, document switcher, collaborator presence, threaded inline comments, and Google-Docs-style Suggest Mode.
-2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Persistence delegated to an external HTTP storage provider via the SDK; comments are proxied to an independent HTTP comments provider.
-3. **Storage Provider SPI** — Pluggable, **Yjs-agnostic** REST API contract for document persistence (any language, any backend). Providers receive resolved plain text content on Store and return it on Load. No Yjs concepts in the SPI — the SDKs handle all CRDT internals. Document IDs passed via `?path=` query parameter.
-4. **Comments Provider SPI** — Separate, **Yjs-free** REST API contract for threaded comments + suggestion persistence. A suggestion's `yjs_payload` is stored as an opaque base64 string; the provider never decodes it. Applying a suggestion on Accept is a frontend-only action (`Y.applyUpdate` on the base Y.Doc propagates the change via normal y-websocket sync).
-5. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs. Storage modules include Y.js engines for diff resolution + caching. Comments modules are plain REST + JSON — no Yjs dependency.
+2. **Go Relay Server** — Manages document rooms and broadcasts Yjs updates between peers via WebSocket and gRPC transports. Redis pub/sub for multi-instance scaling. Per-room Y.Doc state is hosted out-of-process in the yjs-engine sidecar (canonical lib0/yjs) reached via Unix socket. Persistence delegated to an external HTTP storage provider via the SDK; comments are proxied to an independent HTTP comments provider.
+3. **yjs-engine Sidecar** — Node.js child process bundled in the relay container. Hosts one canonical `Y.Doc` per room and answers length-prefixed binary frames (`OPEN`, `APPLY_UPDATE`, `SYNC_MESSAGE`, `ENCODE_STATE`, `ENCODE_SV`, `GET_TEXT`, `PING`) over a Unix socket. Pure applier — never originates writes; bootstrap inserts are encoded by the Go side using ygo (with `clientID=1`) and shipped via `APPLY_UPDATE`. Replaces the relay's earlier in-process `reearth/ygo` for the live wire path; the SDK side still uses ygo for SPI flush-time text resolution.
+4. **Storage Provider SPI** — Pluggable, **Yjs-agnostic** REST API contract for document persistence (any language, any backend). Providers receive resolved plain text content on Store and return it on Load. No Yjs concepts in the SPI — the SDKs handle all CRDT internals. Document IDs passed via `?path=` query parameter.
+5. **Comments Provider SPI** — Separate, **Yjs-free** REST API contract for threaded comments + suggestion persistence. A suggestion's `yjs_payload` is stored as an opaque base64 string; the provider never decodes it. Applying a suggestion on Accept is a frontend-only action (`Y.applyUpdate` on the base Y.Doc propagates the change via normal y-websocket sync).
+6. **Provider SDKs** — Go (`pkg/spi`), TypeScript (`packages/provider-sdk-ts`), and Python (`packages/provider-sdk-py`) SDKs. Storage modules include Y.js engines for diff resolution + caching. Comments modules are plain REST + JSON — no Yjs dependency.
+
+See [`docs/architecture-doc-flow.md`](docs/architecture-doc-flow.md) for the browser-side `syncDoc` / `editorDoc` / replicator-gate model that drives Suggest Mode and remote sync.
 
 ## Project Structure
 
 ```
 cmd/relay/             — Go relay server entrypoint
 cmd/demo-provider/     — Demo storage provider (reference implementation using Go SDK)
+cmd/yjs-engine/        — Node.js yjs-engine sidecar (canonical Y.Doc host on a Unix socket)
+  index.js             — Sidecar binary: protocol switch, one Y.Doc per docID
+  test.js              — Manual driver against the sidecar protocol
+  README.md            — Protocol spec (frame format, op codes, error codes)
 pkg/spi/               — Go provider SDK: Provider interface, ProviderProcessor, YDocEngine,
                          NewHTTPHandler(), CommentsProvider + NewCommentsHTTPHandler, types
   ydoc_engine.go       — YDocEngine interface (swappable Y.js abstraction)
@@ -35,6 +42,12 @@ internal/relay/        — Relay server: transport, rooms, peers, buffer, flush,
   redis_broker.go      — Redis pub/sub implementation
   flush_lock.go        — FlushLock interface (local + Redis implementations)
   redis_flush_lock.go  — Redis SETNX distributed flush lock
+  yjsengine/           — Engine interface + implementations (sidecar + ygo fallback)
+    engine.go          — Engine interface: Open/Close/ApplyUpdate/SyncMessage/...
+    sidecar_client.go  — SidecarEngine: Unix-socket client to cmd/yjs-engine/
+    supervisor.go      — Spawns + restarts the Node child; pipes logs through slog
+    protocol.go        — Frame codec (length-prefixed, versioned)
+    ygo_engine.go      — YgoEngine: in-process reearth/ygo fallback (engine.kind=ygo)
 internal/provider/     — HTTP clients for both SPIs
   client.go            — Storage Provider client
   comments_client.go   — Comments Provider client (used by the relay proxy)
@@ -99,7 +112,17 @@ docker/                — Dockerfiles and nginx config
 examples/basic/        — Docker Compose example with seed documents
 examples/react-app/    — React integration example
 tests/e2e/             — ATR browser test files
-docs/                  — Provider SDK guide and SPI contract spec
+third_party/ygo/       — Vendored fork of reearth/ygo (lib0 tag-122 BigInt64 patch).
+                         Referenced by `replace github.com/reearth/ygo => ./third_party/ygo`
+                         in go.mod. Used by the SDK side (pkg/spi) and the relay's
+                         YgoEngine fallback. The relay's live wire path now uses the
+                         Node sidecar, not ygo.
+docs/                  — Architecture and SDK docs:
+                           architecture-doc-flow.md  — browser-side three-layer model
+                           provider-sdk.md            — Go/TS/Python provider SDK guide
+                           sdk-ymap-lww-audit.md      — SDK Y.Map LWW risk audit
+                           Open_Items.md              — known limitations, things to monitor
+                           research/                  — original SPI + architecture research
 .github/workflows/     — CI, npm publish, PyPI publish, Docker publish, proto lint/push
 buf.yaml, buf.gen.yaml — Buf proto config and codegen
 ```
@@ -117,11 +140,11 @@ make proto              # Generate gRPC stubs (requires buf CLI)
 # Frontend
 cd frontend && npm install && npm run dev   # Dev server on :5173
 cd frontend && npm run build                # Production build (tsc + vite)
-cd frontend && npm test                     # Run vitest (400 tests)
+cd frontend && npm test                     # Run vitest (656 tests)
 
 # Provider SDKs
-cd packages/provider-sdk-ts && npm test     # 50 tests
-cd packages/provider-sdk-py && pytest -v    # 60 tests
+cd packages/provider-sdk-ts && npm test     # 60 tests
+cd packages/provider-sdk-py && pytest -v    # 69 tests
 cd packages/grpc-client-ts && npm test      # 4 tests
 
 # Docker (full stack)
@@ -144,8 +167,9 @@ make test-e2e                               # Run ATR browser tests
 ### Editor Architecture
 
 - `Y.Text` is the canonical CRDT type — all modes (WYSIWYG, source, preview) bind to the same Y.Text
+- **Browser-side doc split.** `CollaborationProvider` owns two Y.Docs per editor: `syncDoc` is wire-bound (y-websocket / SocketIOProvider), `editorDoc` is what TextBinding and yCollab bind to. `DocReplicator` mediates between them with two gate flags (`inboundOpen`, `outboundOpen`). Normal mode: both gates open. Suggest Mode: outbound closes, so local keystrokes stay on `editorDoc` while peer updates still flow inbound to auto-rebase the draft. **Read [`docs/architecture-doc-flow.md`](docs/architecture-doc-flow.md) before touching the editor lifecycle, suggest accept/reject, or anything that mutates editorDoc.**
 - DualModeBinding keeps both Tiptap (WYSIWYG) and CodeMirror (source) mounted simultaneously, toggling visibility on mode switch. Both bind to Y.Text: CodeMirror via yCollab, Tiptap via TextBinding (diff-based sync)
-- The relay is a stateless broadcast relay — it does NOT maintain server-side Y.Docs. Peers sync directly through it via the y-websocket protocol
+- The relay is a stateless broadcast relay from the peers' perspective — it does NOT persist server-side Y.Docs across restarts (state lives in the sidecar's memory + buffered SPI updates). Peers sync directly through it via the y-websocket protocol
 - The transport layer is pluggable via the `Transport` interface in `internal/relay/transport.go` — WebSocket and gRPC both implement it
 - The `Conn` interface abstracts read/write/close — grpcConn, wsConn, and brokerConn all implement it
 - y-codemirror.next (yCollab) only observes Y.Text *changes*, not pre-existing content. Content must be seeded AFTER CodeMirror mounts
@@ -154,6 +178,15 @@ make test-e2e                               # Run ATR browser tests
 - MIME-type registry pattern: `EditorBindingFactory` maps MIME types to binding constructors (DualModeBinding, SourceOnlyBinding, PreviewSourceBinding) and content handlers
 - `IFormattingCapability` is an optional interface — only DualModeBinding implements it. Checked via `isFormattingCapable()` type guard
 - CSS custom properties (`--me-*`) define all visual values. Dark mode via `:host([theme="dark"])`. `::part()` exports on all structural sections
+- **Feature-mode mutex.** Blame, Suggest Mode, and Comments mode each manipulate the editor surface in incompatible ways (decorations, replicator gate, preview), so at most one is active at a time. `multi-editor.ts` enforces this via a single `_activeFeatureMode: 'none' | 'blame' | 'suggest' | 'comments'` enum (with `_blameActive`, `_suggestActive`, `_isCommentsModeActive()` derived from it). Every entry handler routes through `_activateFeatureMode(mode)`; comments-mode sub-state (`_activeCommentThread`, `_commentsListOpen`, `_suggestionsListOpen`) auto-exits to `'none'` via `_maybeExitCommentsMode()` when all three empty. Source-level guard tests in `frontend/src/__tests__/multi-editor-feature-mode-exclusion.test.ts` enforce the wiring
+
+### Relay Y.Doc Hosting (yjs-engine sidecar)
+
+- Per-room Y.Doc state lives in a Node.js sidecar (`cmd/yjs-engine/`) reached over a Unix domain socket. The sidecar runs the canonical `yjs` npm package, so the relay's wire-path semantics match lib0/yjs exactly.
+- The relay supervisor (`internal/relay/yjsengine/supervisor.go`) spawns the Node child at startup, pipes its stdout/stderr through `slog`, and restarts on crash with exponential backoff. PING handshake confirms readiness before routing RPCs.
+- `Engine` interface in `internal/relay/yjsengine/engine.go` exposes `Open`, `Close`, `ApplyUpdate`, `SyncMessage`, `EncodeStateAsUpdate`, `EncodeStateVector`, `GetText`. `SidecarEngine` is the production implementation; `YgoEngine` (`engine.kind=ygo`) is an in-process fallback for bare-metal Go-only deploys.
+- Sidecar reconnect path: re-`OPEN` every live room, re-run `bootstrapRoom` (snapshot + log tail), then drain `r.buffer` (post-last-flush updates) into the sidecar.
+- The sidecar pivot replaced the in-process `reearth/ygo` for the wire path because ygo's Y.Map LWW logic accumulated phantom deletes that corrupted Y.Text characters via SyncStep2 replies. See [`docs/sdk-ymap-lww-audit.md`](docs/sdk-ymap-lww-audit.md) for why the SDK side (`pkg/spi`) is unaffected and continues to use ygo for SPI flush-time text resolution.
 
 ### Multi-editor Coordinators
 
@@ -168,6 +201,7 @@ make test-e2e                               # Run ATR browser tests
 - Distributed flush lock (Redis SETNX + Lua release) ensures only one instance flushes per document
 - The relay's flush loop sends raw Y.js diffs to the SDK. The SDK's `ProviderProcessor` resolves them to content via `YDocEngine` before calling the provider's `Store`
 - On room creation, the relay loads content from the provider via `Load`. Since Load returns no Y.js updates, the room starts with empty history. The frontend seeds from `initialContent` when Y.Text is empty after a 200ms settle window
+- Per-room Y.Doc state is held in the sidecar's memory only — there is no relay-side persistence beyond `r.buffer` (post-last-flush updates) plus the Redis-backed snapshot/log tail used by `bootstrapRoom`. Sidecar crash + relay restart both re-bootstrap the room from those sources (see "Relay Y.Doc Hosting" above)
 
 ### Demo Provider Storage
 
