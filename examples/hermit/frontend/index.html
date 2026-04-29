@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hermit</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; font-family: system-ui, -apple-system, sans-serif; }
+    body { display: flex; flex-direction: column; background: #fafafa; }
+
+    /* Single chrome row: actions | tab strip | pathname */
+    .chrome {
+      display: flex;
+      align-items: stretch;
+      background: #f1f1f1;
+      border-bottom: 1px solid #ddd;
+      flex-shrink: 0;
+      min-height: 36px;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 4px 6px;
+      border-right: 1px solid #ddd;
+    }
+    .actions button {
+      width: 30px; height: 28px;
+      border: 1px solid transparent;
+      background: transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #333;
+    }
+    .actions button:hover { background: #e3e3e3; border-color: #ccc; }
+    .actions button:active { background: #d8d8d8; }
+    .actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .actions button:disabled:hover { background: transparent; border-color: transparent; }
+    .actions button svg {
+      width: 18px; height: 18px;
+      fill: none; stroke: currentColor;
+      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    .tab-bar {
+      flex: 1;
+      display: flex;
+      align-items: stretch;
+      overflow-x: auto;
+      min-width: 0;
+    }
+    .tab-bar .tab {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 0 8px 0 12px;
+      background: #e0e0e0;
+      cursor: pointer;
+      border-right: 1px solid #ccc; border-top: 2px solid transparent;
+      font-size: 13px; user-select: none; white-space: nowrap;
+      max-width: 240px;
+    }
+    .tab-bar .tab:hover { background: #d6d6d6; }
+    .tab-bar .tab.active { background: #fff; border-top-color: #2563eb; }
+    .tab-bar .tab.active:hover { background: #fff; }
+    .tab-bar .tab .tab-name {
+      overflow: hidden; text-overflow: ellipsis; max-width: 180px;
+    }
+    .tab-bar .tab .dirty-dot {
+      display: inline-block; width: 6px; height: 6px;
+      background: #d97706; border-radius: 50%; flex-shrink: 0;
+    }
+    .tab-bar .tab .tab-close {
+      border: none; background: transparent;
+      width: 18px; height: 18px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 14px; line-height: 1; cursor: pointer; border-radius: 3px;
+      color: #666;
+    }
+    .tab-bar .tab .tab-close:hover { background: rgba(0,0,0,0.15); color: #000; }
+    .tab-bar .new-tab-btn {
+      border: none; background: transparent; padding: 0 12px;
+      font-size: 18px; line-height: 1; cursor: pointer; color: #555;
+      align-self: stretch;
+    }
+    .tab-bar .new-tab-btn:hover { background: #e0e0e0; color: #000; }
+    .tab-bar .empty-hint {
+      padding: 0 12px; color: #999; font-size: 12px; font-style: italic;
+      align-self: center;
+    }
+
+    .pathname {
+      align-self: center;
+      padding: 0 12px;
+      font-size: 12px; color: #777;
+      max-width: 360px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      direction: rtl; text-align: left;
+      border-left: 1px solid #ddd;
+    }
+    .pathname:empty { display: none; }
+
+    main { flex: 1; min-height: 0; padding: 8px; display: flex; }
+    /* Don't set `display` on the host — the component declares
+       `:host { display: flex; flex-direction: column }` and overriding
+       it from outside collapses the toolbar and breaks scrolling. */
+    multi-editor { flex: 1; min-width: 0; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
+    multi-editor[hidden] { display: none !important; }
+
+    .empty-state {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      color: #999; font-size: 14px; border: 1px dashed #ddd; border-radius: 6px;
+      background: #fff;
+    }
+
+    .toast {
+      position: fixed; bottom: 16px; right: 16px;
+      background: #333; color: #fff; padding: 8px 12px;
+      border-radius: 4px; font-size: 13px; opacity: 0;
+      transition: opacity 0.2s; pointer-events: none;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="chrome">
+    <div class="actions">
+      <button id="btn-new" title="New (Ctrl+N)" aria-label="New">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15h6"/></svg>
+      </button>
+      <button id="btn-open" title="Open (Ctrl+O)" aria-label="Open">
+        <svg viewBox="0 0 24 24"><path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+      <button id="btn-save" title="Save (Ctrl+S)" aria-label="Save">
+        <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+      </button>
+      <button id="btn-save-as" title="Save As (Ctrl+Shift+S)" aria-label="Save As">
+        <svg viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/><path d="M14 17l3-3 3 3"/><path d="M17 14v6"/></svg>
+      </button>
+      <button id="btn-close" title="Close tab (Ctrl+W)" aria-label="Close tab">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="tab-bar" id="tab-bar"></div>
+    <span class="pathname" id="pathname"></span>
+  </div>
+  <main id="main">
+    <multi-editor id="editor" mode="wysiwyg" hidden></multi-editor>
+    <div class="empty-state" id="empty-state">No file open. Use New (Ctrl+N) or Open (Ctrl+O).</div>
+  </main>
+  <div class="toast" id="toast"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

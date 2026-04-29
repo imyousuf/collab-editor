@@ -1,15 +1,18 @@
-.PHONY: build relay provider test test-fast lint fmt vet proto docker-up docker-down docker-build clean test-e2e
+.PHONY: build relay provider hermit test test-fast lint fmt vet proto docker-up docker-down docker-build clean test-e2e
 
 GO := go
 BIN_DIR := bin
 
-build: relay provider
+build: relay provider hermit
 
 relay:
 	$(GO) build -o $(BIN_DIR)/relay ./cmd/relay
 
 provider:
 	$(GO) build -o $(BIN_DIR)/provider ./cmd/demo-provider
+
+hermit:
+	$(MAKE) -C examples/hermit build
 
 test:
 	$(GO) test -v -race -count=1 ./...
@@ -40,6 +43,7 @@ docker-down:
 
 clean:
 	rm -rf $(BIN_DIR)/
+	$(MAKE) -C examples/hermit clean
 
 test-e2e:
 	cd examples/basic && docker compose up -d --wait

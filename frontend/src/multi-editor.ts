@@ -179,6 +179,11 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     return this._readyPromise;
   }
 
+  /** Resolves when any in-flight init/reinit (e.g. from a mimeType change) has settled. */
+  get whenInit(): Promise<void> {
+    return this._initChain;
+  }
+
   /** Supported modes for the current MIME type */
   get supportedModes(): EditorMode[] {
     return this._binding?.supportedModes ? [...this._binding.supportedModes] : this._factory.getSupportedModes(this.mimeType);
@@ -811,6 +816,13 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
   async firstUpdated() {
     this._setupKeyboardShortcuts();
+    // Local-only embeds (no collaboration ever set, mimeType left at its
+    // default) won't fire `updated()` for either property — guarantee
+    // the binding mounts at least once. Init is deduped internally if
+    // mimeType later changes to the same value.
+    if (this._binding === null) {
+      this._requestInit();
+    }
   }
 
   updated(changed: Map<string, unknown>) {
@@ -820,7 +832,10 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     const collabChanged = changed.has('collaboration') && this.collaboration !== this._lastCollabConfig;
     const mimeChanged = changed.has('mimeType') && this.mimeType !== this._lastMimeType;
 
-    if ((collabChanged || mimeChanged) && this.collaboration?.enabled) {
+    // Init runs whenever the mime/collab pair changes. Local-only embeds
+    // pass collaboration=null and still need the binding mounted —
+    // _performInit gates every collab-specific block internally.
+    if (collabChanged || mimeChanged) {
       this._requestInit();
     }
 
@@ -950,6 +965,15 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
     // Mount binding (async — Tiptap's whenReady)
     await this._mountBinding(mode);
     mark('mounted');
+
+    // Local-only mode: no collab provider will ever push content into
+    // the binding, so seed it from initialContent here. Collab mode
+    // intentionally leaves seeding to the relay's SYNC_STEP_2 reply
+    // (see comment block below).
+    const localBinding = this._binding as IEditorBinding | null;
+    if (!config.collaboration?.enabled && localBinding && config.initialContent) {
+      localBinding.setContent(config.initialContent);
+    }
 
     // Brief settle so the relay's history-replay + peer awareness
     // broadcasts can arrive before we decide whether to seed. Two things

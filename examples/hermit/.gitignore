@@ -1,0 +1,10 @@
+# Wails build output
+build/
+
+# Node + Vite
+frontend/node_modules/
+frontend/dist/
+frontend/package.json.md5
+
+# Wails-generated bindings (regenerated on each `wails build`)
+frontend/wailsjs/
