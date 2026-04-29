@@ -112,11 +112,22 @@ def create_comments_fastapi_router(provider: CommentsProvider) -> Any:
         body: dict[str, Any] = Body(...),
         path: str = Query(...),
     ) -> JSONResponse:
+        thread_id = str(body.get("id", ""))
+        if not thread_id:
+            return JSONResponse(
+                content={"error": "thread id is required"}, status_code=400
+            )
         anchor = _parse_anchor(body.get("anchor", {}))
         comment_raw = body.get("comment")
         comment = None
         if comment_raw:
+            comment_id = str(comment_raw.get("id", ""))
+            if not comment_id:
+                return JSONResponse(
+                    content={"error": "comment id is required"}, status_code=400
+                )
             comment = NewComment(
+                id=comment_id,
                 author_id=str(comment_raw.get("author_id", "")),
                 author_name=str(comment_raw.get("author_name", "")),
                 content=str(comment_raw.get("content", "")),
@@ -126,7 +137,7 @@ def create_comments_fastapi_router(provider: CommentsProvider) -> Any:
         suggestion = _parse_suggestion(suggestion_raw) if suggestion_raw else None
 
         req = CreateCommentThreadRequest(
-            anchor=anchor, comment=comment, suggestion=suggestion
+            id=thread_id, anchor=anchor, comment=comment, suggestion=suggestion
         )
         thread = await provider.create_comment_thread(path, req)
         return JSONResponse(content=asdict(thread), status_code=201)
@@ -166,7 +177,13 @@ def create_comments_fastapi_router(provider: CommentsProvider) -> Any:
         body: dict[str, Any] = Body(...),
         path: str = Query(...),
     ) -> JSONResponse:
+        comment_id = str(body.get("id", ""))
+        if not comment_id:
+            return JSONResponse(
+                content={"error": "comment id is required"}, status_code=400
+            )
         req = AddReplyRequest(
+            id=comment_id,
             author_id=str(body.get("author_id", "")),
             author_name=str(body.get("author_name", "")),
             content=str(body.get("content", "")),

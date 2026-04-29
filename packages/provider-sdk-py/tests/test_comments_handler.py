@@ -34,7 +34,6 @@ class CoreProvider(CommentsProvider):
 
     def __init__(self) -> None:
         self.threads: dict[str, CommentThread] = {}
-        self._next_id = 0
 
     async def capabilities(self) -> CommentsCapabilities:
         return CommentsCapabilities(
@@ -71,14 +70,12 @@ class CoreProvider(CommentsProvider):
     async def create_comment_thread(
         self, document_id: str, req: CreateCommentThreadRequest
     ) -> CommentThread:
-        self._next_id += 1
-        tid = f"t{self._next_id}"
         comments: list[Comment] = []
         if req.comment:
             comments.append(
                 Comment(
-                    id=f"{tid}-c1",
-                    thread_id=tid,
+                    id=req.comment.id,
+                    thread_id=req.id,
                     author_id=req.comment.author_id,
                     author_name=req.comment.author_name,
                     content=req.comment.content,
@@ -87,7 +84,7 @@ class CoreProvider(CommentsProvider):
                 )
             )
         thread = CommentThread(
-            id=tid,
+            id=req.id,
             document_id=document_id,
             anchor=req.anchor,
             status="open",
@@ -95,7 +92,7 @@ class CoreProvider(CommentsProvider):
             comments=comments,
             suggestion=req.suggestion,
         )
-        self.threads[tid] = thread
+        self.threads[req.id] = thread
         return thread
 
     async def add_reply(
@@ -103,7 +100,7 @@ class CoreProvider(CommentsProvider):
     ) -> Comment:
         thread = self.threads[thread_id]
         comment = Comment(
-            id=f"{thread_id}-c{len(thread.comments) + 1}",
+            id=req.id,
             thread_id=thread_id,
             author_id=req.author_id,
             author_name=req.author_name,
@@ -273,8 +270,10 @@ class TestCore:
         create = await core_client.post(
             "/documents/comments?path=doc.md",
             json={
+                "id": "t1",
                 "anchor": {"start": 0, "end": 5, "quoted_text": "hello"},
                 "comment": {
+                    "id": "c1",
                     "author_id": "u1",
                     "author_name": "Alice",
                     "content": "first",
@@ -283,6 +282,7 @@ class TestCore:
         )
         assert create.status_code == 201
         tid = create.json()["id"]
+        assert tid == "t1"
 
         get = await core_client.get(f"/documents/comments/{tid}?path=doc.md")
         assert get.status_code == 200
@@ -297,7 +297,7 @@ class TestCore:
     ) -> None:
         await core_client.post(
             "/documents/comments?path=doc.md",
-            json={"anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
+            json={"id": "t1", "anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
         )
         list_resp = await core_client.get("/documents/comments?path=doc.md")
         assert list_resp.status_code == 200
@@ -306,21 +306,49 @@ class TestCore:
     async def test_add_reply(self, core_client: AsyncClient) -> None:
         create = await core_client.post(
             "/documents/comments?path=doc.md",
-            json={"anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
+            json={"id": "t1", "anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
         )
         tid = create.json()["id"]
 
         reply = await core_client.post(
             f"/documents/comments/{tid}/replies?path=doc.md",
-            json={"author_id": "u2", "author_name": "Bob", "content": "ack"},
+            json={
+                "id": "c2",
+                "author_id": "u2",
+                "author_name": "Bob",
+                "content": "ack",
+            },
         )
         assert reply.status_code == 201
         assert reply.json()["content"] == "ack"
+        assert reply.json()["id"] == "c2"
+
+    async def test_missing_thread_id_returns_400(
+        self, core_client: AsyncClient
+    ) -> None:
+        resp = await core_client.post(
+            "/documents/comments?path=doc.md",
+            json={"anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
+        )
+        assert resp.status_code == 400
+
+    async def test_missing_reply_id_returns_400(
+        self, core_client: AsyncClient
+    ) -> None:
+        await core_client.post(
+            "/documents/comments?path=doc.md",
+            json={"id": "t1", "anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
+        )
+        resp = await core_client.post(
+            "/documents/comments/t1/replies?path=doc.md",
+            json={"author_id": "u2", "author_name": "Bob", "content": "ack"},
+        )
+        assert resp.status_code == 400
 
     async def test_patch_and_delete(self, core_client: AsyncClient) -> None:
         create = await core_client.post(
             "/documents/comments?path=doc.md",
-            json={"anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
+            json={"id": "t1", "anchor": {"start": 0, "end": 1, "quoted_text": "a"}},
         )
         tid = create.json()["id"]
 
@@ -416,6 +444,7 @@ class TestYjsPayloadIsOpaque:
         create = await core_client.post(
             "/documents/comments?path=doc.md",
             json={
+                "id": "t1",
                 "anchor": {"start": 0, "end": 1, "quoted_text": "a"},
                 "suggestion": {
                     "yjs_payload": want_payload,
