@@ -64,16 +64,33 @@ export class EditorBindingFactory implements IEditorBindingFactory {
   }
 }
 
+export interface RegisterDefaultsOptions {
+  /**
+   * Resolved at binding-construction time (not at call time), so the host
+   * can wire it to a reactive property and have changes take effect on
+   * subsequent mounts. Defaults to true.
+   */
+  getMermaidEnabled?: () => boolean;
+}
+
 /**
  * Register all default MIME type bindings.
  */
-export function registerDefaults(factory: EditorBindingFactory): void {
+export function registerDefaults(
+  factory: EditorBindingFactory,
+  options?: RegisterDefaultsOptions,
+): void {
   const md = new MarkdownContentHandler();
   const htmlHandler = new HtmlContentHandler();
   const plain = new PlainTextContentHandler();
+  const getMermaidEnabled = options?.getMermaidEnabled ?? (() => true);
 
   // WYSIWYG + Source
-  factory.register('text/markdown', () => new DualModeBinding(md, 'markdown'), md);
+  factory.register(
+    'text/markdown',
+    () => new DualModeBinding(md, 'markdown', { mermaidEnabled: getMermaidEnabled() }),
+    md,
+  );
   factory.register('text/html', () => new DualModeBinding(htmlHandler, 'html'), htmlHandler);
 
   // Preview + Source

@@ -141,6 +141,24 @@ describe('EditorBindingFactory', () => {
     expect(factory.supports('text/x-python', 'preview')).toBe(false);
   });
 
+  test('registerDefaults: getMermaidEnabled is read at binding-construction time', () => {
+    const factory = new EditorBindingFactory();
+    let enabled = true;
+    registerDefaults(factory, { getMermaidEnabled: () => enabled });
+
+    // Construct once with enabled=true
+    const b1 = factory.create('text/markdown') as any;
+    expect(b1._mermaidEnabled).toBe(true);
+    b1.destroy();
+
+    // Flip the host flag and construct a fresh binding — the closure
+    // re-reads through the getter.
+    enabled = false;
+    const b2 = factory.create('text/markdown') as any;
+    expect(b2._mermaidEnabled).toBe(false);
+    b2.destroy();
+  });
+
   test('multiple registrations for different MIME types', () => {
     const factory = new EditorBindingFactory();
     factory.register('text/markdown', () => new MockBinding(['wysiwyg', 'source']), new MarkdownContentHandler());

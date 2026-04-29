@@ -76,6 +76,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   @property({ attribute: false }) statusBarConfig: StatusBarConfig | null = null;
   @property({ attribute: false }) documents: DocumentEntry[] = [];
   @property({ attribute: false }) currentDocumentId: string = '';
+  /**
+   * Render fenced ` ```mermaid ` code blocks as inline diagrams in the
+   * WYSIWYG view (with a pencil button → modal source editor). Default
+   * true. Set to false to ship a smaller bundle when Mermaid isn't needed
+   * (the runtime is still dynamically imported, so this mainly disables
+   * the integration so blocks render as plain code).
+   */
+  @property({ type: Boolean }) mermaidEnabled: boolean = true;
 
   @state() private _collabStatus: CollabStatus = 'disconnected';
   @state() private _formattingState: FormattingState = emptyFormattingState();
@@ -170,7 +178,9 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
   constructor() {
     super();
     this._factory = new EditorBindingFactory();
-    registerDefaults(this._factory);
+    registerDefaults(this._factory, {
+      getMermaidEnabled: () => this.mermaidEnabled,
+    });
     this._readyPromise = new Promise(resolve => { this._readyResolve = resolve; });
   }
 
@@ -283,6 +293,71 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       --me-scrollbar-track: transparent;
       --me-scrollbar-thumb: rgba(0, 0, 0, 0.2);
       --me-scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
+
+      /* Mermaid tokens (inside WYSIWYG) */
+      --me-mermaid-bg: #fafbfc;
+      --me-mermaid-border: var(--me-border-color);
+      --me-mermaid-edit-icon-color: #555;
+      --me-mermaid-edit-bg: rgba(255, 255, 255, 0.85);
+      --me-mermaid-error-color: #b42318;
+    }
+
+    /* ── Mermaid rendered block (inside WYSIWYG / ProseMirror) ── */
+    .me-mermaid-block {
+      position: relative;
+      margin: 8px 0;
+      padding: 14px;
+      border: 1px solid var(--me-mermaid-border);
+      border-radius: 8px;
+      background: var(--me-mermaid-bg);
+      overflow-x: auto;
+    }
+    .me-mermaid-block.me-mermaid-selected {
+      outline: 2px solid var(--me-focus-ring-color);
+      outline-offset: 1px;
+    }
+    .me-mermaid-render {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 60px;
+    }
+    .me-mermaid-render svg { max-width: 100%; height: auto; }
+    .me-mermaid-render.me-mermaid-error {
+      justify-content: flex-start;
+      align-items: stretch;
+    }
+    .me-mermaid-error-text {
+      margin: 0;
+      color: var(--me-mermaid-error-color);
+      font-family: var(--me-source-font-family);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .me-mermaid-edit-btn {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 1px solid var(--me-mermaid-border);
+      border-radius: 4px;
+      background: var(--me-mermaid-edit-bg);
+      color: var(--me-mermaid-edit-icon-color);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .me-mermaid-block:hover .me-mermaid-edit-btn,
+    .me-mermaid-edit-btn:focus-visible {
+      opacity: 1;
+    }
+    .me-mermaid-edit-btn:hover {
+      background: var(--me-toolbar-button-hover-bg);
     }
 
     /* ── Dark theme overrides ── */
@@ -331,6 +406,12 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
       --me-diff-added-color: #86efac;
       --me-diff-removed-bg: rgba(239, 68, 68, 0.15);
       --me-diff-removed-color: #fca5a5;
+
+      --me-mermaid-bg: #252525;
+      --me-mermaid-border: #444;
+      --me-mermaid-edit-icon-color: #ccc;
+      --me-mermaid-edit-bg: rgba(45, 45, 45, 0.85);
+      --me-mermaid-error-color: #fca5a5;
     }
 
     /* ── Editor wrapper (positions the status bar overlay) ── */
@@ -841,6 +922,14 @@ export class MultiEditor extends LitElement implements IEditorEventEmitter {
 
     if (changed.has('readonly') && this._binding) {
       this._binding.setReadonly(this.readonly);
+    }
+
+    if (changed.has('theme') && this.mermaidEnabled) {
+      // Lazy-import the renderer module so non-mermaid hosts don't pull
+      // it in just because they switched themes.
+      import('./collab/mermaid-renderer.js').then(({ setMermaidTheme }) => {
+        setMermaidTheme(this.theme === 'dark' ? 'dark' : 'default');
+      });
     }
   }
 
